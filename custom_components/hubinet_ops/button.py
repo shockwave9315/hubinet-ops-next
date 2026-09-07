@@ -25,6 +25,7 @@ from .const import DOMAIN, ProxmoxPermission
 from .coordinator import ProxmoxConfigEntry, ProxmoxCoordinator, ProxmoxNodeData
 from .entity import ProxmoxContainerEntity, ProxmoxNodeEntity, ProxmoxVMEntity
 from .helpers import is_granted
+from .packages.models import PackageScanError
 
 PARALLEL_UPDATES = 1
 
@@ -225,6 +226,12 @@ CONTAINER_BUTTONS: tuple[ProxmoxContainerButtonEntityDescription, ...] = (
     ),
 )
 
+PACKAGE_SCAN_BUTTON = ButtonEntityDescription(
+    key="package_scan",
+    translation_key="package_scan",
+    entity_category=EntityCategory.CONFIG,
+)
+
 
 async def async_setup_entry(
     hass: HomeAssistant,
@@ -268,7 +275,7 @@ async def async_setup_entry(
         containers: list[tuple[ProxmoxNodeData, dict[str, Any]]],
     ) -> None:
         """Add new container buttons."""
-        async_add_entities(
+        entities: list[ButtonEntity] = [
             ProxmoxContainerButtonEntity(
                 coordinator, entity_description, container, node_data
             )
@@ -280,7 +287,12 @@ async def async_setup_entry(
                 p_id=container["vmid"],
                 permission=entity_description.permission,
             )
+        ]
+        entities.extend(
+            PackageScanButtonEntity(coordinator, container, node_data)
+            for node_data, container in containers
         )
+        async_add_entities(entities)
 
     coordinator.new_nodes_callbacks.append(_async_add_new_nodes)
     coordinator.new_vms_callbacks.append(_async_add_new_vms)
@@ -329,6 +341,12 @@ class ProxmoxBaseButton(ButtonEntity):
         """Trigger the Proxmox button press service."""
         try:
             await self._async_press_call()
+        except PackageScanError as err:
+            raise HomeAssistantError(
+                translation_domain=DOMAIN,
+                translation_key="package_scan_failed",
+                translation_placeholders={"reason": str(err)},
+            ) from err
         except AuthenticationError as err:
             raise HomeAssistantError(
                 translation_domain=DOMAIN,
@@ -396,3 +414,21 @@ class ProxmoxContainerButtonEntity(ProxmoxContainerEntity, ProxmoxBaseButton):
             self._node_name,
             self.device_id,
         )
+
+
+class PackageScanButtonEntity(ProxmoxContainerEntity, ProxmoxBaseButton):
+    """Manually scan pending packages for an upstream-discovered LXC."""
+
+    def __init__(
+        self,
+        coordinator: ProxmoxCoordinator,
+        container_data: dict[str, Any],
+        node_data: ProxmoxNodeData,
+    ) -> None:
+        """Initialize the package scan button."""
+        super().__init__(coordinator, PACKAGE_SCAN_BUTTON, container_data, node_data)
+
+    @override
+    async def _async_press_call(self) -> None:
+        """Run the bounded package scan for this known LXC identity."""
+        await self.coordinator.async_scan_packages(self._node_name, self.device_id)

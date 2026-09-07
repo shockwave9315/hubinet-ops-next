@@ -35,6 +35,9 @@ TYPE_VM = 0
 TYPE_CONTAINER = 1
 UPDATE_INTERVAL = 60
 
+PACKAGE_SCAN_PRIVATE_KEY = ".ssh/hubinet_ops"
+PACKAGE_SCAN_KNOWN_HOSTS = ".ssh/known_hosts"
+
 
 class ProxmoxPermission(StrEnum):
     """Proxmox permissions."""

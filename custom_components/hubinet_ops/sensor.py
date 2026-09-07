@@ -19,7 +19,7 @@ from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 from homeassistant.util import dt as dt_util
 
 from .const import ProxmoxPermission
-from .coordinator import ProxmoxConfigEntry, ProxmoxNodeData
+from .coordinator import ProxmoxConfigEntry, ProxmoxCoordinator, ProxmoxNodeData
 from .entity import (
     ProxmoxContainerEntity,
     ProxmoxNodeEntity,
@@ -27,6 +27,7 @@ from .entity import (
     ProxmoxVMEntity,
 )
 from .helpers import is_granted
+from .packages.models import PackageScanResult
 
 PARALLEL_UPDATES = 0
 
@@ -465,6 +466,13 @@ STORAGE_SENSORS: tuple[ProxmoxStorageSensorEntityDescription, ...] = (
     ),
 )
 
+PACKAGE_SCAN_SENSOR = SensorEntityDescription(
+    key="pending_packages",
+    translation_key="pending_packages",
+    entity_category=EntityCategory.DIAGNOSTIC,
+    icon="mdi:package-down",
+)
+
 
 async def async_setup_entry(
     hass: HomeAssistant,
@@ -502,13 +510,18 @@ async def async_setup_entry(
         containers: list[tuple[ProxmoxNodeData, dict[str, Any]]],
     ) -> None:
         """Add new container sensors."""
-        async_add_entities(
+        entities: list[SensorEntity] = [
             ProxmoxContainerSensor(
                 coordinator, entity_description, container, node_data
             )
             for (node_data, container) in containers
             for entity_description in CONTAINER_SENSORS
+        ]
+        entities.extend(
+            PackageScanSensor(coordinator, container, node_data)
+            for node_data, container in containers
         )
+        async_add_entities(entities)
 
     def _async_add_new_storages(
         storages: list[tuple[ProxmoxNodeData, dict[str, Any]]],
@@ -592,6 +605,53 @@ class ProxmoxContainerSensor(ProxmoxContainerEntity, SensorEntity):
     def native_value(self) -> StateType:
         """Return the native value of the sensor."""
         return self.entity_description.value_fn(self.container_data)
+
+
+class PackageScanSensor(ProxmoxContainerEntity, SensorEntity):
+    """Last manually requested pending-package scan for one LXC."""
+
+    def __init__(
+        self,
+        coordinator: ProxmoxCoordinator,
+        container_data: dict[str, Any],
+        node_data: ProxmoxNodeData,
+    ) -> None:
+        """Initialize the package scan sensor."""
+        super().__init__(coordinator, PACKAGE_SCAN_SENSOR, container_data, node_data)
+
+    @property
+    def _scan_result(self) -> PackageScanResult | None:
+        return self.coordinator.package_scans.get((self._node_name, self.device_id))
+
+    @property
+    @override
+    def native_value(self) -> int | None:
+        """Return the last pending package count."""
+        return len(result.packages) if (result := self._scan_result) else None
+
+    @property
+    @override
+    def extra_state_attributes(self) -> dict[str, Any] | None:
+        """Return bounded evidence from the last successful scan."""
+        if (result := self._scan_result) is None:
+            return None
+        return {
+            "os_id": result.os_id,
+            "os_version": result.os_version,
+            "reboot_required": result.reboot_required,
+            "security_updates": sum(package.security for package in result.packages),
+            "packages": [
+                {
+                    "name": package.name,
+                    "architecture": package.architecture,
+                    "installed_version": package.installed_version,
+                    "candidate_version": package.candidate_version,
+                    "origin": package.origin,
+                    "security": package.security,
+                }
+                for package in result.packages
+            ],
+        }
 
 
 class ProxmoxStorageSensor(ProxmoxStorageEntity, SensorEntity):
