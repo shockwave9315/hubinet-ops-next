@@ -1,7 +1,7 @@
 {
   "domain": "hubinet_ops",
   "name": "Hubinet-Ops",
-  "version": "2026.9.1.0",
+  "version": "2026.9.1.1",
   "codeowners": ["@Corbeno", "@erwindouna", "@CoMPaTech"],
   "config_flow": true,
   "documentation": "https://www.home-assistant.io/integrations/proxmoxve",
