@@ -90,6 +90,19 @@ class OperationDeadline:
         return max(0.0, self.timeout - (self.clock() - self.started))
 
 
+def _kill_process_tree(process: subprocess.Popen) -> None:
+    """Best-effort kill of the direct child and its process group.
+
+    ``start_new_session=True`` at spawn puts the direct child in its own
+    process group, so killing that group also reaches a stray descendant
+    that inherited the pipes without requiring a process supervisor.
+    """
+    with suppress(ProcessLookupError):
+        os.killpg(process.pid, signal.SIGKILL)
+    with suppress(ProcessLookupError):
+        process.kill()
+
+
 def _run_bounded(
     argv: tuple[str, ...], timeout: float, max_output: int
 ) -> CommandResult:
@@ -157,17 +170,22 @@ def _run_bounded(
     finally:
         selector.close()
         if timed_out or output_exceeded:
-            with suppress(ProcessLookupError):
-                os.killpg(process.pid, signal.SIGKILL)
-            with suppress(ProcessLookupError):
-                process.kill()
+            _kill_process_tree(process)
         try:
             process.wait(timeout=5)
         except subprocess.TimeoutExpired:
             # Cleanup itself must never raise past this function: a stuck
             # or unreapable child becomes a structured timeout instead of
             # an uncaught traceback that would bypass the JSON protocol.
+            # The child may still be alive here (e.g. its pipes reached EOF
+            # or the deadline passed without it having been killed above);
+            # a last-resort process-group kill keeps it from continuing to
+            # run on the host. One bounded retry only -- never a second
+            # unguarded wait.
             cleanup_failed = True
+            _kill_process_tree(process)
+            with suppress(subprocess.TimeoutExpired):
+                process.wait(timeout=5)
     return CommandResult(
         process.returncode if process.returncode is not None else -1,
         bytes(output["stdout"][: max_output + 1]),

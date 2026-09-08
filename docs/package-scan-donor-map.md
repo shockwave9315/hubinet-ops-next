@@ -22,7 +22,8 @@ their direct package-scan execution tests in the old Hubinet-Ops repository.
 - approval, update, snapshot, rollback, worker, scheduler, and health logic;
 - the legacy HTTP/backend/hostd transport and its configuration;
 - cluster-resource discovery and cross-node routing in the helper; the helper
-  only verifies the coordinator-supplied node against the local hostname and
-  validates the requested LXC through fixed `pct` commands;
+  only verifies the coordinator-supplied node against the PVE-native local
+  node identity derived from `/etc/pve/local` and validates the requested
+  LXC through fixed `pct` commands;
 - all Docker package-update behavior and every helper unrelated to package
   scanning.

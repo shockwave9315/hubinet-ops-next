@@ -53,7 +53,10 @@ class _SSHProcess(Protocol):
         """Wait for process completion without raising for a nonzero exit."""
 
     def kill(self) -> None:
-        """Stop a process which exceeded its output bound."""
+        """Send a remote-signal kill request (best-effort; peer may ignore it)."""
+
+    def close(self) -> None:
+        """Locally close the channel's send/recv state, independent of the peer."""
 
     async def wait_closed(self) -> None:
         """Wait for a killed process channel to close."""
@@ -259,6 +262,16 @@ async def _drain_process_output(process: _SSHProcess) -> tuple[bytes, bytes]:
     therefore killed as soon as either bound is exceeded, not only once
     both readers finish -- so the 300-second outer transport timeout is
     never the thing that catches this.
+
+    ``kill()`` alone only sends the peer a remote-signal *request*; a peer
+    that ignores it (or never processes signals at all) leaves the local
+    channel open indefinitely, and ``wait_closed()`` after only ``kill()``
+    can hang regardless of the peer's behavior. ``close()`` additionally
+    closes the local send/recv channel state and sends our own channel
+    close, which -- per RFC 4254 -- the peer's SSH transport layer must
+    acknowledge even if the misbehaving application-level peer process
+    itself never reacts; only after ``close()`` does ``wait_closed()``
+    reliably resolve promptly instead of depending on peer cooperation.
     """
     stdout_task = asyncio.ensure_future(
         _read_until_eof(process.stdout, max_bytes=_MAX_RESPONSE_BYTES)
@@ -274,6 +287,7 @@ async def _drain_process_output(process: _SSHProcess) -> tuple[bytes, bytes]:
             )
             if any(task.result()[1] for task in done):
                 process.kill()
+                process.close()
                 await process.wait_closed()
                 raise PackageScanError(
                     PackageScanFailure.EXECUTION_FAILED,

@@ -1,10 +1,14 @@
 """Tests for the separately deployed forced-command package helper."""
 
+import ast
 from contextlib import nullcontext
 import importlib.util
+import os
 from pathlib import Path
 import stat
+import subprocess
 import sys
+import time
 from types import ModuleType
 from unittest.mock import MagicMock, patch
 
@@ -292,7 +296,7 @@ def test_apt_version_accepts_real_ubuntu_and_debian_revision_suffixes(
     fail merely because a distro revision suffix like "build2" or
     "ubuntu1" is attached directly, without a "~+.-" separator.
     """
-    major, minor, patch = helper._parse_apt_version(f"{apt_version_line}\n")  # noqa: SLF001
+    major, _minor, _patch = helper._parse_apt_version(f"{apt_version_line}\n")  # noqa: SLF001
     assert major >= 2
 
 
@@ -373,14 +377,51 @@ def test_run_bounded_cleanup_timeout_expired_becomes_structured_failure() -> Non
     assert result.stdout.strip() == b"done"
 
 
-def test_helper_source_is_python_3_11_compatible() -> None:
-    """N9: the helper must at least parse without requiring Python 3.12+.
+def test_run_bounded_cleanup_wait_timeout_kills_the_process_group() -> None:
+    """N4: a genuine cleanup-wait timeout must not leave the process running.
 
-    A Python 3.11 interpreter was not available in this environment; PEP
-    695 `type` statements (3.12+) were replaced with conventional
-    assignment aliases, reviewed by inspection for any other 3.12+-only
-    syntax elsewhere in the file.
+    The child closes its own stdout/stderr immediately (letting the read
+    loop finish right away) but keeps running well past the 5s cleanup
+    grace period, so `process.wait(timeout=5)` genuinely raises
+    TimeoutExpired -- not a mocked one. `_run_bounded()` must still return
+    a structured timeout, and the process (and its process group) must
+    actually be gone afterward, not merely classified as failed.
     """
-    import py_compile
+    created: list[subprocess.Popen] = []
+    real_popen = helper.subprocess.Popen
 
-    py_compile.compile(str(HELPER_PATH), doraise=True)
+    def _capturing_popen(*args, **kwargs):
+        process = real_popen(*args, **kwargs)
+        created.append(process)
+        return process
+
+    with patch.object(helper.subprocess, "Popen", side_effect=_capturing_popen):
+        result = helper._run_bounded(  # noqa: SLF001
+            ("bash", "-c", "exec 1>&- 2>&-; sleep 12"), 20.0, 4096
+        )
+    assert result.timed_out is True
+
+    assert len(created) == 1
+    process = created[0]
+    for _ in range(50):
+        if process.poll() is not None:
+            break
+        time.sleep(0.05)
+    assert process.poll() is not None, "child survived _run_bounded() returning"
+    with pytest.raises(ProcessLookupError):
+        os.killpg(process.pid, 0)
+
+
+def test_helper_source_is_python_3_11_compatible() -> None:
+    """N9: the helper's grammar must not require Python 3.12+.
+
+    A Python 3.11 interpreter was not available in this environment.
+    ``py_compile`` under the repository's Python 3.14 runtime only proves
+    the source is valid *current*-Python syntax, not 3.11 syntax -- so the
+    real regression is ``ast.parse`` with ``feature_version=(3, 11)``,
+    which rejects constructs newer than that grammar (for example, a PEP
+    695 ``type`` statement fails with exactly this feature_version). PEP
+    695 `type` statements were replaced with conventional assignment
+    aliases; this also stands as a compile-error check.
+    """
+    ast.parse(HELPER_PATH.read_text(), feature_version=(3, 11))

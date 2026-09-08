@@ -114,14 +114,19 @@ class FakeProcess:
         )
         self.stderr = stderr_reader or FakeReader(stderr)
         self.killed = False
+        self.closed = False
 
     async def wait(self, check: bool = False):
         """Return completion evidence without interpreting the exit code."""
         return self
 
     def kill(self) -> None:
-        """Record bounded-output termination."""
+        """Record a best-effort remote-signal kill request."""
         self.killed = True
+
+    def close(self) -> None:
+        """Record local channel closure, independent of the kill signal."""
+        self.closed = True
 
     async def wait_closed(self) -> None:
         """Complete termination immediately."""
@@ -337,6 +342,93 @@ async def test_real_asyncssh_round_trip_with_chunked_stdout_and_stderr(
     }
 
 
+async def test_real_asyncssh_stuck_peer_oversize_terminates_promptly(
+    hass: HomeAssistant, tmp_path: Path, socket_enabled: None
+) -> None:
+    """N1: oversize termination must not depend on the peer honoring kill().
+
+    ``kill()`` only sends the peer a remote-signal *request*. A real server
+    handler that ignores it, never exits, and never reacts is used here so
+    ``process.close()`` -- not the peer -- is what makes local channel
+    closure (and therefore ``wait_closed()``) resolve promptly. Without it
+    this scenario previously hung until the 300s outer transport timeout.
+    """
+    host_key = asyncssh.generate_private_key("ssh-ed25519")
+    client_key = asyncssh.generate_private_key("ssh-ed25519")
+
+    private_key_path = tmp_path / "hubinet_ops"
+    client_key.write_private_key(private_key_path)
+    private_key_path.chmod(0o600)
+
+    server_tasks: list[asyncio.Task] = []
+
+    async def _stuck_forced_command(process: asyncssh.SSHServerProcess) -> None:
+        """Write past the bound, then hang forever, ignoring any signal."""
+        server_tasks.append(asyncio.current_task())
+        process.stdout.write(b"x" * 64)
+        await process.stdout.drain()
+        # Deliberately never exits, never reacts to a kill/terminate
+        # request, and never closes its own side of the session.
+        await asyncio.sleep(3600)
+
+    server = await asyncssh.listen(
+        "127.0.0.1",
+        0,
+        server_host_keys=[host_key],
+        authorized_client_keys=asyncssh.import_authorized_keys(
+            client_key.export_public_key().decode()
+        ),
+        process_factory=_stuck_forced_command,
+        encoding=None,
+    )
+    try:
+        port = server.sockets[0].getsockname()[1]
+        known_hosts_path = tmp_path / "known_hosts"
+        known_hosts_path.write_bytes(
+            f"[127.0.0.1]:{port} ".encode() + host_key.export_public_key()
+        )
+
+        transport = AsyncSSHPackageTransport(
+            endpoint="127.0.0.1",
+            private_key_path=private_key_path,
+            known_hosts_path=known_hosts_path,
+            port=port,
+        )
+        await transport.async_prepare(hass)
+
+        tasks_before = asyncio.all_tasks()
+        with (
+            patch(
+                "custom_components.hubinet_ops.packages.transport._MAX_RESPONSE_BYTES",
+                4,
+            ),
+            pytest.raises(PackageScanError) as caught,
+        ):
+            # Bounded far under the 300s outer transport timeout: a hang
+            # here means local closure is still depending on peer
+            # cooperation.
+            await asyncio.wait_for(transport.async_scan("pve1", 200), timeout=10)
+    finally:
+        server.close()
+        await server.wait_closed()
+        # The server-side handler is the one deliberately never exiting
+        # here; clean it up explicitly since closing the server does not
+        # cancel an in-flight process_factory task on its own.
+        for task in server_tasks:
+            task.cancel()
+        if server_tasks:
+            await asyncio.gather(*server_tasks, return_exceptions=True)
+
+    assert caught.value.failure is PackageScanFailure.EXECUTION_FAILED
+    await asyncio.sleep(0)
+    leaked_pending = [
+        task
+        for task in asyncio.all_tasks() - tasks_before - {asyncio.current_task()}
+        if not task.done()
+    ]
+    assert leaked_pending == []
+
+
 def test_transport_prerequisites_require_both_nonempty_trust_files(
     tmp_path: Path,
 ) -> None:
@@ -504,6 +596,7 @@ async def test_transport_rejects_oversized_combined_output(
         await transport.async_scan("pve1", 200)
     assert caught.value.failure is PackageScanFailure.EXECUTION_FAILED
     assert connection.process.killed is True
+    assert connection.process.closed is True
 
 
 async def test_oversized_stdout_terminates_promptly_even_if_stderr_never_ends(
@@ -530,6 +623,7 @@ async def test_oversized_stdout_terminates_promptly_even_if_stderr_never_ends(
         await asyncio.wait_for(transport.async_scan("pve1", 200), timeout=5)
     assert caught.value.failure is PackageScanFailure.EXECUTION_FAILED
     assert connection.process.killed is True
+    assert connection.process.closed is True
     assert stderr_reader.cancelled is True
 
 
@@ -559,6 +653,7 @@ async def test_oversized_stderr_terminates_promptly_even_if_stdout_never_ends(
         await asyncio.wait_for(transport.async_scan("pve1", 200), timeout=5)
     assert caught.value.failure is PackageScanFailure.EXECUTION_FAILED
     assert connection.process.killed is True
+    assert connection.process.closed is True
     assert stdout_reader.cancelled is True
 
 
