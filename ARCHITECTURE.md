@@ -1,8 +1,10 @@
 # Architecture
 
-This document describes only the architecture accepted on current `main`.
-Product intent is defined in [PRODUCT.md](PRODUCT.md), current work in
-[STATUS.md](STATUS.md), and fork provenance in [UPSTREAM.md](UPSTREAM.md).
+This document defines accepted architecture. It distinguishes the runtime that
+exists on `main` today from accepted package-scan design that is pending
+implementation. Product intent is defined in [PRODUCT.md](PRODUCT.md), current
+work in [STATUS.md](STATUS.md), and fork provenance in
+[UPSTREAM.md](UPSTREAM.md).
 
 ## Accepted architecture today
 
@@ -42,19 +44,22 @@ delegate at runtime to an installed official `proxmoxve` integration.
 
 ### Upstream ownership
 
-The upstream integration owns:
+The upstream-derived integration continues to own:
 
-- configuration;
+- config flow;
 - authentication;
-- Proxmox connectivity through `proxmoxer`;
-- the coordinator;
+- the Proxmox API connection through `proxmoxer`;
+- coordinator refresh;
 - node, VM, and LXC identity;
 - discovery;
-- native entities; and
-- native PVE operations.
+- native entities;
+- native lifecycle operations; and
+- native snapshots and other native PVE functionality.
 
-These responsibilities remain upstream responsibilities. Hubinet-Ops does not
-introduce a parallel inventory, discovery service, backend, or state authority.
+Package code consumes upstream identity and state; it does not replace this
+ownership. It must not introduce a second Proxmox inventory, duplicate
+discovery, resource UUID authority, reconciliation, publication, SQLite
+authority, a backend HTTP service, `hostd`, or a generic job framework.
 
 ### Current Hubinet-Ops runtime ownership
 
@@ -64,42 +69,273 @@ On merged `main`, Hubinet-Ops owns only:
 - the technically required custom-integration adaptations recorded in
   [UPSTREAM.md](UPSTREAM.md).
 
-No package-management feature is part of the accepted runtime architecture.
+Package scan does not yet exist in the merged runtime.
 
-## Architecture under review
+## Accepted package-scan design
 
-PR #2, branch `feat/package-scan`, investigates this candidate flow:
+This section is an **accepted design contract** based on an explicit maintainer
+decision. It is not a claim that package scan is implemented or merged. Draft
+PR #2 must be changed to conform to this contract before it can merge.
+
+### Ownership boundary
+
+Package behavior belongs in a small subsystem with a package manager as its
+boundary:
+
+```text
+Upstream HA ProxmoxVE-derived coordinator
+        |
+        | node / VMID / runtime state
+        v
+packages/manager.py
+        |
+        +---- ephemeral scan state
+        +---- package-scan concurrency
+        +---- package transport
+        |
+        v
+async SSH transport
+        |
+        v
+forced-command helper on PVE host
+        |
+        v
+pct exec <vmid>
+        |
+        v
+Debian/Ubuntu guest
+        |
+        +---- apt
+        +---- dpkg
+        |
+        v
+package evidence
+        |
+        v
+pure package parser
+        |
+        v
+ScanRecord
+        |
+        v
+Home Assistant summary entities
+```
+
+The exact Python file layout may vary slightly, but these responsibility
+boundaries are binding. The upstream-derived coordinator supplies identity and
+runtime inputs and may hold a package-manager reference for integration
+composition. It must not become the package subsystem or accumulate package
+scan, review, update, health, or package-specific orchestration state and
+methods.
+
+### Identity and endpoint
+
+Network endpoint and PVE resource identity are separate:
+
+- SSH endpoint: the existing configured Proxmox `CONF_HOST`;
+- expected PVE node: upstream coordinator node identity;
+- VMID: upstream coordinator LXC identity; and
+- current typed operation: `scan_packages`.
+
+Each request is conceptually
+`(endpoint, expected_node, vmid, operation)`. The SSH destination must not be
+derived from the PVE node name. The helper response must carry enough target
+identity to verify the expected node and VMID.
+
+Current single-host scope has no separate `package_scan_ssh_host`, cluster
+routing, node-address map, static VMID allowlist, or manually synchronized
+inventory. A future need for separate API and SSH endpoints requires another
+explicit architecture decision. Ordinary VMID and execution-time target
+validation remain required.
+
+### State semantics
+
+Package-scan state is ephemeral, package-subsystem-owned state, conceptually a
+`ScanRecord`. It must distinguish never scanned, running, last attempt
+succeeded, and last attempt failed.
+
+| Latest scan state | Current pending-package sensor state |
+| --- | --- |
+| Success | Exact pending count, including zero |
+| Never scanned | Unknown |
+| Running | Unknown |
+| Failed | Unknown |
+
+A failed or running scan must not leave an earlier successful count presented
+as current evidence. Bounded diagnostic metadata such as last-attempt time,
+running status, and last error classification may be retained only when it
+cannot be mistaken for current package evidence.
+
+There is no persistent scan store. A Home Assistant restart may reset scan
+state to never-scanned and unknown.
+
+### Concurrency
+
+Package scans have their own concurrency controls inside the package manager:
+
+- at most one scan per VMID; and
+- at most two package scans globally.
+
+Locks or semaphores may implement these bounds. A scan trigger must not occupy
+the native PVE button semaphore for the full remote scan, change native button
+semantics, or change upstream `PARALLEL_UPDATES = 1`.
+
+This design has no scheduler, durable queue, worker service, job database, or
+retry worker.
+
+### Host-control boundary
+
+The accepted Home Assistant-side transport is `asyncssh`, not a local system
+`ssh` subprocess:
 
 ```text
 Home Assistant
-    -> package scan trigger
-    -> restricted host execution
-    -> pct exec
-    -> apt/dpkg
-    -> package evidence
-    -> HA sensor
+    |
+    v
+asyncssh
+    |
+    v
+PVE sshd
+    |
+    v
+forced command
+    |
+    v
+typed helper operation
 ```
 
-**DRAFT — NOT MERGED — NOT ARCHITECTURAL TRUTH**
+Official Home Assistant integrations already use `asyncssh`. It fits native
+asynchronous Home Assistant operation, avoids dependence on a system SSH
+executable, and avoids client-side subprocess, process-group, and selector
+machinery.
 
-The candidate must not be used as a foundation for later features until its
-architecture is reviewed, accepted, merged, and reflected in this document.
+The PVE host helper remains a root-owned forced-command boundary. It accepts no
+caller-supplied remote shell command text. It must:
 
-### Open architecture questions
+- accept only typed, validated operations; currently only `scan_packages`;
+- validate VMID and expected operation;
+- use fixed `pct exec` command shapes;
+- perform no package mutation during scan;
+- return structured, bounded evidence;
+- bound stdout and stderr; and
+- bound execution time.
 
-The current read-only architecture audit must determine:
+The helper has one global operation deadline. Individual guest commands may
+have smaller bounds, but sequential commands must share the remaining global
+time. The Home Assistant transport deadline must exceed the helper deadline so
+the helper normally terminates with a classified result first. A compatible
+shape is approximately 300 seconds for transport, 240 seconds globally in the
+helper, and at most 120 seconds per command subject to remaining time; exact
+constants are implementation details.
 
-- the correct Home Assistant-to-PVE guest-execution boundary;
-- how PVE node identity relates to an SSH or network endpoint;
-- how target freshness and time-of-check/time-of-use races are handled;
-- the semantics of stale, failed, and unknown scan results;
-- how long-running scan concurrency interacts with native Proxmox actions;
-- where the minimal package-scan state is owned; and
-- how the design can later support
-  `scan -> review -> verify -> update -> health`.
+A simple, appropriately scoped host-side `flock` must prevent accidental
+overlapping package/apt scans. It is ordinary concurrency protection, not
+durable job ownership or a database-backed lock.
 
-These are open questions, not accepted solutions. Do not resolve them by
-assertion in documentation or by incidental implementation.
+The helper validates target facts as close as practical to `pct exec` and
+fails safely when the VMID is no longer an LXC, the guest is stopped or
+unavailable when execution requires it, or expected node/target identity does
+not match. Coordinator state must not be assumed fresh throughout a long scan.
+No cryptographic incarnation proof, resource UUID authority, generation, or
+fencing machinery is required by the trusted environment threat model in
+[PRODUCT.md](PRODUCT.md).
 
-Any future accepted architecture must support those stages without requiring a
-second Proxmox inventory, discovery system, or backend stack.
+Because the helper is separately deployed, responses expose a small explicit
+compatibility contract: protocol version, helper or implementation version,
+operation, and target identity. Incompatible protocol versions fail clearly
+rather than appearing as arbitrary execution or parser failures. No generic
+version-negotiation framework is needed.
+
+### Parser and evidence rules
+
+Parsing remains pure and separate from I/O. It preserves proven donor behavior
+where appropriate:
+
+- strict `/etc/os-release` handling and Debian/Ubuntu support;
+- native architecture and exact `dpkg` inventory;
+- binary identity as `(name, architecture)` with multiarch handling;
+- APT `Inst` and `Conf` evidence;
+- malformed-plan rejection;
+- security-origin and reboot-required evidence;
+- unfinished-`dpkg` detection; and
+- bounded evidence.
+
+Malformed or ambiguous evidence remains fail-closed.
+
+Unfinished `dpkg` states—`half-installed`, `unpacked`, `half-configured`,
+`triggers-awaited`, and `triggers-pending`—and APT evidence such as
+`N not fully installed or removed` make the scan fail. They should receive a
+specific semantic classification such as `DPKG_UNFINISHED`, not merely a
+generic malformed-parser error. The helper must not run `dpkg --configure -a`
+or otherwise auto-repair the guest.
+
+When evidence is syntactically valid but contradicts because package state
+changed between observations, use a semantic classification such as
+`GUEST_CHANGED_DURING_SCAN` where distinguishable. No automatic retry is
+required; the operator may scan again.
+
+Evidence that is not reliably known remains tri-state:
+
+- `reboot_required` is true with positive evidence, false only with reliable
+  evidence that no reboot is required, and otherwise unknown;
+- security classification is true with positive security-origin evidence,
+  false with reliable non-security evidence, and otherwise unknown.
+
+Missing or unreadable reboot evidence is not false. Missing or ambiguous
+origin metadata is not non-security.
+
+APT's not-upgraded/kept-back count is separate bounded evidence, such as
+`not_upgraded_count`. It is not part of the pending, reviewable, or executable
+package plan. For example, `3 upgraded, 41 not upgraded` means a pending plan
+count of 3 and a not-upgraded count of 41.
+
+### Home Assistant presentation
+
+Package entities are bounded summary surfaces, not stores for full package
+rows. Summary attributes may include OS information, reboot-required
+tri-state, security and unknown-security counts, held-back/not-upgraded count,
+last-attempt time, running status, and last error classification. Exact package
+rows remain inside package-subsystem state.
+
+Future review may expose exact rows through an action/service response or
+another explicit operator interaction, but that UI is not designed here.
+Package-specific entities are exposed only when the package transport is
+configured and usable under the final implementation contract; this does not
+require a large onboarding subsystem. Exact config-flow mechanics are deferred
+to package-scan implementation.
+
+### Future extension boundary
+
+Clean responsibilities must allow this later path:
+
+```text
+scan
+    -> review
+    -> execution-time exact-plan verification
+    -> explicit update
+    -> post-update health
+```
+
+Future update execution must verify that the executed plan exactly matches the
+reviewed plan. The only accepted preparation now is the boundary
+`upstream identity/state -> package manager -> typed package operations -> pure
+package evidence/parser`.
+
+Review, update, and health are not implemented by this decision. It adds no
+approval persistence, update jobs, snapshot orchestration, rollback, or health
+machinery.
+
+## Explicitly rejected or modified package-scan architecture
+
+- **Rejected: stale successful count after failure.** Never-scanned, running,
+  or latest-failed state makes the current package count unknown.
+- **Rejected: relaxed unfinished-`dpkg` handling.** Unfinished package-manager
+  state remains fail-closed and should be classified specifically.
+- **Rejected: static VMID allowlists.** Upstream PVE identity and discovery
+  remain the resource source of truth.
+- **Modified: separate SSH endpoint option.** Current single-host scope reuses
+  `CONF_HOST`; it adds no second endpoint option.
+- **Accepted: forced-command SSH boundary.** The host helper remains a narrow,
+  typed control boundary.
+- **Accepted: `asyncssh` client transport.** Home Assistant uses native async
+  SSH rather than the system `ssh` executable.
