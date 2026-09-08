@@ -1,9 +1,9 @@
 # Architecture
 
 This document defines the accepted architecture, including the implemented
-package-scan runtime. Product intent is defined in [PRODUCT.md](PRODUCT.md),
-current work in [STATUS.md](STATUS.md), and fork provenance in
-[UPSTREAM.md](UPSTREAM.md).
+package-scan runtime and the accepted-but-not-yet-implemented package-review
+design. Product intent is defined in [PRODUCT.md](PRODUCT.md), current work
+in [STATUS.md](STATUS.md), and fork provenance in [UPSTREAM.md](UPSTREAM.md).
 
 ## Accepted architecture today
 
@@ -349,3 +349,259 @@ machinery.
   typed control boundary.
 - **Accepted: `asyncssh` client transport.** Home Assistant uses native async
   SSH rather than the system `ssh` executable.
+
+## Package review architecture
+
+This section describes the package-review architecture accepted by the
+maintainer and independently red-teamed against Home Assistant Core
+`2026.9.1`. It is design only; see [STATUS.md](STATUS.md) for implementation
+state. It builds on the package-scan architecture above and does not replace
+any part of it.
+
+### State ownership and lifetime
+
+Review state belongs to the existing package subsystem (`PackageManager`) and
+is ephemeral, exactly like scan state. There is no persistence, recovery, or
+reconstruction of scan or review state after a Home Assistant restart,
+integration reload, or `PackageManager` reconstruction. Uncertain ephemeral
+state is discarded, not reconstructed; the operator scans and reviews again.
+This design does not need to prove historical package state or historical LXC
+identity.
+
+Review adds no new object. The existing successful `PackageScanRecord`
+conceptually gains two fields:
+
+- `token: str | None`
+- `reviewed: bool`
+
+There is no separate review object, no duplicate copy of the reviewed plan, no
+copy of the reviewed token, no review timestamp, no review database, and no
+review history. `reviewed == True` means exactly that the `result.packages`
+stored on this same immutable successful record were explicitly confirmed.
+Confirmation preserves the existing `result` and scan token unchanged; the
+record itself stays frozen, and every state transition replaces the whole
+record rather than mutating it in place.
+
+### Reviewed-plan equality
+
+The exact reviewed/executable package plan is defined only by the canonically
+ordered tuple of `(name, architecture, installed_version, candidate_version)`
+taken from `result.packages`, using the parser's existing `(name,
+architecture)` sort and duplicate-identity rejection. `origin`,
+`security`, `os_id`, `os_version`, `reboot_required`, and
+`not_upgraded_count` are informational only and never bear on equality.
+`origin` and `security` remain visible to the operator as context. This
+design does not expand the trust model into hostile-repository or
+supply-chain identity.
+
+### Scan token
+
+Every successful package scan produces one fresh opaque scan token
+(conceptually `secrets.token_urlsafe(16)` or equivalent ~128-bit JSON-safe
+randomness), consistently called the **scan token**. The token:
+
+- belongs to one successful scan observation and changes on every later
+  successful scan, even when the package rows are unchanged;
+- is present only for `SUCCESS`, and absent for `NEVER`, `RUNNING`, and
+  `FAILED`;
+- is discarded when the record is replaced, when the target is pruned, and on
+  reload/restart;
+- is never persisted or restored.
+
+The token is not a secret, not authentication, not authority, not a resource
+UUID, not resource identity, not a generation/incarnation identifier, not
+attestation, and encodes no node, VMID, or config-entry data. Its only
+purpose is optimistic concurrency between `get_package_plan` and
+`confirm_package_review` (show scan A -> token A; new scan B -> token B;
+confirming with token A now returns `reviewed: false` because the current
+token is B). There is no monotonic revision counter, no seeded counter, and
+no plan-content fingerprint used as the confirmation token.
+
+### Invalidation is whole-record replacement
+
+There is no separate invalidation subsystem; every transition replaces or
+deletes the whole `PackageScanRecord`:
+
+- **New scan starts:** the previous successful record is immediately replaced
+  by `RUNNING`; the old review and old scan token are gone.
+- **New scan succeeds:** a new `SUCCESS` record is created with a fresh scan
+  token and `reviewed = False`, even when the rows are identical to the
+  previous scan. Review is never carried forward.
+- **Scan fails:** the record becomes `FAILED`; review is gone and no token is
+  present.
+- **Target disappears / is pruned:** the target's package record is deleted;
+  review and token go with it.
+- **VMID reappears later:** it starts with fresh package state and inherits
+  no review. This design does not prove whether it is "the same LXC."
+- **HA restart / integration reload:** all ephemeral state, including review
+  and tokens, is gone; nothing is reconstructed.
+
+### LXC stop/start does not invalidate review
+
+Stopping an LXC does not invalidate its stored successful record: the
+`PackageScanRecord`, its `reviewed` flag, and its scan token remain in RAM.
+Review actions are simply unavailable while the package sensor is
+unavailable (see below). When the LXC starts again, the stored result and
+review become visible again with no automatic re-scan. This design adds no
+historical-identity proof and no expiry based on elapsed time; future update
+execution independently re-obtains a fresh exact package plan before any
+mutation.
+
+### No review TTL
+
+There is no review expiry, no timer, no `reviewed_at` freshness deadline, and
+no expiry callback. A timer cannot prove freshness: packages can change
+before a deadline, and an unchanged plan can remain correct after one. The
+freshness mechanism is future execution-time exact-plan equality (see
+"Future update handoff"), not elapsed time.
+
+### Empty plan
+
+A successful scan with zero pending packages may still be viewed:
+`get_package_plan` may return `status: success`, a token, `reviewed: false`,
+and `packages: []`. Confirming an empty plan does not create review state; it
+always returns `{"reviewed": false}`. There is no `reviewed = True` state for
+a zero-package plan.
+
+### Action surface
+
+Exactly two package-review entity actions exist:
+
+- `hubinet_ops.get_package_plan`
+- `hubinet_ops.confirm_package_review`
+
+Both are registered from the sensor platform and both use
+`SupportsResponse.ONLY`. This is intentional even for confirmation, which
+mutates ephemeral metadata: Home Assistant Core `2026.9.1` has no separate
+"mutating action with mandatory response" mode, and the caller must receive
+an explicit acknowledgement.
+
+### Actions are restricted to `PackageScanSensor`
+
+Registering an entity service from `sensor.py` does not automatically
+restrict it to `PackageScanSensor`; the shared `(sensor, hubinet_ops)` entity
+mapping also contains ordinary CPU, RAM, status, storage, and other
+Hubinet-Ops sensors that must remain ineligible. `PackageScanSensor` must
+therefore expose a private/custom supported-feature bit for package-review
+actions, and both actions must be registered with native
+`required_features`, using Home Assistant-native entity-service filtering.
+This design adds no custom target resolver, no manual node/VMID routing, no
+second inventory, and no custom config-entry lookup architecture.
+
+### `get_package_plan` contract
+
+The action returns one response per eligible package sensor and never
+changes state; it is not review confirmation. For a successful scan it
+returns `status`, `token`, `reviewed`, and `packages[]`, where each package
+row is a primitive JSON dictionary containing at least `name`,
+`architecture`, `installed_version`, `candidate_version`, `origin`, and
+`security` (`origin`/`security` informational only, rows never truncated).
+For `NEVER`, `RUNNING`, or `FAILED` it returns `status` only -- never a token
+or exact rows.
+
+### `confirm_package_review` contract
+
+The input field is `token`; the target is selected through the package
+sensor entity as usual. Confirmation succeeds only when the current record
+exists, is successful, has a current token, that token equals the supplied
+token, and the package plan is non-empty; on success the manager replaces
+the record with `reviewed = True`, preserving the exact same `result` and
+token, and returns `{"reviewed": true}`. Otherwise -- stale/wrong token, no
+current successful scan, or an empty package plan -- it returns
+`{"reviewed": false}`. These are expected business outcomes and must not
+raise exceptions.
+
+### Multi-target confirmation is independent per sensor
+
+Home Assistant can dispatch one entity service call to multiple eligible
+entities concurrently (for example confirming `sensor.ct106_...` and
+`sensor.ct107_...` in one call with different `reviewed` results). There is
+no cross-target transaction, no rollback, and no all-or-none review; a stale
+token on one target must not raise an exception because another target
+already succeeded. Expected business rejection is per-entity response data.
+Unexpected programming/runtime failures may still raise normally.
+
+### Unavailable targets
+
+Package-review actions inherit `PackageScanSensor.available`; a stopped LXC
+is unavailable. For a response-required action with no eligible target
+remaining, Home Assistant Core provides the caller-visible failure -- no
+special Hubinet-Ops unavailable-target routing layer is added. With mixed
+targets, unavailable targets may be omitted while available eligible package
+sensors return their own responses.
+
+### Concurrency and atomicity
+
+Both actions live on the sensor platform, where `PARALLEL_UPDATES = 0` holds
+no entity-platform semaphore. Review actions must not use the native Proxmox
+button semaphore, package-scan concurrency slots, a review queue, a
+scheduler, or an `asyncio` lock. `confirm_package_review`'s check-and-write
+(read current record, validate the current scan token, replace the record
+with `reviewed = True`) must be one synchronous, event-loop-atomic operation
+with no `await` between those steps, preserving the same stale
+scan-completion object-identity protection used elsewhere in the subsystem.
+
+### HA entity/state surfaces remain bounded
+
+Exact package rows and the scan token are never placed in sensor attributes;
+the token is obtainable only from `get_package_plan`, alongside the exact
+rows it returns. The package sensor may expose only bounded review metadata,
+`reviewed: bool`. There is no review entity, no review binary sensor, and no
+review button -- a button is explicitly rejected because it cannot carry the
+token previously returned with the viewed plan and would degrade to
+"review whatever is current now," which is not acceptable.
+
+### Exact rows are transient response data
+
+Exact package rows returned by `get_package_plan` are primitive JSON
+dictionaries and are transient action-response data only: they are not
+sensor state, not sensor attributes, not recorder history, and not
+persistent review storage. This design adds no custom WebSocket API, no
+custom frontend, and no custom card or panel. The reviewable plan is never
+truncated.
+
+### Cross-target and restart token behavior
+
+A token obtained from one package sensor (e.g. CT107) presented while
+confirming a different package sensor (e.g. CT106) must return
+`{"reviewed": false}`, because CT106's current successful record carries its
+own, different fresh scan token; no target data needs to be encoded into the
+token itself. After a reload/restart, a stale previously held token must not
+confirm any new successful observation, because each new successful
+observation receives a fresh random token. No resource-identity machinery is
+required.
+
+### Future update handoff
+
+Package review does not design package execution. The future update feature
+receives only the current package record when `reviewed` is `True`, plus
+`result.packages`, projected as the canonically ordered tuple `(name,
+architecture, installed_version, candidate_version)` per row. The future
+feature must independently obtain a fresh exact package plan and require
+`fresh_plan == reviewed_plan`; if they differ, it stops and requires the
+operator to scan and review again. The scan token has no role in future
+execution equality -- its job ends once review is confirmed. This decision
+does not design `apt` update execution, ordering, retry, snapshot, rollback,
+or post-update health.
+
+### Inst/Conf symmetry and key lifecycle
+
+Inst/Conf symmetry (`C1`) is deferred until update design: review rows and
+equality fields are derived from `Inst`, `Conf` contributes no review
+equality field, and the current parser already rejects a `Conf` that
+configures something outside the `Inst` plan. This docs decision does not
+modify package-parser architecture. Private-key lifecycle (`C2`) is closed
+and is not an open package-review design concern.
+
+### Explicitly rejected package-review architecture
+
+Package review does not introduce: durable approval; persisted review;
+review recovery; historical LXC identity proof; incarnation ID; resource
+generation authority; resource UUID authority; fencing; reconciliation; a
+review database; SQLite; backend HTTP; `hostd`; a worker; a scheduler; a
+queue; a review TTL; a review timer; cryptographic plan attestation; token
+authority; a content-derived confirmation hash; a duplicate reviewed-plan
+copy; a generalized workflow/state machine; a custom frontend; a review
+button; a review entity; a custom WebSocket API; a second inventory; a
+custom target resolver; a cross-target transaction; package mutation;
+package-update architecture; or post-update health architecture.

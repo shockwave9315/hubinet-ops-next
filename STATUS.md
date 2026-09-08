@@ -29,18 +29,17 @@ Status date: 2026-09-08
 - Package scan: **IMPLEMENTED**.
 - Package state is intentionally ephemeral; Home Assistant restart resets it.
 
+## Package review
+
+- Package-review architecture: **ACCEPTED BY MAINTAINER** and documented in
+  [ARCHITECTURE.md](ARCHITECTURE.md).
+- Package-review implementation: **NOT STARTED**.
+
 ## Next
 
-1. Design package review against the exact rows retained inside the package
-   subsystem.
-2. Do not begin update execution or post-update health until their design is
-   explicitly accepted.
+Implement package review against the accepted architecture.
 
 ## Explicitly not started
 
-- Package review.
-- Package update.
-- Post-update health.
-
-Package review is the next feature; it has not yet been designed or
-implemented.
+- Package update: **NOT DESIGNED / NOT STARTED**.
+- Post-update health: **NOT DESIGNED / NOT STARTED**.
