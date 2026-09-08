@@ -170,8 +170,15 @@ state to never-scanned and unknown.
 
 Package scans have their own concurrency controls inside the package manager:
 
-- at most one scan per VMID; and
-- at most two package scans globally.
+- at most one scan per VMID within a config entry; and
+- at most two package scans concurrently per config entry (configured
+  Proxmox host).
+
+Each config entry (configured Proxmox host) owns one package manager and
+therefore its own independent bounds. Two config entries for two different
+Proxmox hosts do not throttle one another; this is not cluster routing, a
+node-address map, a shared worker pool, or cross-entry coordination -- it
+is ordinary per-entry state, consistent with the rest of this subsystem.
 
 Locks or semaphores may implement these bounds. A scan trigger must not occupy
 the native PVE button semaphore for the full remote scan, change native button

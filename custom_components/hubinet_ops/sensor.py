@@ -18,7 +18,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 from homeassistant.util import dt as dt_util
 
-from .const import ProxmoxPermission
+from .const import VM_CONTAINER_RUNNING, ProxmoxPermission
 from .coordinator import ProxmoxConfigEntry, ProxmoxCoordinator, ProxmoxNodeData
 from .entity import (
     ProxmoxContainerEntity,
@@ -622,6 +622,23 @@ class PackageScanSensor(ProxmoxContainerEntity, SensorEntity):
     @property
     def _scan_record(self) -> PackageScanRecord:
         return self.coordinator.package_manager.record(self._node_name, self.device_id)
+
+    @property
+    @override
+    def available(self) -> bool:
+        """Return whether current upstream state says this LXC can be scanned.
+
+        A stored successful result is not equivalent to zero pending
+        packages for a guest that is not currently running -- packages
+        cannot be scanned (or have changed) while it is stopped, so the
+        sensor is unavailable rather than exposing a possibly-stale exact
+        count. The record itself is preserved and becomes visible again
+        once the guest is running again.
+        """
+        return (
+            super().available
+            and self.container_data.get("status") == VM_CONTAINER_RUNNING
+        )
 
     @property
     @override

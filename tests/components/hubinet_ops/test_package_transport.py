@@ -342,6 +342,70 @@ async def test_real_asyncssh_round_trip_with_chunked_stdout_and_stderr(
     }
 
 
+async def test_real_asyncssh_success_payload_with_nonzero_exit_fails_closed(
+    hass: HomeAssistant, tmp_path: Path, socket_enabled: None
+) -> None:
+    """C4: a real peer's valid ok:true JSON with a nonzero exit fails closed.
+
+    The deployed helper contract is ok:true -> exit 0. A real server that
+    writes a structurally valid success payload but then exits nonzero
+    delivers contradictory completion evidence, which must not be
+    accepted as a successful scan.
+    """
+    host_key = asyncssh.generate_private_key("ssh-ed25519")
+    client_key = asyncssh.generate_private_key("ssh-ed25519")
+
+    private_key_path = tmp_path / "hubinet_ops"
+    client_key.write_private_key(private_key_path)
+    private_key_path.chmod(0o600)
+
+    payload = json.dumps(_response()).encode()
+
+    async def _serve_success_but_nonzero_exit(
+        process: asyncssh.SSHServerProcess,
+    ) -> None:
+        while True:
+            chunk = await process.stdin.read(64)
+            if not chunk:
+                break
+        process.stdout.write(payload)
+        await process.stdout.drain()
+        process.exit(1)
+
+    server = await asyncssh.listen(
+        "127.0.0.1",
+        0,
+        server_host_keys=[host_key],
+        authorized_client_keys=asyncssh.import_authorized_keys(
+            client_key.export_public_key().decode()
+        ),
+        process_factory=_serve_success_but_nonzero_exit,
+        encoding=None,
+    )
+    try:
+        port = server.sockets[0].getsockname()[1]
+        known_hosts_path = tmp_path / "known_hosts"
+        known_hosts_path.write_bytes(
+            f"[127.0.0.1]:{port} ".encode() + host_key.export_public_key()
+        )
+
+        transport = AsyncSSHPackageTransport(
+            endpoint="127.0.0.1",
+            private_key_path=private_key_path,
+            known_hosts_path=known_hosts_path,
+            port=port,
+        )
+        await transport.async_prepare(hass)
+
+        with pytest.raises(PackageScanError) as caught:
+            await transport.async_scan("pve1", 200)
+    finally:
+        server.close()
+        await server.wait_closed()
+
+    assert caught.value.failure is PackageScanFailure.EXECUTION_FAILED
+
+
 async def test_real_asyncssh_stuck_peer_oversize_terminates_promptly(
     hass: HomeAssistant, tmp_path: Path, socket_enabled: None
 ) -> None:
@@ -504,6 +568,52 @@ async def test_helper_identity_mismatch_fails_closed(
     with pytest.raises(PackageScanError) as caught:
         await transport.async_scan("pve1", 200)
     assert caught.value.failure is PackageScanFailure.IDENTITY_MISMATCH
+
+
+@pytest.mark.parametrize("returncode", [1, 2, -9, None])
+async def test_success_payload_with_nonzero_exit_fails_closed(
+    hass: HomeAssistant, tmp_path: Path, returncode: int | None
+) -> None:
+    """C4-A: ok:true paired with a nonzero (or missing) exit fails closed.
+
+    Reproduces the exact matrix an empirical audit found accepted as
+    SUCCESS: valid ok:true JSON with rc 1, rc 2, rc -9, or no observed
+    exit code at all. The deployed helper contract is ok:true -> exit 0;
+    anything else is contradictory completion evidence.
+    """
+    transport, *_ = await _transport(
+        hass, tmp_path, _response(), returncode=returncode
+    )
+    with pytest.raises(PackageScanError) as caught:
+        await transport.async_scan("pve1", 200)
+    assert caught.value.failure is PackageScanFailure.EXECUTION_FAILED
+
+
+async def test_ok_false_response_with_nonzero_exit_preserves_its_classification(
+    hass: HomeAssistant, tmp_path: Path
+) -> None:
+    """C4-B: ok:false failures are unaffected by the ok:true/exit check.
+
+    The helper's failure contract may legitimately use a nonzero exit; the
+    C4 fix must stay narrow to a *success* payload paired with an abnormal
+    exit, not broaden into rejecting every nonzero exit and losing the
+    original semantic classification.
+    """
+    response = {
+        "protocol_version": 1,
+        "helper_version": 1,
+        "operation": "scan_packages",
+        "target": {"node": "pve1", "vmid": 200},
+        "ok": False,
+        "error": {
+            "classification": "guest_unavailable",
+            "message": "LXC is not running",
+        },
+    }
+    transport, *_ = await _transport(hass, tmp_path, response, returncode=1)
+    with pytest.raises(PackageScanError) as caught:
+        await transport.async_scan("pve1", 200)
+    assert caught.value.failure is PackageScanFailure.GUEST_UNAVAILABLE
 
 
 async def test_helper_pre_target_failure_surfaces_its_real_classification(

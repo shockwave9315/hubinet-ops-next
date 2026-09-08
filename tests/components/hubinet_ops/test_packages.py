@@ -3,6 +3,7 @@
 import asyncio
 from collections.abc import Iterator
 from contextlib import suppress
+from copy import deepcopy
 from datetime import UTC, datetime
 import json
 from pathlib import Path
@@ -25,7 +26,7 @@ from custom_components.hubinet_ops.packages.models import (
     PendingPackage,
 )
 from homeassistant.components.button import SERVICE_PRESS
-from homeassistant.const import ATTR_ENTITY_ID, Platform
+from homeassistant.const import ATTR_ENTITY_ID, STATE_UNAVAILABLE, Platform
 from homeassistant.core import HomeAssistant
 
 from . import setup_integration
@@ -509,3 +510,93 @@ async def test_in_flight_scan_does_not_block_native_proxmox_button(
     mock_proxmox_client.nodes("pve1").lxc(
         200
     ).status.reboot.post.assert_called_once_with()
+
+
+async def test_stopped_lxc_hides_stored_package_count_but_preserves_it(
+    hass: HomeAssistant,
+    mock_proxmox_client: MagicMock,
+    mock_config_entry: MockConfigEntry,
+    package_transport_material: None,
+) -> None:
+    """C5: a stopped guest must not keep exposing a stored exact count.
+
+    An unsupported or unavailable guest is not equivalent to zero available
+    updates (PRODUCT.md). The stored scan record itself is preserved, not
+    invalidated, since packages cannot change while the container is
+    stopped; only the sensor's (and, as already established, the button's)
+    availability changes. The prior result becomes visible again, without
+    a new scan, once the guest is running again.
+    """
+    transport = GateTransport()
+    zero_result = PackageScanResult(
+        os_id="debian",
+        os_version="12",
+        packages=(),
+        reboot_required=None,
+        not_upgraded_count=0,
+    )
+
+    async def fake_scan(_self, expected_node, vmid):
+        return await transport.async_scan(expected_node, vmid)
+
+    with patch(
+        "custom_components.hubinet_ops.packages.transport."
+        "AsyncSSHPackageTransport.async_scan",
+        new=fake_scan,
+    ):
+        await setup_integration(hass, mock_config_entry)
+        transport.outcomes[200] = zero_result
+        await hass.services.async_call(
+            "button",
+            SERVICE_PRESS,
+            {ATTR_ENTITY_ID: "button.ct_nginx_scan_pending_packages"},
+            blocking=True,
+        )
+        await asyncio.wait_for(transport.entered(200).wait(), 1)
+        transport.release(200)
+        await _wait_for_state(hass, "sensor.ct_nginx_pending_package_updates", "0")
+
+    button_state = hass.states.get("button.ct_nginx_scan_pending_packages")
+    assert button_state is not None
+    assert button_state.state != STATE_UNAVAILABLE
+
+    # The guest stops.
+    stopped_containers = deepcopy(
+        mock_proxmox_client._node_mock.lxc.get.return_value  # noqa: SLF001
+    )
+    for container in stopped_containers:
+        if container["vmid"] == "200":
+            container["status"] = "stopped"
+    mock_proxmox_client._node_mock.lxc.get.return_value = (  # noqa: SLF001
+        stopped_containers
+    )
+
+    coordinator = mock_config_entry.runtime_data
+    await coordinator.async_refresh()
+    await hass.async_block_till_done()
+
+    sensor_state = hass.states.get("sensor.ct_nginx_pending_package_updates")
+    assert sensor_state is not None
+    assert sensor_state.state == STATE_UNAVAILABLE
+    # The package button was already established to become unavailable
+    # when its guest stops; confirm it still does alongside the sensor.
+    button_state = hass.states.get("button.ct_nginx_scan_pending_packages")
+    assert button_state is not None
+    assert button_state.state == STATE_UNAVAILABLE
+
+    # The guest starts again; the stored result becomes visible again
+    # without a new scan being triggered.
+    running_containers = deepcopy(stopped_containers)
+    for container in running_containers:
+        if container["vmid"] == "200":
+            container["status"] = "running"
+    mock_proxmox_client._node_mock.lxc.get.return_value = (  # noqa: SLF001
+        running_containers
+    )
+    await coordinator.async_refresh()
+    await hass.async_block_till_done()
+
+    sensor_state = hass.states.get("sensor.ct_nginx_pending_package_updates")
+    assert sensor_state is not None
+    assert sensor_state.state == "0"
+    assert transport.calls == [("pve1", 200)]

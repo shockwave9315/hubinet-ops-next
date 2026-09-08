@@ -227,6 +227,17 @@ class AsyncSSHPackageTransport:
                 PackageScanFailure.EXECUTION_FAILED,
                 "package scan helper returned a malformed response",
             ) from err
+        # The deployed helper contract is ok:true -> exit 0; ok:false may
+        # legitimately use a nonzero exit. A structured success payload
+        # paired with an abnormal exit (including no observed exit code at
+        # all) is contradictory completion evidence and must fail closed
+        # rather than be accepted as a successful scan.
+        if isinstance(payload, Mapping) and payload.get("ok") is True:
+            if completed.returncode != 0:
+                raise PackageScanError(
+                    PackageScanFailure.EXECUTION_FAILED,
+                    "package scan helper reported success with an abnormal exit",
+                )
         return _parse_response(payload, expected_node, vmid)
 
 
