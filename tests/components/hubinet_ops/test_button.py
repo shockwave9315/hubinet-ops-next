@@ -1,7 +1,7 @@
 """Tests for the ProxmoxVE button platform."""
 
 import re
-from unittest.mock import MagicMock, patch
+from unittest.mock import ANY, MagicMock, patch
 
 import pytest
 from homeassistant.components.button import SERVICE_PRESS
@@ -161,7 +161,6 @@ async def test_snapshot_button(
 
     node = mock_proxmox_client.nodes("pve1")
     method_mock = getattr(node, guest_resource)(vmid).snapshot.post
-    pre_calls = len(method_mock.mock_calls)
 
     await hass.services.async_call(
         BUTTON_DOMAIN,
@@ -170,11 +169,11 @@ async def test_snapshot_button(
         blocking=True,
     )
 
-    assert len(method_mock.mock_calls) == pre_calls + 1
+    method_mock.assert_called_once_with(snapname=ANY)
 
     # Proxmox validates the name as a `pve-configid` of at most 40 characters:
     # two or more, starting with a letter, then only [A-Za-z0-9_-]
-    name = method_mock.call_args.kwargs["name"]
+    name = method_mock.call_args.kwargs["snapname"]
     assert len(name) <= 40
     assert re.fullmatch(r"[A-Za-z][A-Za-z0-9_-]+", name)
 

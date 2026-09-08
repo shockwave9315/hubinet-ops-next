@@ -20,6 +20,9 @@ test, fixture, and snapshot. Baseline adaptations are limited to:
 - `translations/en.json`, generated from the adapted `strings.json` because
   custom integrations load runtime translations from `translations/`.
 
+The pinned upstream baseline sends `name` when creating VM and LXC snapshots.
+Hubinet-Ops intentionally uses the PVE-required `snapname` keyword instead.
+
 The fork-owned package-scan extension is isolated under
 `custom_components/hubinet_ops/packages` with a separately deployed forced-
 command helper. Its composition changes to the upstream-derived coordinator,

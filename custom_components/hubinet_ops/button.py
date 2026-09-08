@@ -178,7 +178,7 @@ VM_BUTTONS: tuple[ProxmoxVMButtonEntityDescription, ...] = (
             coordinator.proxmox.nodes(node)
             .qemu(vmid)
             .snapshot.post(
-                name=f"homeassistant_snapshot_{dt_util.utcnow().strftime('%Y%m%d%H%M%S')}"
+                snapname=f"homeassistant_snapshot_{dt_util.utcnow().strftime('%Y%m%d%H%M%S')}"
             )
         ),
         permission=ProxmoxPermission.SNAPSHOT,
@@ -218,7 +218,7 @@ CONTAINER_BUTTONS: tuple[ProxmoxContainerButtonEntityDescription, ...] = (
             coordinator.proxmox.nodes(node)
             .lxc(vmid)
             .snapshot.post(
-                name=f"homeassistant_snapshot_{dt_util.utcnow().strftime('%Y%m%d%H%M%S')}"
+                snapname=f"homeassistant_snapshot_{dt_util.utcnow().strftime('%Y%m%d%H%M%S')}"
             )
         ),
         permission=ProxmoxPermission.SNAPSHOT,
