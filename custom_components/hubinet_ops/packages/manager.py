@@ -2,8 +2,10 @@
 
 import asyncio
 from collections.abc import Callable, Collection
+from dataclasses import replace
 from datetime import UTC, datetime
 import logging
+import secrets
 from typing import Any, Protocol
 
 from homeassistant.config_entries import ConfigEntry
@@ -21,6 +23,18 @@ _LOGGER = logging.getLogger(__name__)
 
 _MAX_GLOBAL_SCANS = 2
 _MAX_ERROR_MESSAGE_LENGTH = 500
+_SCAN_TOKEN_BYTES = 16
+
+
+def _generate_scan_token() -> str:
+    """Return one fresh ~128-bit opaque scan token for a successful scan.
+
+    The token is optimistic-concurrency metadata only: it is not a secret,
+    not authentication, not a resource identity, and encodes no node,
+    VMID, or config-entry data. Every successful scan gets a new one, even
+    when the observed package rows are unchanged.
+    """
+    return secrets.token_urlsafe(_SCAN_TOKEN_BYTES)
 
 
 class PackageTransport(Protocol):
@@ -173,6 +187,7 @@ class PackageManager:
                 status=PackageScanStatus.SUCCESS,
                 last_attempt=attempted_at,
                 result=result,
+                token=_generate_scan_token(),
             )
         self._finish_scan(node, vmid, own_record, outcome)
 
@@ -195,6 +210,37 @@ class PackageManager:
             return
         self._tasks.pop((node, vmid), None)
         self._set_record(node, vmid, outcome)
+
+    @callback
+    def confirm_review(self, node: str, vmid: int, token: str) -> bool:
+        """Confirm the current successful scan's plan as reviewed.
+
+        Confirmation can only ever act on a stored ``SUCCESS`` record: a
+        scan in flight for this target owns a ``RUNNING`` record instead,
+        so this can never target (or block) an in-flight attempt -- a
+        confirmation racing a scan either sees the old successful record
+        (rejected once the new one lands, since the token then differs) or
+        the new one once it exists. Reading the current record, validating
+        its token, and replacing it happen here with no ``await`` between
+        them, so nothing can interleave a scan completion in between.
+
+        Returns ``True`` once ``reviewed`` is set, and ``False`` for every
+        expected business rejection (no current record, a non-successful
+        record, a missing or mismatched token, or an empty package plan) --
+        never by raising.
+        """
+        record = self._records.get((node, vmid))
+        if (
+            record is None
+            or record.status is not PackageScanStatus.SUCCESS
+            or record.result is None
+            or record.token is None
+            or record.token != token
+            or not record.result.packages
+        ):
+            return False
+        self._set_record(node, vmid, replace(record, reviewed=True))
+        return True
 
     @callback
     def _set_record(self, node: str, vmid: int, record: PackageScanRecord) -> None:

@@ -1,9 +1,9 @@
 # Architecture
 
 This document defines the accepted architecture, including the implemented
-package-scan runtime and the accepted-but-not-yet-implemented package-review
-design. Product intent is defined in [PRODUCT.md](PRODUCT.md), current work
-in [STATUS.md](STATUS.md), and fork provenance in [UPSTREAM.md](UPSTREAM.md).
+package-scan and package-review runtime. Product intent is defined in
+[PRODUCT.md](PRODUCT.md), current work in [STATUS.md](STATUS.md), and fork
+provenance in [UPSTREAM.md](UPSTREAM.md).
 
 ## Accepted architecture today
 
@@ -352,11 +352,11 @@ machinery.
 
 ## Package review architecture
 
-This section describes the package-review architecture accepted by the
-maintainer and independently red-teamed against Home Assistant Core
-`2026.9.1`. It is design only; see [STATUS.md](STATUS.md) for implementation
-state. It builds on the package-scan architecture above and does not replace
-any part of it.
+This section describes the implemented form of the package-review
+architecture accepted by the maintainer and independently red-teamed
+against Home Assistant Core `2026.9.1`; see [STATUS.md](STATUS.md) for
+current implementation state. It builds on the package-scan architecture
+above and does not replace any part of it.
 
 ### State ownership and lifetime
 

@@ -1,0 +1,21 @@
+# Describes the format for available Hubinet-Ops services.
+#
+# Both package-review actions target only the pending-package-updates
+# sensor for one LXC; every other Hubinet-Ops sensor does not support
+# them and is excluded natively via required entity features.
+
+get_package_plan:
+  target:
+    entity:
+      domain: sensor
+
+confirm_package_review:
+  target:
+    entity:
+      domain: sensor
+  fields:
+    token:
+      required: true
+      example: "AbCdEf0123456789-_AbCdEf0123456789"
+      selector:
+        text:

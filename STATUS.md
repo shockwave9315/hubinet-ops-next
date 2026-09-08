@@ -8,8 +8,8 @@ Status date: 2026-09-08
   `fc034572d0216a04ed40a07154394908a594dfed`.
 - Baseline tag: `baseline-ha-2026.9.1`.
 - Merged runtime: a domain-isolated custom-integration fork of Home Assistant
-  Core `proxmoxve`, plus the small package-scan subsystem documented in
-  [ARCHITECTURE.md](ARCHITECTURE.md).
+  Core `proxmoxve`, plus the package-scan and package-review subsystems
+  documented in [ARCHITECTURE.md](ARCHITECTURE.md).
 
 ## Merged
 
@@ -20,6 +20,11 @@ Status date: 2026-09-08
 - Manual LXC pending-package scan with no package install/remove/upgrade,
   using AsyncSSH transport, a root-owned forced-command helper, ephemeral
   state, bounded summary entities, and package-specific concurrency.
+- Package review: ephemeral scan-token confirmation on the existing
+  `PackageScanRecord`, exposed as the two response-only sensor-platform
+  actions `hubinet_ops.get_package_plan` and
+  `hubinet_ops.confirm_package_review`, restricted to the package sensor
+  via a native supported-feature bit.
 
 ## Package scan
 
@@ -33,11 +38,11 @@ Status date: 2026-09-08
 
 - Package-review architecture: **ACCEPTED BY MAINTAINER** and documented in
   [ARCHITECTURE.md](ARCHITECTURE.md).
-- Package-review implementation: **NOT STARTED**.
+- Package-review implementation: **IMPLEMENTED**.
 
 ## Next
 
-Implement package review against the accepted architecture.
+Design package update against the accepted review handoff.
 
 ## Explicitly not started
 
