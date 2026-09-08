@@ -374,9 +374,13 @@ def parse_apt_simulation(  # noqa: C901
                 installed_version=installed_version,
                 candidate_version=candidate_version,
                 origin=origin,
+                # Positive security-origin evidence is reliable; an origin
+                # that merely lacks a "-security" marker is not reliable
+                # non-security evidence, so it stays unknown rather than
+                # False. See ARCHITECTURE.md's security tri-state rules.
                 security=(
-                    bool(_SECURITY_ORIGIN_RE.search(origin))
-                    if origin is not None
+                    True
+                    if origin is not None and _SECURITY_ORIGIN_RE.search(origin)
                     else None
                 ),
             )

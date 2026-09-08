@@ -2,7 +2,7 @@
 """Root-owned forced-command PVE boundary for package scans only."""
 
 from collections.abc import Callable, Iterator, Mapping
-from contextlib import AbstractContextManager, contextmanager
+from contextlib import AbstractContextManager, contextmanager, suppress
 from dataclasses import dataclass
 import fcntl
 import json
@@ -10,6 +10,7 @@ import os
 import re
 import selectors
 import shlex
+import signal
 import stat
 import subprocess
 import sys
@@ -25,12 +26,14 @@ MAX_COMMAND_OUTPUT_BYTES = 16 * 1024 * 1024
 OPERATION_TIMEOUT_SECONDS = 240.0
 COMMAND_TIMEOUT_SECONDS = 120.0
 LOCK_DIRECTORY = "/run/lock"
+PVE_LOCAL_NODE_LINK = "/etc/pve/local"
+PVE_LOCAL_NODE_PREFIX = "/etc/pve/nodes/"
 
 NODE_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9.-]{0,62}")
-APT_VERSION_RE = re.compile(
-    r"apt ([0-9]+)\.([0-9]+)\.([0-9]+)"
-    r"(?:[~+.-][A-Za-z0-9.+:~-]*)? \([A-Za-z0-9_-]+\)"
-)
+# Only the numeric upstream feature version is gated; distribution revision
+# suffixes such as "build2" or "ubuntu1" are not part of the feature check
+# and are intentionally not validated here.
+APT_VERSION_RE = re.compile(r"^apt (\d+)\.(\d+)\.(\d+)")
 MINIMUM_APT_VERSION = (2, 1, 16)
 BUSY_PATTERNS = (
     "could not get lock",
@@ -51,9 +54,11 @@ class CommandResult:
     output_exceeded: bool = False
 
 
-type Runner = Callable[[tuple[str, ...], float, int], CommandResult]
-type Clock = Callable[[], float]
-type LockFactory = Callable[[int], AbstractContextManager[None]]
+# Conventional type aliases: PEP 695 `type` statements require Python 3.12,
+# and the helper must at least parse and run on Python 3.11.
+Runner = Callable[[tuple[str, ...], float, int], CommandResult]
+Clock = Callable[[], float]
+LockFactory = Callable[[int], AbstractContextManager[None]]
 
 
 class RequestError(ValueError):
@@ -88,13 +93,22 @@ class OperationDeadline:
 def _run_bounded(
     argv: tuple[str, ...], timeout: float, max_output: int
 ) -> CommandResult:
-    """Run one fixed argv with bounded time and combined output."""
+    """Run one fixed argv with bounded time and combined output.
+
+    ``start_new_session=True`` puts the direct child in its own process
+    group so a stray descendant can be killed alongside it. The direct
+    child exiting ends the wait for output even if a descendant still
+    holds the inherited stdout/stderr pipe open; that descendant is not
+    guaranteed to be reaped, matching this helper's threat model (perfect
+    cancellation of guest-side processes is not required).
+    """
     process = subprocess.Popen(
         argv,
         stdin=subprocess.DEVNULL,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         close_fds=True,
+        start_new_session=True,
     )
     assert process.stdout is not None
     assert process.stderr is not None
@@ -103,13 +117,22 @@ def _run_bounded(
     selector.register(process.stderr, selectors.EVENT_READ, "stderr")
     output = {"stdout": bytearray(), "stderr": bytearray()}
     started = time.monotonic()
-    timed_out = output_exceeded = False
+    timed_out = output_exceeded = cleanup_failed = False
     try:
         while selector.get_map():
             remaining = timeout - (time.monotonic() - started)
             if remaining <= 0:
                 timed_out = True
-                process.kill()
+                break
+            if process.poll() is not None:
+                # The direct child already exited. Drain whatever output is
+                # already buffered without blocking further; a descendant
+                # that inherited the pipe must not make a successful exit
+                # look like a timeout.
+                for key, _ in selector.select(timeout=0):
+                    chunk = os.read(key.fileobj.fileno(), 65536)
+                    if chunk:
+                        output[key.data].extend(chunk)
                 break
             for key, _ in selector.select(min(remaining, 0.2)):
                 chunk = os.read(key.fileobj.fileno(), 65536)
@@ -119,18 +142,28 @@ def _run_bounded(
                 output[key.data].extend(chunk)
                 if len(output["stdout"]) + len(output["stderr"]) > max_output:
                     output_exceeded = True
-                    process.kill()
                     break
             if output_exceeded:
                 break
     finally:
         selector.close()
-        process.wait(timeout=5)
+        if timed_out or output_exceeded:
+            with suppress(ProcessLookupError):
+                os.killpg(process.pid, signal.SIGKILL)
+            with suppress(ProcessLookupError):
+                process.kill()
+        try:
+            process.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            # Cleanup itself must never raise past this function: a stuck
+            # or unreapable child becomes a structured timeout instead of
+            # an uncaught traceback that would bypass the JSON protocol.
+            cleanup_failed = True
     return CommandResult(
-        process.returncode,
+        process.returncode if process.returncode is not None else -1,
         bytes(output["stdout"][: max_output + 1]),
         bytes(output["stderr"][: max_output + 1]),
-        timed_out,
+        timed_out or cleanup_failed,
         output_exceeded,
     )
 
@@ -169,7 +202,10 @@ def validate_request(payload: Any) -> tuple[str, int]:
         "target",
     }:
         raise RequestError("request must have the exact package-scan shape")
-    if payload["protocol_version"] != PROTOCOL_VERSION:
+    if (
+        type(payload["protocol_version"]) is not int
+        or payload["protocol_version"] != PROTOCOL_VERSION
+    ):
         raise RequestError("unsupported package-scan protocol version")
     if payload["operation"] != OPERATION:
         raise RequestError("unknown host-control operation")
@@ -236,15 +272,31 @@ def _decode(result: CommandResult) -> tuple[str, str]:
 def _validate_local_node(
     expected_node: str, runner: Runner, deadline: OperationDeadline
 ) -> None:
-    """Verify the expected PVE node against the local host identity."""
-    result = _command(runner, deadline, ("hostname",), max_output=4096)
+    """Verify the expected PVE node against PVE-native local identity.
+
+    Raw ``hostname`` may be an FQDN while PVE node identity is short, so the
+    local node is instead resolved from ``/etc/pve/local``, a PVE-managed
+    symlink to ``/etc/pve/nodes/<local node name>``.
+    """
+    result = _command(
+        runner, deadline, ("readlink", "-f", PVE_LOCAL_NODE_LINK), max_output=4096
+    )
     stdout, _ = _decode(result)
     lines = [line.strip() for line in stdout.splitlines() if line.strip()]
-    if result.returncode != 0 or len(lines) != 1:
+    if (
+        result.returncode != 0
+        or len(lines) != 1
+        or not lines[0].startswith(PVE_LOCAL_NODE_PREFIX)
+    ):
         raise ScanError(
             "execution_failed", "could not establish local PVE node identity"
         )
-    if lines[0] != expected_node:
+    local_node = lines[0][len(PVE_LOCAL_NODE_PREFIX) :]
+    if not NODE_RE.fullmatch(local_node):
+        raise ScanError(
+            "execution_failed", "local PVE node identity has an unexpected shape"
+        )
+    if local_node != expected_node:
         raise ScanError(
             "identity_mismatch", "local PVE node does not match the expected node"
         )
@@ -298,9 +350,14 @@ def _parse_os_release(text: str) -> tuple[str, str]:
 
 
 def _parse_apt_version(text: str) -> tuple[int, int, int]:
-    """Parse the feature-gated APT version line."""
+    """Parse the numeric feature-gated prefix of the APT version line.
+
+    Only the numeric upstream ``major.minor.patch`` is gated; the full
+    Debian/Ubuntu revision syntax (distro suffixes, architecture) is
+    intentionally not validated here.
+    """
     lines = text.splitlines()
-    if not lines or not (match := APT_VERSION_RE.fullmatch(lines[0])):
+    if not lines or not (match := APT_VERSION_RE.match(lines[0])):
         raise ScanError("execution_failed", "guest APT version output was malformed")
     return tuple(int(value) for value in match.groups())
 
@@ -420,9 +477,10 @@ def _scan(
         ("test", "-e", "/var/run/reboot-required"),
         max_output=4096,
     )
-    reboot_required = (
-        True if reboot.returncode == 0 else False if reboot.returncode == 1 else None
-    )
+    # Only the marker's presence is reliable evidence. Its absence (rc 1)
+    # and any other outcome are both merely unknown, not a reliable
+    # negative: no reboot-required marker package inference is made here.
+    reboot_required = True if reboot.returncode == 0 else None
     return {
         "os_release": os_release,
         "native_architecture": native_architecture,

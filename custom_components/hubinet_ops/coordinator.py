@@ -146,6 +146,10 @@ class ProxmoxCoordinator(DataUpdateCoordinator[dict[str, ProxmoxNodeData]]):
     @override
     async def _async_setup(self) -> None:
         """Set up the coordinator."""
+        # Package SSH trust material is evaluated once per config-entry
+        # setup, off the event loop; reload remains the boundary for
+        # picking up trust files added or changed afterward.
+        await self.package_manager.async_prepare()
         try:
             await self.hass.async_add_executor_job(self._init_proxmox)
         except AuthenticationError as err:
@@ -342,6 +346,10 @@ class ProxmoxCoordinator(DataUpdateCoordinator[dict[str, ProxmoxNodeData]]):
             for node_name, node_data in data.items()
             for vmid in node_data.containers
         }
+        # A VMID no longer present upstream (deleted, or possibly reused by
+        # an unrelated new container) must not keep presenting a stale
+        # package-scan result as current evidence.
+        self.package_manager.async_prune(current_containers)
         self.known_containers &= current_containers
         new_containers = current_containers - self.known_containers
         if new_containers:

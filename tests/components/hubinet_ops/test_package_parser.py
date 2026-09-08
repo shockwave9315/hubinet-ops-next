@@ -45,14 +45,20 @@ def test_unsupported_guest_os_fails_closed() -> None:
 
 
 def test_exact_rows_security_tri_state_and_not_upgraded_count() -> None:
-    """Exact rows stay separate from kept-back and tri-state origin evidence."""
+    """Exact rows stay separate from kept-back and tri-state origin evidence.
+
+    "apt" has a real, non-security origin (Debian:12/oldstable); lacking a
+    "-security" marker is not reliable non-security evidence, so it stays
+    unknown (None) rather than False. Only "openssl"'s Debian-Security
+    origin is reliable positive evidence.
+    """
     parsed = parse_apt_simulation(
         TWO_UPDATES,
         native_architecture="amd64",
         installed_inventory=TWO_INVENTORY,
     )
     assert [(package.name, package.security) for package in parsed.packages] == [
-        ("apt", False),
+        ("apt", None),
         ("openssl", True),
     ]
     assert parsed.not_upgraded_count == 41
@@ -65,6 +71,42 @@ def test_exact_rows_security_tri_state_and_not_upgraded_count() -> None:
     )
     assert unknown.packages[0].origin is None
     assert unknown.packages[0].security is None
+
+
+@pytest.mark.parametrize(
+    ("origin_field", "expected_security"),
+    [
+        ("Debian-Security:12/oldstable-security", True),
+        ("Ubuntu:24.04/noble-security", True),
+        ("Debian:12/stable", None),
+        ("Ubuntu:24.04/noble-updates", None),
+        ("Docker:1.0/docker", None),
+        ("Proxmox:8/pve-no-subscription", None),
+        ("ppa.launchpadcontent.net/user/ppa/ubuntu:24.04/noble", None),
+        ("SomeUnknownVendor", None),
+        (None, None),
+    ],
+)
+def test_security_tri_state_only_positive_marker_evidence_is_true(
+    origin_field: str | None, expected_security: bool | None
+) -> None:
+    """Only a reliable "-security" origin marker yields True.
+
+    An origin that merely lacks that marker (a normal release, a third-party
+    vendor, a PPA, or no origin at all) stays unknown, never False, per
+    ARCHITECTURE.md's security tri-state rules.
+    """
+    relstr = f"{origin_field} [amd64]" if origin_field is not None else "[amd64]"
+    simulation = (
+        f"Inst example [1.0] (2.0 {relstr})\n"
+        "1 upgraded, 0 newly installed, 0 to remove and 0 not upgraded.\n"
+    )
+    parsed = parse_apt_simulation(
+        simulation,
+        native_architecture="amd64",
+        installed_inventory="example\tamd64\t1.0\tinstalled\n",
+    )
+    assert parsed.packages[0].security is expected_security
 
 
 def test_zero_updates_is_an_exact_empty_plan() -> None:

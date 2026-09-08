@@ -17,9 +17,9 @@ Status date: 2026-09-08
 - Reproducible local development and Home Assistant test environment.
 - Project-memory foundation defining product, architecture, status,
   provenance, development, and agent responsibilities.
-- Manual, read-only LXC pending-package scan with AsyncSSH transport, a
-  root-owned forced-command helper, ephemeral state, bounded summary entities,
-  and package-specific concurrency.
+- Manual LXC pending-package scan with no package install/remove/upgrade,
+  using AsyncSSH transport, a root-owned forced-command helper, ephemeral
+  state, bounded summary entities, and package-specific concurrency.
 
 ## Package scan
 

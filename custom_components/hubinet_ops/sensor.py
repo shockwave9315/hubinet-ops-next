@@ -470,7 +470,6 @@ PACKAGE_SCAN_SENSOR = SensorEntityDescription(
     key="pending_packages",
     translation_key="pending_packages",
     entity_category=EntityCategory.DIAGNOSTIC,
-    icon="mdi:package-down",
 )
 
 

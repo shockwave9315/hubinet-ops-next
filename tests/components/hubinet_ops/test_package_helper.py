@@ -66,8 +66,10 @@ class FakeHelperRunner:
         """Return evidence for one recognized argv shape."""
         self.calls.append((argv, timeout, max_output))
         rendered = " ".join(argv)
-        if argv == ("hostname",):
-            return helper.CommandResult(0, f"{self.local_node}\n".encode(), b"")
+        if argv == ("readlink", "-f", "/etc/pve/local"):
+            return helper.CommandResult(
+                0, f"/etc/pve/nodes/{self.local_node}\n".encode(), b""
+            )
         if argv[:2] == ("pct", "config"):
             return helper.CommandResult(self.config_returncode, b"arch: amd64\n", b"")
         if argv[:2] == ("pct", "status"):
@@ -118,7 +120,7 @@ def test_helper_uses_fixed_commands_and_returns_versioned_identity() -> None:
 
     commands = [call[0] for call in runner.calls]
     assert commands[:3] == [
-        ("hostname",),
+        ("readlink", "-f", "/etc/pve/local"),
         ("pct", "config", "200"),
         ("pct", "status", "200"),
     ]
@@ -213,11 +215,17 @@ def test_helper_commands_share_one_global_deadline() -> None:
     assert timeouts == [120.0, 120.0, 40.0]
 
 
-@pytest.mark.parametrize(("returncode", "expected"), [(0, True), (1, False), (2, None)])
+@pytest.mark.parametrize(("returncode", "expected"), [(0, True), (1, None), (2, None)])
 def test_helper_preserves_reboot_tri_state(
     returncode: int, expected: bool | None
 ) -> None:
-    """Only definitive marker evidence becomes true or false."""
+    """Only the marker's presence is reliable evidence; everything else is unknown.
+
+    rc 0 (marker exists) is the only reliable positive. rc 1 (marker
+    absent) is not reliable negative evidence, and any other outcome is
+    also unknown -- there is currently no reliable negative reboot
+    evidence, per ARCHITECTURE.md's tri-state rules.
+    """
     response = _handle(FakeHelperRunner(reboot_returncode=returncode))
     assert response["evidence"]["reboot_required"] is expected
 
@@ -247,3 +255,116 @@ def test_helper_rejects_arbitrary_operations_nodes_and_vmids() -> None:
         helper.validate_request(_request(vmid=True))
     with pytest.raises(helper.RequestError):
         helper.validate_request(_request(node="../pve1"))
+    with pytest.raises(helper.RequestError):
+        helper.validate_request({**_request(), "protocol_version": True})
+
+
+def test_local_node_identity_uses_pve_native_source_not_raw_hostname() -> None:
+    """N7: identity comes from /etc/pve/local, never raw (possibly FQDN) hostname.
+
+    Expected "pve1" must pass regardless of what the system's hostname
+    happens to be (short or FQDN), because /etc/pve/local resolves to the
+    PVE-native short node name directly.
+    """
+    runner = FakeHelperRunner(local_node="pve1")
+    response = _handle(runner)
+    assert response["ok"] is True
+    assert not any(call[0] == ("hostname",) for call in runner.calls)
+    assert runner.calls[0][0] == ("readlink", "-f", "/etc/pve/local")
+
+
+@pytest.mark.parametrize(
+    "apt_version_line",
+    [
+        "apt 2.6.1 (amd64)",
+        "apt 3.0.3 (amd64)",
+        "apt 2.6.1+deb12u1 (amd64)",
+        "apt 2.7.14build2 (amd64)",
+        "apt 2.4.5ubuntu1 (amd64)",
+    ],
+)
+def test_apt_version_accepts_real_ubuntu_and_debian_revision_suffixes(
+    apt_version_line: str,
+) -> None:
+    """N1: real Ubuntu/Debian distro revision suffixes are not rejected.
+
+    Only the numeric major.minor.patch prefix is gated; parsing must not
+    fail merely because a distro revision suffix like "build2" or
+    "ubuntu1" is attached directly, without a "~+.-" separator.
+    """
+    major, minor, patch = helper._parse_apt_version(f"{apt_version_line}\n")  # noqa: SLF001
+    assert major >= 2
+
+
+@pytest.mark.parametrize(
+    "apt_version_line",
+    ["apt 2.0.9 (amd64)", "apt 1.8.2.3 (amd64)"],
+)
+def test_apt_version_below_minimum_is_rejected_by_the_feature_gate(
+    apt_version_line: str,
+) -> None:
+    """Below-minimum numeric versions still fail the feature gate."""
+    parsed = helper._parse_apt_version(f"{apt_version_line}\n")  # noqa: SLF001
+    assert parsed < helper.MINIMUM_APT_VERSION
+
+
+def test_apt_version_malformed_output_is_still_rejected() -> None:
+    """The relaxed prefix match does not accept non-APT-version output."""
+    with pytest.raises(helper.ScanError):
+        helper._parse_apt_version("Reading package lists...\n")  # noqa: SLF001
+
+
+def test_run_bounded_direct_child_exit_is_not_a_false_timeout() -> None:
+    """N6: a descendant holding the inherited pipe must not fake a timeout.
+
+    The direct child exits almost immediately; a background subshell it
+    spawns keeps the inherited stdout pipe open for longer. `_run_bounded`
+    must return promptly, classifying this as a normal successful exit.
+    """
+    result = helper._run_bounded(  # noqa: SLF001
+        ("bash", "-c", "echo done; ( sleep 2 & ) ; exit 0"),
+        2.0,
+        4096,
+    )
+    assert result.timed_out is False
+    assert result.returncode == 0
+    assert result.stdout.strip() == b"done"
+
+
+def test_run_bounded_real_timeout_is_classified_and_kills_the_process() -> None:
+    """A genuinely hanging command is bounded and reported as a timeout."""
+    result = helper._run_bounded(("sleep", "5"), 0.2, 4096)  # noqa: SLF001
+    assert result.timed_out is True
+
+
+def test_run_bounded_cleanup_timeout_expired_becomes_structured_failure() -> None:
+    """N6: cleanup's own TimeoutExpired never escapes as an uncaught traceback.
+
+    It must instead be folded into a structured timeout result so the
+    protocol layer above still returns bounded JSON -- even though the
+    direct child itself exited cleanly and produced its output.
+    """
+    with patch.object(
+        helper.subprocess.Popen,
+        "wait",
+        side_effect=helper.subprocess.TimeoutExpired(cmd="x", timeout=5),
+    ):
+        result = helper._run_bounded(  # noqa: SLF001
+            ("bash", "-c", "echo done; ( sleep 2 & ) ; exit 0"), 2.0, 4096
+        )
+    assert result.timed_out is True
+    assert result.returncode == 0
+    assert result.stdout.strip() == b"done"
+
+
+def test_helper_source_is_python_3_11_compatible() -> None:
+    """N9: the helper must at least parse without requiring Python 3.12+.
+
+    A Python 3.11 interpreter was not available in this environment; PEP
+    695 `type` statements (3.12+) were replaced with conventional
+    assignment aliases, reviewed by inspection for any other 3.12+-only
+    syntax elsewhere in the file.
+    """
+    import py_compile
+
+    py_compile.compile(str(HELPER_PATH), doraise=True)

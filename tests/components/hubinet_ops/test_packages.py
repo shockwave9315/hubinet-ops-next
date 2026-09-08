@@ -19,6 +19,7 @@ from custom_components.hubinet_ops.packages.manager import PackageManager
 from custom_components.hubinet_ops.packages.models import (
     PackageScanError,
     PackageScanFailure,
+    PackageScanRecord,
     PackageScanResult,
     PackageScanStatus,
     PendingPackage,
@@ -248,6 +249,107 @@ async def test_package_entities_are_absent_without_transport_material(
             path.unlink(missing_ok=True)
             with suppress(OSError):
                 path.parent.rmdir()
+
+
+async def test_trust_files_added_without_reload_do_not_enable_entities(
+    hass: HomeAssistant,
+    mock_proxmox_client: MagicMock,
+    mock_config_entry: MockConfigEntry,
+) -> None:
+    """H2/N5: reload, not a live refresh, is the trust-material boundary.
+
+    Trust material is evaluated once per config-entry setup. Creating both
+    files afterward, without a reload, must not retroactively enable
+    package entities -- even after a normal coordinator data refresh.
+    Reloading (a fresh coordinator, and a fresh async_prepare) does.
+    """
+    await setup_integration(hass, mock_config_entry)
+    assert hass.states.get("button.ct_nginx_scan_pending_packages") is None
+    assert hass.states.get("sensor.ct_nginx_pending_package_updates") is None
+
+    private_key = Path(hass.config.path(PACKAGE_SCAN_PRIVATE_KEY))
+    known_hosts = Path(hass.config.path(PACKAGE_SCAN_KNOWN_HOSTS))
+    private_key.parent.mkdir(parents=True, exist_ok=True)
+    private_key.write_text("test private key")
+    known_hosts.write_text("test host key")
+    try:
+        coordinator = mock_config_entry.runtime_data
+        await coordinator.async_refresh()
+        await hass.async_block_till_done()
+        assert hass.states.get("button.ct_nginx_scan_pending_packages") is None
+        assert hass.states.get("sensor.ct_nginx_pending_package_updates") is None
+
+        assert await hass.config_entries.async_reload(mock_config_entry.entry_id)
+        await hass.async_block_till_done()
+        assert hass.states.get("button.ct_nginx_scan_pending_packages") is not None
+        assert (
+            hass.states.get("sensor.ct_nginx_pending_package_updates") is not None
+        )
+    finally:
+        private_key.unlink(missing_ok=True)
+        known_hosts.unlink(missing_ok=True)
+        with suppress(OSError):
+            private_key.parent.rmdir()
+
+
+async def test_prune_discards_records_for_vmids_no_longer_present(
+    hass: HomeAssistant,
+    mock_config_entry: MockConfigEntry,
+) -> None:
+    """N4: a pruned VMID's scan record is gone, not stale evidence.
+
+    CT200 scan succeeds; CT200 then disappears upstream (deleted). The
+    record must not keep presenting the old count as current evidence.
+    """
+    transport = GateTransport()
+    manager = _manager(hass, mock_config_entry, transport)
+    task = manager.async_start_scan("pve1", 200, target_is_running=True)
+    transport.release(200)
+    await task
+    assert manager.record("pve1", 200).status is PackageScanStatus.SUCCESS
+
+    manager.async_prune(current_targets=set())
+    assert manager.record("pve1", 200) == PackageScanRecord()
+
+
+async def test_prune_scopes_to_exactly_the_missing_targets(
+    hass: HomeAssistant,
+    mock_config_entry: MockConfigEntry,
+) -> None:
+    """Pruning does not disturb records for targets still present."""
+    transport = GateTransport()
+    manager = _manager(hass, mock_config_entry, transport)
+    task = manager.async_start_scan("pve1", 200, target_is_running=True)
+    transport.release(200)
+    await task
+
+    manager.async_prune(current_targets={("pve1", 200)})
+    assert manager.record("pve1", 200).status is PackageScanStatus.SUCCESS
+
+
+async def test_prune_prevents_a_stale_in_flight_scan_from_resurrecting_a_record(
+    hass: HomeAssistant,
+    mock_config_entry: MockConfigEntry,
+) -> None:
+    """N4: an old in-flight scan cannot recreate a pruned/reused record.
+
+    CT200 is deleted (and its record pruned) while a scan for it is still
+    in flight. That attempt completing afterward -- successfully or not --
+    must not resurrect a record for the pruned target, even if a new,
+    unrelated CT200 has since been scanned again.
+    """
+    transport = GateTransport()
+    manager = _manager(hass, mock_config_entry, transport)
+    task = manager.async_start_scan("pve1", 200, target_is_running=True)
+    await asyncio.wait_for(transport.entered(200).wait(), 1)
+
+    manager.async_prune(current_targets=set())
+    assert manager.record("pve1", 200) == PackageScanRecord()
+
+    transport.release(200)
+    with suppress(asyncio.CancelledError):
+        await task
+    assert manager.record("pve1", 200) == PackageScanRecord()
 
 
 async def test_running_success_then_failure_drives_sensor_unknown_semantics(

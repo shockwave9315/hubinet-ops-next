@@ -1,7 +1,7 @@
 """Package-scan orchestration, concurrency, and ephemeral state."""
 
 import asyncio
-from collections.abc import Callable
+from collections.abc import Callable, Collection
 from datetime import UTC, datetime
 import logging
 from typing import Any, Protocol
@@ -29,6 +29,9 @@ class PackageTransport(Protocol):
     @property
     def configured(self) -> bool:
         """Return whether required local transport material is present."""
+
+    async def async_prepare(self, hass: HomeAssistant) -> None:
+        """Evaluate and cache local transport prerequisites once, off the loop."""
 
     async def async_scan(self, expected_node: str, vmid: int) -> PackageScanResult:
         """Return fresh scan evidence for one target."""
@@ -58,6 +61,7 @@ class PackageManager:
         self._on_state_change = on_state_change
         self._now = now
         self._records: dict[tuple[str, int], PackageScanRecord] = {}
+        self._tasks: dict[tuple[str, int], asyncio.Task[None]] = {}
         self._scan_slots = asyncio.Semaphore(_MAX_GLOBAL_SCANS)
 
     @property
@@ -65,9 +69,33 @@ class PackageManager:
         """Return whether package entities can perform their transport."""
         return self._transport.configured
 
+    async def async_prepare(self) -> None:
+        """Load package SSH trust material once for this config-entry setup."""
+        await self._transport.async_prepare(self._hass)
+
     def record(self, node: str, vmid: int) -> PackageScanRecord:
         """Return current ephemeral scan state for one upstream identity."""
         return self._records.get((node, vmid), PackageScanRecord())
+
+    @callback
+    def async_prune(self, current_targets: Collection[tuple[str, int]]) -> None:
+        """Discard scan state for VMIDs no longer present upstream.
+
+        Deleting the record alone would not stop a stale in-flight scan for
+        a removed VMID from completing later and recreating the pruned
+        result; :meth:`_async_run_scan` only ever writes back to the record
+        object it started with, so an attempt for a pruned (or since
+        reused) target can never resurrect stale evidence.
+        """
+        stale = [key for key in self._records if key not in current_targets]
+        if not stale:
+            return
+        for key in stale:
+            del self._records[key]
+            task = self._tasks.pop(key, None)
+            if task is not None and not task.done():
+                task.cancel()
+        self._on_state_change()
 
     @callback
     def async_start_scan(
@@ -94,22 +122,25 @@ class PackageManager:
             )
 
         attempted_at = self._now()
-        self._set_record(
-            node,
-            vmid,
-            PackageScanRecord(
-                status=PackageScanStatus.RUNNING,
-                last_attempt=attempted_at,
-            ),
+        own_record = PackageScanRecord(
+            status=PackageScanStatus.RUNNING,
+            last_attempt=attempted_at,
         )
-        return self._config_entry.async_create_background_task(
+        self._set_record(node, vmid, own_record)
+        task = self._config_entry.async_create_background_task(
             self._hass,
-            self._async_run_scan(node, vmid, attempted_at),
+            self._async_run_scan(node, vmid, attempted_at, own_record),
             f"package scan {node}/{vmid}",
         )
+        self._tasks[(node, vmid)] = task
+        return task
 
     async def _async_run_scan(
-        self, node: str, vmid: int, attempted_at: datetime
+        self,
+        node: str,
+        vmid: int,
+        attempted_at: datetime,
+        own_record: PackageScanRecord,
     ) -> None:
         """Run one bounded scan and capture every outcome into scan state."""
         try:
@@ -123,38 +154,47 @@ class PackageManager:
                 err.failure,
                 err,
             )
-            self._set_record(
-                node,
-                vmid,
-                PackageScanRecord(
-                    status=PackageScanStatus.FAILED,
-                    last_attempt=attempted_at,
-                    failure=err.failure,
-                    error_message=str(err)[:_MAX_ERROR_MESSAGE_LENGTH],
-                ),
+            outcome = PackageScanRecord(
+                status=PackageScanStatus.FAILED,
+                last_attempt=attempted_at,
+                failure=err.failure,
+                error_message=str(err)[:_MAX_ERROR_MESSAGE_LENGTH],
             )
         except Exception:
             _LOGGER.exception("Unexpected package scan failure for %s/%s", node, vmid)
-            self._set_record(
-                node,
-                vmid,
-                PackageScanRecord(
-                    status=PackageScanStatus.FAILED,
-                    last_attempt=attempted_at,
-                    failure=PackageScanFailure.EXECUTION_FAILED,
-                    error_message="unexpected package scan failure",
-                ),
+            outcome = PackageScanRecord(
+                status=PackageScanStatus.FAILED,
+                last_attempt=attempted_at,
+                failure=PackageScanFailure.EXECUTION_FAILED,
+                error_message="unexpected package scan failure",
             )
         else:
-            self._set_record(
-                node,
-                vmid,
-                PackageScanRecord(
-                    status=PackageScanStatus.SUCCESS,
-                    last_attempt=attempted_at,
-                    result=result,
-                ),
+            outcome = PackageScanRecord(
+                status=PackageScanStatus.SUCCESS,
+                last_attempt=attempted_at,
+                result=result,
             )
+        self._finish_scan(node, vmid, own_record, outcome)
+
+    @callback
+    def _finish_scan(
+        self,
+        node: str,
+        vmid: int,
+        own_record: PackageScanRecord,
+        outcome: PackageScanRecord,
+    ) -> None:
+        """Write this attempt's outcome only if it is still the current one.
+
+        A target pruned by :meth:`async_prune` (VMID deleted, or reused by
+        a different container) replaces or removes the record this attempt
+        started with; an identity check against the exact record object
+        prevents a stale in-flight completion from resurrecting it.
+        """
+        if self._records.get((node, vmid)) is not own_record:
+            return
+        self._tasks.pop((node, vmid), None)
+        self._set_record(node, vmid, outcome)
 
     @callback
     def _set_record(self, node: str, vmid: int, record: PackageScanRecord) -> None:

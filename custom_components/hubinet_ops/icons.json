@@ -110,6 +110,9 @@
       "node_status": {
         "default": "mdi:server"
       },
+      "pending_packages": {
+        "default": "mdi:package-down"
+      },
       "storage_available": {
         "default": "mdi:harddisk"
       },
