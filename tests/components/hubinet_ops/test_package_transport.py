@@ -1,5 +1,6 @@
 """Tests for the native AsyncSSH package transport."""
 
+import asyncio
 from contextlib import asynccontextmanager
 import inspect
 import json
@@ -71,6 +72,28 @@ class FakeReader:
         return chunk
 
 
+class BlockingReader:
+    """A stream double that never completes a read on its own.
+
+    Used to prove that terminating on one stream's oversize bound does not
+    wait for its peer to ever reach EOF -- the peer's still-pending read
+    must be cancelled promptly instead of left to hang.
+    """
+
+    def __init__(self) -> None:
+        """Initialize with no read ever having completed or been cancelled."""
+        self.cancelled = False
+
+    async def read(self, size: int = -1) -> bytes:
+        """Block until cancelled, like data that will never arrive."""
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            self.cancelled = True
+            raise
+        return b""  # pragma: no cover - unreachable, event is never set
+
+
 class FakeProcess:
     """AsyncSSH process double returning one structured response."""
 
@@ -81,13 +104,15 @@ class FakeProcess:
         returncode: int = 0,
         stderr: bytes = b"",
         stdout_chunk_size: int | None = None,
+        stdout_reader: object | None = None,
+        stderr_reader: object | None = None,
     ) -> None:
         """Initialize encoded output, separate stderr, and an exit status."""
         self.returncode = returncode
-        self.stdout = FakeReader(
+        self.stdout = stdout_reader or FakeReader(
             json.dumps(payload).encode(), chunk_size=stdout_chunk_size
         )
-        self.stderr = FakeReader(stderr)
+        self.stderr = stderr_reader or FakeReader(stderr)
         self.killed = False
 
     async def wait(self, check: bool = False):
@@ -479,6 +504,62 @@ async def test_transport_rejects_oversized_combined_output(
         await transport.async_scan("pve1", 200)
     assert caught.value.failure is PackageScanFailure.EXECUTION_FAILED
     assert connection.process.killed is True
+
+
+async def test_oversized_stdout_terminates_promptly_even_if_stderr_never_ends(
+    hass: HomeAssistant, tmp_path: Path
+) -> None:
+    """Oversize stdout must not wait on a stderr stream that never reaches EOF.
+
+    stdout and stderr share the same SSH channel receive window; once
+    stdout is abandoned after exceeding its bound, a still-active stderr
+    reader can stall on window-blocked data that will never arrive. This
+    must be caught by killing the process as soon as EITHER bound is
+    exceeded, not by waiting for the 300-second outer transport timeout.
+    """
+    stderr_reader = BlockingReader()
+    transport, _connector, connection, *_ = await _transport(
+        hass, tmp_path, _response(), stderr_reader=stderr_reader
+    )
+    with (
+        patch(
+            "custom_components.hubinet_ops.packages.transport._MAX_RESPONSE_BYTES", 4
+        ),
+        pytest.raises(PackageScanError) as caught,
+    ):
+        await asyncio.wait_for(transport.async_scan("pve1", 200), timeout=5)
+    assert caught.value.failure is PackageScanFailure.EXECUTION_FAILED
+    assert connection.process.killed is True
+    assert stderr_reader.cancelled is True
+
+
+async def test_oversized_stderr_terminates_promptly_even_if_stdout_never_ends(
+    hass: HomeAssistant, tmp_path: Path
+) -> None:
+    """Oversize stderr must not wait on a stdout stream that never reaches EOF.
+
+    Symmetric to the stdout case: an oversize diagnostic stream must not be
+    able to stall bounded termination behind a stdout peer that never
+    completes.
+    """
+    stdout_reader = BlockingReader()
+    transport, _connector, connection, *_ = await _transport(
+        hass,
+        tmp_path,
+        _response(),
+        stdout_reader=stdout_reader,
+        stderr=b"x" * 100,
+    )
+    with (
+        patch(
+            "custom_components.hubinet_ops.packages.transport._MAX_STDERR_BYTES", 4
+        ),
+        pytest.raises(PackageScanError) as caught,
+    ):
+        await asyncio.wait_for(transport.async_scan("pve1", 200), timeout=5)
+    assert caught.value.failure is PackageScanFailure.EXECUTION_FAILED
+    assert connection.process.killed is True
+    assert stdout_reader.cancelled is True
 
 
 async def test_stderr_diagnostics_never_corrupt_the_json_response(

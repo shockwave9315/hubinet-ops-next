@@ -190,26 +190,7 @@ class AsyncSSHPackageTransport:
                         encoding=None,
                         request_pty=False,
                     )
-                    # Drain stdout and stderr concurrently: a bounded amount
-                    # of guest/APT diagnostics on stderr must never be able
-                    # to stall the JSON response on stdout, or vice versa.
-                    (stdout, stdout_oversize), (stderr, _stderr_oversize) = (
-                        await asyncio.gather(
-                            _read_until_eof(
-                                process.stdout, max_bytes=_MAX_RESPONSE_BYTES
-                            ),
-                            _read_until_eof(
-                                process.stderr, max_bytes=_MAX_STDERR_BYTES
-                            ),
-                        )
-                    )
-                    if stdout_oversize:
-                        process.kill()
-                        await process.wait_closed()
-                        raise PackageScanError(
-                            PackageScanFailure.EXECUTION_FAILED,
-                            "package scan helper output exceeded its bound",
-                        )
+                    stdout, stderr = await _drain_process_output(process)
                     completed = await process.wait()
         except TimeoutError as err:
             raise PackageScanError(
@@ -265,6 +246,49 @@ async def _read_until_eof(
         if total > max_bytes:
             return b"", True
         chunks.append(chunk)
+
+
+async def _drain_process_output(process: _SSHProcess) -> tuple[bytes, bytes]:
+    """Drain stdout and stderr concurrently, terminating on either bound.
+
+    stdout and stderr share the same underlying SSH channel receive window
+    (RFC 4254 extended data uses the same window accounting as normal
+    data). If one stream stops being read after exceeding its bound while
+    the other is still awaited to EOF, the still-active reader can stall
+    forever on window-blocked data that will never arrive. The process is
+    therefore killed as soon as either bound is exceeded, not only once
+    both readers finish -- so the 300-second outer transport timeout is
+    never the thing that catches this.
+    """
+    stdout_task = asyncio.ensure_future(
+        _read_until_eof(process.stdout, max_bytes=_MAX_RESPONSE_BYTES)
+    )
+    stderr_task = asyncio.ensure_future(
+        _read_until_eof(process.stderr, max_bytes=_MAX_STDERR_BYTES)
+    )
+    pending = {stdout_task, stderr_task}
+    try:
+        while pending:
+            done, pending = await asyncio.wait(
+                pending, return_when=asyncio.FIRST_COMPLETED
+            )
+            if any(task.result()[1] for task in done):
+                process.kill()
+                await process.wait_closed()
+                raise PackageScanError(
+                    PackageScanFailure.EXECUTION_FAILED,
+                    "package scan helper output exceeded its bound",
+                )
+    finally:
+        # Any task not yet done here (the peer that never reached its own
+        # bound or EOF) must not be left to complete on its own; cancel it
+        # and absorb its CancelledError so it is never a leaked exception.
+        for task in pending:
+            task.cancel()
+        if pending:
+            await asyncio.gather(*pending, return_exceptions=True)
+
+    return stdout_task.result()[0], stderr_task.result()[0]
 
 
 def _validate_target(expected_node: str, vmid: int) -> None:

@@ -30,13 +30,22 @@ must be usable non-interactively):
 ssh-keygen -t ed25519 -N "" -f hubinet_ops -C "hubinet-ops package scan"
 ```
 
-Copy the private half into the Home Assistant configuration directory as
-`.ssh/hubinet_ops`, readable only by the Home Assistant runtime user:
+Place the private half at `.ssh/hubinet_ops` inside the Home Assistant
+configuration directory (`/config/.ssh/hubinet_ops` on Home Assistant OS and
+Supervised installs), mode `0600`, and readable only by the Home Assistant
+runtime. There is no single owning Unix user across every installation type
+(container, OS, Supervised, Core), so set ownership/permissions the way that
+installation type already expects config files to be readable by Home
+Assistant — for example, on an install where Home Assistant runs as its own
+user:
 
 ```bash
-install -o home-assistant -g home-assistant -m 0600 hubinet_ops \
-  <config>/.ssh/hubinet_ops
+install -o <home-assistant-runtime-user> -g <home-assistant-runtime-group> \
+  -m 0600 hubinet_ops <config>/.ssh/hubinet_ops
 ```
+
+Treat the exact command as an environment-specific example, not something to
+run verbatim.
 
 ### 2. Collect and verify the PVE host key
 
@@ -74,15 +83,21 @@ restrict,command="/usr/local/sbin/hubinet-package-scan-helper" ssh-ed25519 AAAA.
 `restrict` disables port/agent/X11 forwarding, PTY allocation, and any other
 use of the key beyond the forced command.
 
-### 4. Allow root login for forced commands only
+### 4. Root SSH policy
 
-The connection authenticates as root, so root login must be permitted, but
-only in a way compatible with the forced-command restriction above — never
-general interactive root SSH access. In `sshd_config`:
+The connection authenticates as root using only public-key auth, so the
+host's existing SSH policy must already permit root public-key login (for
+example `PermitRootLogin prohibit-password` or an equivalent public-key
+policy most PVE hosts already use). Hubinet-Ops does not use password
+authentication and does not require enabling it.
 
-```text
-PermitRootLogin forced-commands-only
-```
+Do not change the host's global `sshd_config` `PermitRootLogin` policy
+solely for Hubinet-Ops, and in particular do not set it to
+`forced-commands-only` — that would force every root key on the host,
+including unrelated administrator keys, into forced-command-only mode. The
+actual security boundary is the per-key `restrict,command="..."` entry from
+step 3 above, which already confines this one key to the helper regardless
+of the host's general root login policy.
 
 ### 5. Reload after any trust-file change
 

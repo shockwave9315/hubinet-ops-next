@@ -118,6 +118,11 @@ def _run_bounded(
     output = {"stdout": bytearray(), "stderr": bytearray()}
     started = time.monotonic()
     timed_out = output_exceeded = cleanup_failed = False
+
+    def _combined_length() -> int:
+        """Return the total bytes buffered so far, for one bound check."""
+        return len(output["stdout"]) + len(output["stderr"])
+
     try:
         while selector.get_map():
             remaining = timeout - (time.monotonic() - started)
@@ -128,11 +133,15 @@ def _run_bounded(
                 # The direct child already exited. Drain whatever output is
                 # already buffered without blocking further; a descendant
                 # that inherited the pipe must not make a successful exit
-                # look like a timeout.
+                # look like a timeout. The combined bound still applies to
+                # this final drain.
                 for key, _ in selector.select(timeout=0):
                     chunk = os.read(key.fileobj.fileno(), 65536)
                     if chunk:
                         output[key.data].extend(chunk)
+                        if _combined_length() > max_output:
+                            output_exceeded = True
+                            break
                 break
             for key, _ in selector.select(min(remaining, 0.2)):
                 chunk = os.read(key.fileobj.fileno(), 65536)
@@ -140,7 +149,7 @@ def _run_bounded(
                     selector.unregister(key.fileobj)
                     continue
                 output[key.data].extend(chunk)
-                if len(output["stdout"]) + len(output["stderr"]) > max_output:
+                if _combined_length() > max_output:
                     output_exceeded = True
                     break
             if output_exceeded:

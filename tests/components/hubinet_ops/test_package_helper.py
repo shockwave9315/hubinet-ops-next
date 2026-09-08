@@ -331,6 +331,22 @@ def test_run_bounded_direct_child_exit_is_not_a_false_timeout() -> None:
     assert result.stdout.strip() == b"done"
 
 
+def test_run_bounded_final_drain_still_enforces_the_output_bound() -> None:
+    """Low: the poll()-detected final drain must recheck the combined bound.
+
+    A descendant holds the pipe open past the direct child's exit, so
+    `_run_bounded` takes the final-drain path (see the test above). That
+    drain's own newly-appended output must still be checked against
+    `max_output`, not only the output collected by the main read loop.
+    """
+    result = helper._run_bounded(  # noqa: SLF001
+        ("bash", "-c", "echo 0123456789; ( sleep 2 & ) ; exit 0"),
+        2.0,
+        4,
+    )
+    assert result.output_exceeded is True
+
+
 def test_run_bounded_real_timeout_is_classified_and_kills_the_process() -> None:
     """A genuinely hanging command is bounded and reported as a timeout."""
     result = helper._run_bounded(("sleep", "5"), 0.2, 4096)  # noqa: SLF001
