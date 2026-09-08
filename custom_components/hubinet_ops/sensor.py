@@ -18,8 +18,8 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 from homeassistant.util import dt as dt_util
 
-from .const import ProxmoxPermission
-from .coordinator import ProxmoxConfigEntry, ProxmoxNodeData
+from .const import VM_CONTAINER_RUNNING, ProxmoxPermission
+from .coordinator import ProxmoxConfigEntry, ProxmoxCoordinator, ProxmoxNodeData
 from .entity import (
     ProxmoxContainerEntity,
     ProxmoxNodeEntity,
@@ -27,6 +27,7 @@ from .entity import (
     ProxmoxVMEntity,
 )
 from .helpers import is_granted
+from .packages.models import PackageScanRecord, PackageScanStatus
 
 PARALLEL_UPDATES = 0
 
@@ -465,6 +466,12 @@ STORAGE_SENSORS: tuple[ProxmoxStorageSensorEntityDescription, ...] = (
     ),
 )
 
+PACKAGE_SCAN_SENSOR = SensorEntityDescription(
+    key="pending_packages",
+    translation_key="pending_packages",
+    entity_category=EntityCategory.DIAGNOSTIC,
+)
+
 
 async def async_setup_entry(
     hass: HomeAssistant,
@@ -502,13 +509,19 @@ async def async_setup_entry(
         containers: list[tuple[ProxmoxNodeData, dict[str, Any]]],
     ) -> None:
         """Add new container sensors."""
-        async_add_entities(
+        entities: list[SensorEntity] = [
             ProxmoxContainerSensor(
                 coordinator, entity_description, container, node_data
             )
             for (node_data, container) in containers
             for entity_description in CONTAINER_SENSORS
-        )
+        ]
+        if coordinator.package_manager.configured:
+            entities.extend(
+                PackageScanSensor(coordinator, container, node_data)
+                for node_data, container in containers
+            )
+        async_add_entities(entities)
 
     def _async_add_new_storages(
         storages: list[tuple[ProxmoxNodeData, dict[str, Any]]],
@@ -592,6 +605,81 @@ class ProxmoxContainerSensor(ProxmoxContainerEntity, SensorEntity):
     def native_value(self) -> StateType:
         """Return the native value of the sensor."""
         return self.entity_description.value_fn(self.container_data)
+
+
+class PackageScanSensor(ProxmoxContainerEntity, SensorEntity):
+    """Last manually requested pending-package scan for one LXC."""
+
+    def __init__(
+        self,
+        coordinator: ProxmoxCoordinator,
+        container_data: dict[str, Any],
+        node_data: ProxmoxNodeData,
+    ) -> None:
+        """Initialize the package scan sensor."""
+        super().__init__(coordinator, PACKAGE_SCAN_SENSOR, container_data, node_data)
+
+    @property
+    def _scan_record(self) -> PackageScanRecord:
+        return self.coordinator.package_manager.record(self._node_name, self.device_id)
+
+    @property
+    @override
+    def available(self) -> bool:
+        """Return whether current upstream state says this LXC can be scanned.
+
+        A stored successful result is not equivalent to zero pending
+        packages for a guest that is not currently running -- packages
+        cannot be scanned (or have changed) while it is stopped, so the
+        sensor is unavailable rather than exposing a possibly-stale exact
+        count. The record itself is preserved and becomes visible again
+        once the guest is running again.
+        """
+        return (
+            super().available
+            and self.container_data.get("status") == VM_CONTAINER_RUNNING
+        )
+
+    @property
+    @override
+    def native_value(self) -> int | None:
+        """Return a count only when the latest attempt succeeded."""
+        record = self._scan_record
+        if record.status is not PackageScanStatus.SUCCESS or record.result is None:
+            return None
+        return len(record.result.packages)
+
+    @property
+    @override
+    def extra_state_attributes(self) -> dict[str, Any] | None:
+        """Return bounded status and summary evidence, never exact package rows."""
+        record = self._scan_record
+        attributes: dict[str, Any] = {
+            "scan_status": record.status,
+            "running": record.status is PackageScanStatus.RUNNING,
+        }
+        if record.last_attempt is not None:
+            attributes["last_attempt"] = record.last_attempt.isoformat()
+        if record.status is PackageScanStatus.FAILED:
+            attributes["last_error"] = record.failure
+            attributes["last_error_message"] = record.error_message
+        elif record.status is PackageScanStatus.SUCCESS and record.result is not None:
+            result = record.result
+            attributes.update(
+                {
+                    "os_id": result.os_id,
+                    "os_version": result.os_version,
+                    "reboot_required": result.reboot_required,
+                    "security_updates": sum(
+                        package.security is True for package in result.packages
+                    ),
+                    "unknown_security_updates": sum(
+                        package.security is None for package in result.packages
+                    ),
+                    "not_upgraded_count": result.not_upgraded_count,
+                }
+            )
+        return attributes
 
 
 class ProxmoxStorageSensor(ProxmoxStorageEntity, SensorEntity):

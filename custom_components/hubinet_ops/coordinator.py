@@ -4,6 +4,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import timedelta
 import logging
+from pathlib import Path
 from typing import Any, override
 
 from proxmoxer import AuthenticationError, ProxmoxAPI
@@ -35,7 +36,11 @@ from .const import (
     DEFAULT_VERIFY_SSL,
     DOMAIN,
     NODE_ONLINE,
+    PACKAGE_SCAN_KNOWN_HOSTS,
+    PACKAGE_SCAN_PRIVATE_KEY,
 )
+from .packages.manager import PackageManager
+from .packages.transport import AsyncSSHPackageTransport
 
 type ProxmoxConfigEntry = ConfigEntry[ProxmoxCoordinator]
 
@@ -110,6 +115,16 @@ class ProxmoxCoordinator(DataUpdateCoordinator[dict[str, ProxmoxNodeData]]):
             update_interval=DEFAULT_UPDATE_INTERVAL,
         )
         self.proxmox: ProxmoxAPI
+        self.package_manager = PackageManager(
+            hass,
+            config_entry,
+            transport=AsyncSSHPackageTransport(
+                endpoint=config_entry.data[CONF_HOST],
+                private_key_path=Path(hass.config.path(PACKAGE_SCAN_PRIVATE_KEY)),
+                known_hosts_path=Path(hass.config.path(PACKAGE_SCAN_KNOWN_HOSTS)),
+            ),
+            on_state_change=self.async_update_listeners,
+        )
 
         self.known_nodes: set[str] = set()
         self.known_vms: set[tuple[str, int]] = set()
@@ -131,6 +146,10 @@ class ProxmoxCoordinator(DataUpdateCoordinator[dict[str, ProxmoxNodeData]]):
     @override
     async def _async_setup(self) -> None:
         """Set up the coordinator."""
+        # Package SSH trust material is evaluated once per config-entry
+        # setup, off the event loop; reload remains the boundary for
+        # picking up trust files added or changed afterward.
+        await self.package_manager.async_prepare()
         try:
             await self.hass.async_add_executor_job(self._init_proxmox)
         except AuthenticationError as err:
@@ -327,6 +346,10 @@ class ProxmoxCoordinator(DataUpdateCoordinator[dict[str, ProxmoxNodeData]]):
             for node_name, node_data in data.items()
             for vmid in node_data.containers
         }
+        # A VMID no longer present upstream (deleted, or possibly reused by
+        # an unrelated new container) must not keep presenting a stale
+        # package-scan result as current evidence.
+        self.package_manager.async_prune(current_containers)
         self.known_containers &= current_containers
         new_containers = current_containers - self.known_containers
         if new_containers:

@@ -142,6 +142,9 @@
       "pause": {
         "name": "Pause"
       },
+      "package_scan": {
+        "name": "Scan pending packages"
+      },
       "reset": {
         "name": "Reset"
       },
@@ -208,6 +211,9 @@
       },
       "container_uptime": {
         "name": "Uptime"
+      },
+      "pending_packages": {
+        "name": "Pending package updates"
       },
       "node_backup_duration": {
         "name": "Backup duration"
@@ -313,6 +319,9 @@
     },
     "no_vmlxc_found": {
       "message": "No LXC or VM were found on the Proxmox VE server."
+    },
+    "package_scan_failed": {
+      "message": "Package scan failed: {reason}"
     },
     "permissions_error": {
       "message": "Failed to retrieve Proxmox VE permissions. Please check your credentials and try again."

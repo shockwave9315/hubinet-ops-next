@@ -23,7 +23,8 @@ if [[ ! -L "${test_dir}" ]]; then
 fi
 
 "${ruff_bin}" check --config "${core_dir}/pyproject.toml" \
-  "${repo_root}/custom_components/hubinet_ops"
+  "${repo_root}/custom_components/hubinet_ops" \
+  "${repo_root}/deploy/hubinet-package-scan-helper.py"
 
 cd "${core_dir}"
 PYTHONDONTWRITEBYTECODE=1 \

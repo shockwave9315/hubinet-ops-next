@@ -27,7 +27,9 @@ The script:
 - installs Home Assistant runtime and test requirements plus the editable Core
   project;
 - installs the integration requirements selected by Home Assistant for
-  `proxmoxve`, Supervisor, and MQTT fixtures; and
+  `proxmoxve`, Supervisor, and MQTT fixtures;
+- installs the integration's pinned `asyncssh` package-scan transport
+  requirement; and
 - compiles the translations needed by the upstream pytest harness.
 
 Both `.venv/` and `.dev/` are ignored by Git. `.venv` is disposable. The

@@ -11,7 +11,7 @@ integration.
 - License: Apache License 2.0
 
 The baseline copies every file from the source integration and every upstream
-test, fixture, and snapshot. The integration changes are limited to:
+test, fixture, and snapshot. Baseline adaptations are limited to:
 
 - the integration domain (`proxmoxve` to `hubinet_ops`);
 - the displayed integration name (`Proxmox VE` to `Hubinet-Ops`);
@@ -20,5 +20,13 @@ test, fixture, and snapshot. The integration changes are limited to:
 - `translations/en.json`, generated from the adapted `strings.json` because
   custom integrations load runtime translations from `translations/`.
 
-The adapted tests change only module paths, domain values, snapshot platform
-values, and the fixture that enables loading a custom integration.
+The fork-owned package-scan extension is isolated under
+`custom_components/hubinet_ops/packages` with a separately deployed forced-
+command helper. Its composition changes to the upstream-derived coordinator,
+button platform, sensor platform, manifest, strings, and tests are intentionally
+small. Upstream remains authoritative for discovery, identity, state, native
+entities, and PVE API operations.
+
+The copied upstream tests change only module paths, domain values, snapshot
+platform values, and the fixture that enables loading a custom integration.
+Fork-owned package-scan tests are separate additions.
