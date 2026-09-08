@@ -6,15 +6,29 @@ Product intent is defined in [PRODUCT.md](PRODUCT.md), current work in
 
 ## Accepted architecture today
 
+### Provenance
+
+```text
+homeassistant/core
+proxmoxve @ 2026.9.1
+        |
+        | fork / copied baseline
+        v
+custom_components/hubinet_ops
+```
+
+Hubinet-Ops is a domain-isolated copy of the upstream integration, not a
+runtime wrapper around or caller of `homeassistant.components.proxmoxve`.
+Upstream behavior and structure are the baseline and should remain as close as
+practical to the official `proxmoxve` integration.
+
+### Runtime
+
 ```text
 Home Assistant
     |
     v
-Hubinet-Ops custom integration
-    |
-    | domain-isolated fork
-    v
-HA Core proxmoxve 2026.9.1
+custom_components/hubinet_ops
     |
     v
 proxmoxer
@@ -23,9 +37,8 @@ proxmoxer
 Proxmox VE API
 ```
 
-Hubinet-Ops currently preserves the behavior and structure of the official
-Home Assistant Core `proxmoxve` integration while using its own custom
-integration domain.
+The installed Hubinet-Ops integration calls `proxmoxer` directly. It does not
+delegate at runtime to an installed official `proxmoxve` integration.
 
 ### Upstream ownership
 

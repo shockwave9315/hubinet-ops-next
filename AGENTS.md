@@ -19,6 +19,20 @@ documentation define the accepted architecture. Draft pull-request code is not
 architectural truth, and review findings are not architectural decisions until
 they are accepted.
 
+## Repository state before editing
+
+Before editing or implementing, use the equivalent of `git status --short`,
+`git branch --show-current`, and `git fetch origin` to establish:
+
+- the worktree state;
+- the current and expected task branches; and
+- whether the relevant remote branch has moved or diverged.
+
+If the worktree contains unrelated changes, or branch/history does not match
+the assigned task, stop and report instead of guessing. Do not automatically
+stash, use `reset --hard`, force-push, silently discard local work, or otherwise
+rewrite state to continue.
+
 ## Sources and design authority
 
 - The official Home Assistant `proxmoxve` integration and the Proxmox VE API
@@ -37,6 +51,18 @@ they are accepted.
   design is explicitly accepted and documented.
 
 The coding agent is not allowed to become the architect by accident.
+
+### Architecture acceptance
+
+Coding and review agents may identify problems, propose designs, compare
+alternatives, and recommend architecture. Architectural acceptance is a
+maintainer/human decision: agents must not unilaterally declare a new
+architecture accepted. Until that decision is reflected in merged
+`ARCHITECTURE.md`, the proposal remains unaccepted. Implementation in a draft
+pull request does not make its design accepted.
+
+An agent may propose architecture. An agent may not accept architecture on
+behalf of the maintainer.
 
 ## Prohibited architecture
 
@@ -77,6 +103,23 @@ a concrete need and consistency with [PRODUCT.md](PRODUCT.md) and
   [UPSTREAM.md](UPSTREAM.md) when modifying upstream-derived code.
 - Follow the repository-local environment and test workflow in
   [DEVELOPMENT.md](DEVELOPMENT.md); do not invent a parallel setup.
+
+## Project memory in the definition of done
+
+Documentation must describe the state that will exist after the pull request
+is merged. In the same pull request:
+
+- update `ARCHITECTURE.md` when accepted product or runtime architecture
+  changes;
+- update `STATUS.md` when merged, open, or next project state materially
+  changes;
+- update `PRODUCT.md` only when product intent or hard product rules change;
+  and
+- update `UPSTREAM.md` only when upstream provenance or baseline adaptations
+  change.
+
+Ordinary implementation that does not change architecture does not require an
+architecture-document edit.
 
 Before handing work off, verify that the implementation, tests, and docs agree
 with the accepted architecture and current status. State any unresolved scope,
