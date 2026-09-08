@@ -19,10 +19,10 @@ _CONF_RE = re.compile(
 _RELSTR_RE = re.compile(r"(?:(?P<origin>.*?) )?\[(?P<architecture>[^\[\]]*)\]")
 _ARCHITECTURE_RE = re.compile(r"[a-z][a-z0-9]*(-[a-z0-9]+)*")
 _SUMMARY_RE = re.compile(
-    r"^(?P<upgraded>\d+) upgraded, (?P<new>\d+) newly installed, "
-    r"(?P<removed>\d+) to remove and (?P<held>\d+) not upgraded\.$"
+    r"^(?P<upgraded>\d{1,9}) upgraded, (?P<new>\d{1,9}) newly installed, "
+    r"(?P<removed>\d{1,9}) to remove and (?P<held>\d{1,9}) not upgraded\.$"
 )
-_BAD_COUNT_RE = re.compile(r"^\d+ not fully installed or removed\.$")
+_BAD_COUNT_RE = re.compile(r"^\d{1,9} not fully installed or removed\.$")
 _SECURITY_ORIGIN_RE = re.compile(
     r"(?:^|[/ :])[^ /:]*-security(?:$|[/ :])", re.IGNORECASE
 )
@@ -53,6 +53,15 @@ DPKG_UNFINISHED_STATUS_WORDS = frozenset(
 class PackageScanParseError(ValueError):
     """Package scan evidence was malformed or ambiguous."""
 
+    def __init__(
+        self,
+        message: str,
+        failure: PackageScanFailure = PackageScanFailure.MALFORMED_PLAN,
+    ) -> None:
+        """Initialize an evidence failure with a semantic classification."""
+        super().__init__(message)
+        self.failure = failure
+
 
 @dataclass(frozen=True, slots=True)
 class InstalledInventory:
@@ -60,6 +69,14 @@ class InstalledInventory:
 
     installed: dict[tuple[str, str], str]
     unfinished: tuple[tuple[str, str, str], ...]
+
+
+@dataclass(frozen=True, slots=True)
+class ParsedAptSimulation:
+    """Exact pending rows plus APT's separate kept-back count."""
+
+    packages: tuple[PendingPackage, ...]
+    not_upgraded_count: int
 
 
 def parse_os_release(text: str) -> tuple[str, str]:
@@ -201,26 +218,32 @@ def _resolve_installed_architecture(
         architecture for architecture in candidates if (name, architecture) in inventory
     ]
     if len(matches) != 1:
-        raise PackageScanParseError("APT package has no unambiguous installed identity")
+        raise PackageScanParseError(
+            "APT package no longer has an unambiguous installed identity",
+            PackageScanFailure.GUEST_CHANGED_DURING_SCAN,
+        )
     return matches[0]
 
 
 def parse_apt_simulation(  # noqa: C901
     text: str, *, native_architecture: str, installed_inventory: str
-) -> tuple[PendingPackage, ...]:
+) -> ParsedAptSimulation:
     """Parse an exact upgrade-only APT simulation plan."""
     if not isinstance(text, str) or len(text.encode()) > 8 * 1024 * 1024:
         raise PackageScanParseError("APT simulation output is missing or oversized")
     native = parse_native_architecture(native_architecture)
     inventory_state = parse_installed_inventory(installed_inventory)
     if inventory_state.unfinished:
-        raise PackageScanParseError("dpkg reports unfinished package state")
+        raise PackageScanParseError(
+            "dpkg reports unfinished package state",
+            PackageScanFailure.DPKG_UNFINISHED,
+        )
 
     changes: list[tuple[str, str, str | None, str, str, str, str | None]] = []
     seen_inst: set[str] = set()
     seen_conf: set[str] = set()
     pending_conf: list[tuple[str, str, str]] = []
-    summary: tuple[int, int, int] | None = None
+    summary: tuple[int, int, int, int] | None = None
 
     for raw_line in text.splitlines():
         line = raw_line.strip()
@@ -287,7 +310,10 @@ def parse_apt_simulation(  # noqa: C901
             pending_conf.append((raw_name, match.group("candidate"), architecture))
             continue
         if _BAD_COUNT_RE.fullmatch(line):
-            raise PackageScanParseError("APT reports unfinished dpkg state")
+            raise PackageScanParseError(
+                "APT reports unfinished dpkg state",
+                PackageScanFailure.DPKG_UNFINISHED,
+            )
         if match := _SUMMARY_RE.fullmatch(line):
             if summary is not None:
                 raise PackageScanParseError(
@@ -297,11 +323,12 @@ def parse_apt_simulation(  # noqa: C901
                 int(match.group("upgraded")),
                 int(match.group("new")),
                 int(match.group("removed")),
+                int(match.group("held")),
             )
 
     if summary is None:
         raise PackageScanParseError("APT simulation has no exact plan summary")
-    upgraded, newly_installed, removed = summary
+    upgraded, newly_installed, removed, not_upgraded = summary
     if newly_installed or removed:
         raise PackageScanParseError("APT simulation is not an upgrade-only plan")
     if upgraded != len(changes):
@@ -327,11 +354,13 @@ def parse_apt_simulation(  # noqa: C901
         )
         if inventory_state.installed[(name, architecture)] != installed_version:
             raise PackageScanParseError(
-                "APT installed version contradicts dpkg inventory"
+                "APT installed version contradicts the later dpkg inventory",
+                PackageScanFailure.GUEST_CHANGED_DURING_SCAN,
             )
         if architecture != candidate_architecture:
             raise PackageScanParseError(
-                "APT candidate architecture contradicts dpkg inventory"
+                "APT candidate architecture contradicts the later dpkg inventory",
+                PackageScanFailure.GUEST_CHANGED_DURING_SCAN,
             )
         identity = (name, architecture)
         if identity in identities:
@@ -345,7 +374,11 @@ def parse_apt_simulation(  # noqa: C901
                 installed_version=installed_version,
                 candidate_version=candidate_version,
                 origin=origin,
-                security=bool(origin and _SECURITY_ORIGIN_RE.search(origin)),
+                security=(
+                    bool(_SECURITY_ORIGIN_RE.search(origin))
+                    if origin is not None
+                    else None
+                ),
             )
         )
 
@@ -355,6 +388,9 @@ def parse_apt_simulation(  # noqa: C901
                 "APT simulation configures a package outside the exact plan"
             )
 
-    return tuple(
-        sorted(packages, key=lambda package: (package.name, package.architecture))
+    return ParsedAptSimulation(
+        packages=tuple(
+            sorted(packages, key=lambda package: (package.name, package.architecture))
+        ),
+        not_upgraded_count=not_upgraded,
     )

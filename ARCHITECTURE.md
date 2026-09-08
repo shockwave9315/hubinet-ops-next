@@ -1,9 +1,8 @@
 # Architecture
 
-This document defines accepted architecture. It distinguishes the runtime that
-exists on `main` today from accepted package-scan design that is pending
-implementation. Product intent is defined in [PRODUCT.md](PRODUCT.md), current
-work in [STATUS.md](STATUS.md), and fork provenance in
+This document defines the accepted architecture, including the implemented
+package-scan runtime. Product intent is defined in [PRODUCT.md](PRODUCT.md),
+current work in [STATUS.md](STATUS.md), and fork provenance in
 [UPSTREAM.md](UPSTREAM.md).
 
 ## Accepted architecture today
@@ -61,21 +60,19 @@ ownership. It must not introduce a second Proxmox inventory, duplicate
 discovery, resource UUID authority, reconciliation, publication, SQLite
 authority, a backend HTTP service, `hostd`, or a generic job framework.
 
-### Current Hubinet-Ops runtime ownership
+### Hubinet-Ops runtime ownership
 
-On merged `main`, Hubinet-Ops owns only:
+Hubinet-Ops owns:
 
-- its domain-isolated fork identity; and
+- its domain-isolated fork identity;
 - the technically required custom-integration adaptations recorded in
-  [UPSTREAM.md](UPSTREAM.md).
+  [UPSTREAM.md](UPSTREAM.md); and
+- the package-scan subsystem described below.
 
-Package scan does not yet exist in the merged runtime.
+## Implemented package-scan architecture
 
-## Accepted package-scan design
-
-This section is an **accepted design contract** based on an explicit maintainer
-decision. It is not a claim that package scan is implemented or merged. Draft
-PR #2 must be changed to conform to this contract before it can merge.
+This section describes the implemented form of the package-scan architecture
+accepted by the maintainer.
 
 ### Ownership boundary
 
@@ -209,6 +206,12 @@ asynchronous Home Assistant operation, avoids dependence on a system SSH
 executable, and avoids client-side subprocess, process-group, and selector
 machinery.
 
+The integration connects to the configured `CONF_HOST` on SSH port 22 as root.
+It uses the dedicated `.ssh/hubinet_ops` private key and `.ssh/known_hosts`
+under the Home Assistant configuration directory. Password, keyboard-
+interactive, agent, PKCS#11, GSS, and host-based client authentication are
+disabled, and local SSH configuration is not loaded.
+
 The PVE host helper remains a root-owned forced-command boundary. It accepts no
 caller-supplied remote shell command text. It must:
 
@@ -299,10 +302,10 @@ rows remain inside package-subsystem state.
 
 Future review may expose exact rows through an action/service response or
 another explicit operator interaction, but that UI is not designed here.
-Package-specific entities are exposed only when the package transport is
-configured and usable under the final implementation contract; this does not
-require a large onboarding subsystem. Exact config-flow mechanics are deferred
-to package-scan implementation.
+Package-specific entities are exposed only when both required local SSH trust
+files are present and non-empty. Adding or changing those files requires the
+integration to be reloaded; no package-specific onboarding or probing system
+exists.
 
 ### Future extension boundary
 

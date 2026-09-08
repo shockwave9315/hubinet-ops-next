@@ -21,7 +21,7 @@ from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 from homeassistant.util import dt as dt_util
 
-from .const import DOMAIN, ProxmoxPermission
+from .const import DOMAIN, VM_CONTAINER_RUNNING, ProxmoxPermission
 from .coordinator import ProxmoxConfigEntry, ProxmoxCoordinator, ProxmoxNodeData
 from .entity import ProxmoxContainerEntity, ProxmoxNodeEntity, ProxmoxVMEntity
 from .helpers import is_granted
@@ -288,10 +288,11 @@ async def async_setup_entry(
                 permission=entity_description.permission,
             )
         ]
-        entities.extend(
-            PackageScanButtonEntity(coordinator, container, node_data)
-            for node_data, container in containers
-        )
+        if coordinator.package_manager.configured:
+            entities.extend(
+                PackageScanButtonEntity(coordinator, container, node_data)
+                for node_data, container in containers
+            )
         async_add_entities(entities)
 
     coordinator.new_nodes_callbacks.append(_async_add_new_nodes)
@@ -341,12 +342,6 @@ class ProxmoxBaseButton(ButtonEntity):
         """Trigger the Proxmox button press service."""
         try:
             await self._async_press_call()
-        except PackageScanError as err:
-            raise HomeAssistantError(
-                translation_domain=DOMAIN,
-                translation_key="package_scan_failed",
-                translation_placeholders={"reason": str(err)},
-            ) from err
         except AuthenticationError as err:
             raise HomeAssistantError(
                 translation_domain=DOMAIN,
@@ -429,6 +424,38 @@ class PackageScanButtonEntity(ProxmoxContainerEntity, ProxmoxBaseButton):
         super().__init__(coordinator, PACKAGE_SCAN_BUTTON, container_data, node_data)
 
     @override
+    async def async_press(self) -> None:
+        """Start the package scan and translate a synchronous rejection."""
+        try:
+            await self._async_press_call()
+        except PackageScanError as err:
+            raise HomeAssistantError(
+                translation_domain=DOMAIN,
+                translation_key="package_scan_failed",
+                translation_placeholders={"reason": str(err)},
+            ) from err
+
+    @override
     async def _async_press_call(self) -> None:
-        """Run the bounded package scan for this known LXC identity."""
-        await self.coordinator.async_scan_packages(self._node_name, self.device_id)
+        """Start a tracked scan without occupying the native button semaphore."""
+        node_data = self.coordinator.data.get(self._node_name)
+        container = (
+            node_data.containers.get(self.device_id) if node_data is not None else None
+        )
+        self.coordinator.package_manager.async_start_scan(
+            self._node_name,
+            self.device_id,
+            target_is_running=(
+                container is not None
+                and container.get("status") == VM_CONTAINER_RUNNING
+            ),
+        )
+
+    @property
+    @override
+    def available(self) -> bool:
+        """Return whether current upstream state says this LXC can be scanned."""
+        return (
+            super().available
+            and self.container_data.get("status") == VM_CONTAINER_RUNNING
+        )

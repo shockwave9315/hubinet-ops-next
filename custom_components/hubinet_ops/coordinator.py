@@ -38,10 +38,9 @@ from .const import (
     NODE_ONLINE,
     PACKAGE_SCAN_KNOWN_HOSTS,
     PACKAGE_SCAN_PRIVATE_KEY,
-    VM_CONTAINER_RUNNING,
 )
-from .packages.models import PackageScanError, PackageScanFailure, PackageScanResult
-from .packages.scanner import PackageScanner
+from .packages.manager import PackageManager
+from .packages.transport import AsyncSSHPackageTransport
 
 type ProxmoxConfigEntry = ConfigEntry[ProxmoxCoordinator]
 
@@ -116,11 +115,16 @@ class ProxmoxCoordinator(DataUpdateCoordinator[dict[str, ProxmoxNodeData]]):
             update_interval=DEFAULT_UPDATE_INTERVAL,
         )
         self.proxmox: ProxmoxAPI
-        self.package_scanner = PackageScanner(
-            private_key_path=Path(hass.config.path(PACKAGE_SCAN_PRIVATE_KEY)),
-            known_hosts_path=Path(hass.config.path(PACKAGE_SCAN_KNOWN_HOSTS)),
+        self.package_manager = PackageManager(
+            hass,
+            config_entry,
+            transport=AsyncSSHPackageTransport(
+                endpoint=config_entry.data[CONF_HOST],
+                private_key_path=Path(hass.config.path(PACKAGE_SCAN_PRIVATE_KEY)),
+                known_hosts_path=Path(hass.config.path(PACKAGE_SCAN_KNOWN_HOSTS)),
+            ),
+            on_state_change=self.async_update_listeners,
         )
-        self.package_scans: dict[tuple[str, int], PackageScanResult] = {}
 
         self.known_nodes: set[str] = set()
         self.known_vms: set[tuple[str, int]] = set()
@@ -138,27 +142,6 @@ class ProxmoxCoordinator(DataUpdateCoordinator[dict[str, ProxmoxNodeData]]):
         self.new_storages_callbacks: list[
             Callable[[list[tuple[ProxmoxNodeData, dict[str, Any]]]], None]
         ] = []
-
-    async def async_scan_packages(self, node_name: str, vmid: int) -> PackageScanResult:
-        """Scan a currently known, running LXC without changing its packages."""
-        node_data = self.data.get(node_name)
-        container = node_data.containers.get(vmid) if node_data is not None else None
-        if container is None:
-            raise PackageScanError(
-                PackageScanFailure.GUEST_UNAVAILABLE,
-                "LXC is not present in the current Proxmox coordinator data",
-            )
-        if container.get("status") != VM_CONTAINER_RUNNING:
-            raise PackageScanError(
-                PackageScanFailure.GUEST_UNAVAILABLE,
-                "LXC must be running to scan pending packages",
-            )
-        result = await self.hass.async_add_executor_job(
-            self.package_scanner.scan, node_name, vmid
-        )
-        self.package_scans[(node_name, vmid)] = result
-        self.async_update_listeners()
-        return result
 
     @override
     async def _async_setup(self) -> None:

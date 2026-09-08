@@ -370,9 +370,4 @@ async def test_buttons_only_allowed_buttons(
         entity_registry, mock_config_entry.entry_id
     )
 
-    assert {
-        entry.entity_id for entry in entries if entry.entity_id.startswith("button.")
-    } == {
-        "button.ct_nginx_scan_pending_packages",
-        "button.ct_backup_scan_pending_packages",
-    }
+    assert all(not entry.entity_id.startswith("button.") for entry in entries)

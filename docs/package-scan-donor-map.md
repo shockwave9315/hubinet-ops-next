@@ -21,8 +21,8 @@ their direct package-scan execution tests in the old Hubinet-Ops repository.
   reconciliation context, persistence, publication, and plan fingerprints;
 - approval, update, snapshot, rollback, worker, scheduler, and health logic;
 - the legacy HTTP/backend/hostd transport and its configuration;
-- cluster-resource discovery, local-node discovery, and cross-node routing in
-  the helper; the new integration uses node and LXC identities already held by
-  the upstream Proxmox coordinator;
+- cluster-resource discovery and cross-node routing in the helper; the helper
+  only verifies the coordinator-supplied node against the local hostname and
+  validates the requested LXC through fixed `pct` commands;
 - all Docker package-update behavior and every helper unrelated to package
   scanning.

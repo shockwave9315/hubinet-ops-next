@@ -90,6 +90,8 @@ fi
     -e . --config-settings editable_mode=compat
   PATH="${venv_dir}/bin:${PATH}" "${venv_dir}/bin/python" \
     -m script.install_integration_requirements hassio mqtt proxmoxve
+  "${uv_command[@]}" pip install --python "${venv_dir}/bin/python" \
+    "asyncssh==2.21.0"
   "${venv_dir}/bin/python" -m script.translations develop --all
 )
 

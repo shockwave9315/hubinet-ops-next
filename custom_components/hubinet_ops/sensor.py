@@ -27,7 +27,7 @@ from .entity import (
     ProxmoxVMEntity,
 )
 from .helpers import is_granted
-from .packages.models import PackageScanResult
+from .packages.models import PackageScanRecord, PackageScanStatus
 
 PARALLEL_UPDATES = 0
 
@@ -517,10 +517,11 @@ async def async_setup_entry(
             for (node_data, container) in containers
             for entity_description in CONTAINER_SENSORS
         ]
-        entities.extend(
-            PackageScanSensor(coordinator, container, node_data)
-            for node_data, container in containers
-        )
+        if coordinator.package_manager.configured:
+            entities.extend(
+                PackageScanSensor(coordinator, container, node_data)
+                for node_data, container in containers
+            )
         async_add_entities(entities)
 
     def _async_add_new_storages(
@@ -620,38 +621,49 @@ class PackageScanSensor(ProxmoxContainerEntity, SensorEntity):
         super().__init__(coordinator, PACKAGE_SCAN_SENSOR, container_data, node_data)
 
     @property
-    def _scan_result(self) -> PackageScanResult | None:
-        return self.coordinator.package_scans.get((self._node_name, self.device_id))
+    def _scan_record(self) -> PackageScanRecord:
+        return self.coordinator.package_manager.record(self._node_name, self.device_id)
 
     @property
     @override
     def native_value(self) -> int | None:
-        """Return the last pending package count."""
-        return len(result.packages) if (result := self._scan_result) else None
+        """Return a count only when the latest attempt succeeded."""
+        record = self._scan_record
+        if record.status is not PackageScanStatus.SUCCESS or record.result is None:
+            return None
+        return len(record.result.packages)
 
     @property
     @override
     def extra_state_attributes(self) -> dict[str, Any] | None:
-        """Return bounded evidence from the last successful scan."""
-        if (result := self._scan_result) is None:
-            return None
-        return {
-            "os_id": result.os_id,
-            "os_version": result.os_version,
-            "reboot_required": result.reboot_required,
-            "security_updates": sum(package.security for package in result.packages),
-            "packages": [
-                {
-                    "name": package.name,
-                    "architecture": package.architecture,
-                    "installed_version": package.installed_version,
-                    "candidate_version": package.candidate_version,
-                    "origin": package.origin,
-                    "security": package.security,
-                }
-                for package in result.packages
-            ],
+        """Return bounded status and summary evidence, never exact package rows."""
+        record = self._scan_record
+        attributes: dict[str, Any] = {
+            "scan_status": record.status,
+            "running": record.status is PackageScanStatus.RUNNING,
         }
+        if record.last_attempt is not None:
+            attributes["last_attempt"] = record.last_attempt.isoformat()
+        if record.status is PackageScanStatus.FAILED:
+            attributes["last_error"] = record.failure
+            attributes["last_error_message"] = record.error_message
+        elif record.status is PackageScanStatus.SUCCESS and record.result is not None:
+            result = record.result
+            attributes.update(
+                {
+                    "os_id": result.os_id,
+                    "os_version": result.os_version,
+                    "reboot_required": result.reboot_required,
+                    "security_updates": sum(
+                        package.security is True for package in result.packages
+                    ),
+                    "unknown_security_updates": sum(
+                        package.security is None for package in result.packages
+                    ),
+                    "not_upgraded_count": result.not_upgraded_count,
+                }
+            )
+        return attributes
 
 
 class ProxmoxStorageSensor(ProxmoxStorageEntity, SensorEntity):
