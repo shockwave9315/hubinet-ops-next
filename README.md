@@ -109,6 +109,27 @@ LXCs discovered afterward. The integration connects as root on SSH port 22
 using only that key, with host-key checking enabled and password and
 SSH-agent authentication disabled.
 
+## Package review
+
+Two actions, available on each LXC's pending-package-updates sensor, let an
+operator view and confirm the exact plan behind that sensor's count before a
+future update feature can use it:
+
+- **`hubinet_ops.get_package_plan`** returns the latest scan status and,
+  only for a successful scan, its exact package rows and a token. It never
+  starts a scan and never changes review state.
+- **`hubinet_ops.confirm_package_review`** takes that `token` and confirms
+  the plan it belongs to as reviewed, if it is still the current one.
+
+The token is not a password or a secret; it only ties a confirmation to one
+specific scan observation. A later scan — even one with identical package
+rows — issues a new token and clears review, so confirming with an old
+token is rejected (as `reviewed: false`, not an error). Review state lives
+only in memory: it is gone after Home Assistant restarts, the integration
+reloads, or the LXC's scan record is otherwise replaced. Stopping the LXC
+does not clear a stored review; it just makes the sensor, and these
+actions, unavailable until the LXC runs again.
+
 See [PRODUCT.md](PRODUCT.md) for product scope,
 [DEVELOPMENT.md](DEVELOPMENT.md) for the local development workflow, and
 [UPSTREAM.md](UPSTREAM.md) for the exact source commit and adaptation scope.

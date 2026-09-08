@@ -3,7 +3,10 @@
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
+from enum import IntFlag
 from typing import Any, override
+
+import voluptuous as vol
 
 from homeassistant.components.sensor import (
     EntityCategory,
@@ -14,7 +17,8 @@ from homeassistant.components.sensor import (
     StateType,
 )
 from homeassistant.const import PERCENTAGE, UnitOfInformation, UnitOfTime
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, ServiceResponse, SupportsResponse
+from homeassistant.helpers import config_validation as cv, entity_platform
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 from homeassistant.util import dt as dt_util
 
@@ -30,6 +34,23 @@ from .helpers import is_granted
 from .packages.models import PackageScanRecord, PackageScanStatus
 
 PARALLEL_UPDATES = 0
+
+SERVICE_GET_PACKAGE_PLAN = "get_package_plan"
+SERVICE_CONFIRM_PACKAGE_REVIEW = "confirm_package_review"
+ATTR_TOKEN = "token"
+
+
+class PackageReviewEntityFeature(IntFlag):
+    """Supported features for the package-review entity actions.
+
+    This bit exists only so the two package-review entity actions can be
+    registered with native ``required_features`` filtering. Registering an
+    entity service from this platform module would otherwise make it
+    eligible on every Hubinet-Ops sensor sharing the ``sensor`` platform,
+    not only :class:`PackageScanSensor`.
+    """
+
+    REVIEW = 1
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -570,6 +591,22 @@ async def async_setup_entry(
         ]
     )
 
+    platform = entity_platform.async_get_current_platform()
+    platform.async_register_entity_service(
+        SERVICE_GET_PACKAGE_PLAN,
+        None,
+        "async_get_package_plan",
+        required_features=[PackageReviewEntityFeature.REVIEW],
+        supports_response=SupportsResponse.ONLY,
+    )
+    platform.async_register_entity_service(
+        SERVICE_CONFIRM_PACKAGE_REVIEW,
+        {vol.Required(ATTR_TOKEN): cv.string},
+        "async_confirm_package_review",
+        required_features=[PackageReviewEntityFeature.REVIEW],
+        supports_response=SupportsResponse.ONLY,
+    )
+
 
 class ProxmoxNodeSensor(ProxmoxNodeEntity, SensorEntity):
     """Representation of a Proxmox VE node sensor."""
@@ -609,6 +646,8 @@ class ProxmoxContainerSensor(ProxmoxContainerEntity, SensorEntity):
 
 class PackageScanSensor(ProxmoxContainerEntity, SensorEntity):
     """Last manually requested pending-package scan for one LXC."""
+
+    _attr_supported_features = PackageReviewEntityFeature.REVIEW
 
     def __init__(
         self,
@@ -677,9 +716,52 @@ class PackageScanSensor(ProxmoxContainerEntity, SensorEntity):
                         package.security is None for package in result.packages
                     ),
                     "not_upgraded_count": result.not_upgraded_count,
+                    "reviewed": record.reviewed,
                 }
             )
         return attributes
+
+    async def async_get_package_plan(self) -> ServiceResponse:
+        """Return the latest scan status and, for a success, its exact plan.
+
+        This is read-only evidence: it never triggers a scan and never
+        changes review state. The scan token and exact package rows are
+        returned only for a successful scan, never placed in entity state
+        or attributes.
+        """
+        record = self._scan_record
+        if record.status is not PackageScanStatus.SUCCESS or record.result is None:
+            return {"status": record.status}
+        return {
+            "status": record.status,
+            "token": record.token,
+            "reviewed": record.reviewed,
+            "packages": [
+                {
+                    "name": package.name,
+                    "architecture": package.architecture,
+                    "installed_version": package.installed_version,
+                    "candidate_version": package.candidate_version,
+                    "origin": package.origin,
+                    "security": package.security,
+                }
+                for package in record.result.packages
+            ],
+        }
+
+    async def async_confirm_package_review(self, token: str) -> ServiceResponse:
+        """Confirm the plan behind ``token`` as reviewed, or reject it.
+
+        A stale/wrong token, no current successful scan, and an empty plan
+        are expected business outcomes returned as ``{"reviewed": False}``,
+        never raised -- an entity-service call may target several package
+        sensors at once, and one target's rejection must not fail another
+        target's already-succeeded confirmation.
+        """
+        confirmed = self.coordinator.package_manager.confirm_review(
+            self._node_name, self.device_id, token
+        )
+        return {"reviewed": confirmed}
 
 
 class ProxmoxStorageSensor(ProxmoxStorageEntity, SensorEntity):

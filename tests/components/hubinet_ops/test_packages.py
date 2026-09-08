@@ -67,6 +67,17 @@ class GateTransport:
         """Allow one VMID's transport call to finish."""
         self._release.setdefault(vmid, asyncio.Event()).set()
 
+    def rearm(self, vmid: int) -> None:
+        """Reset a VMID's release gate so its next scan waits again.
+
+        Home Assistant's eager task execution would otherwise run a scan
+        whose release event is already set to completion synchronously,
+        before ``async_start_scan`` even returns, which would defeat tests
+        that need to observe a genuinely in-flight ``RUNNING`` attempt.
+        """
+        self._release[vmid] = asyncio.Event()
+        self._entered[vmid] = asyncio.Event()
+
     def completed(self, vmid: int) -> asyncio.Event:
         """Return the event set after a VMID leaves the transport."""
         return self._completed.setdefault(vmid, asyncio.Event())
@@ -101,21 +112,6 @@ def _manager(
         on_state_change=listener or MagicMock(),
         now=lambda: ATTEMPTED_AT,
     )
-
-
-@pytest.fixture
-def package_transport_material(hass: HomeAssistant) -> Iterator[None]:
-    """Provide and then remove the two local package transport prerequisites."""
-    private_key = Path(hass.config.path(PACKAGE_SCAN_PRIVATE_KEY))
-    known_hosts = Path(hass.config.path(PACKAGE_SCAN_KNOWN_HOSTS))
-    private_key.parent.mkdir(parents=True, exist_ok=True)
-    private_key.write_text("test private key")
-    known_hosts.write_text("test host key")
-    yield
-    private_key.unlink(missing_ok=True)
-    known_hosts.unlink(missing_ok=True)
-    with suppress(OSError):
-        private_key.parent.rmdir()
 
 
 async def _wait_for_state(hass: HomeAssistant, entity_id: str, expected: str) -> None:
@@ -225,6 +221,250 @@ async def test_manager_records_running_completion_and_failure(
     assert failure.failure is PackageScanFailure.METADATA_REFRESH_FAILED
     assert failure.error_message == "x" * 500
     assert listener.call_count == 4
+
+
+async def test_review_fresh_success_gets_a_token_and_is_unreviewed(
+    hass: HomeAssistant,
+    mock_config_entry: MockConfigEntry,
+) -> None:
+    """T1: a fresh successful scan carries a token and starts unreviewed."""
+    transport = GateTransport()
+    manager = _manager(hass, mock_config_entry, transport)
+    task = manager.async_start_scan("pve1", 200, target_is_running=True)
+    transport.release(200)
+    await task
+
+    record = manager.record("pve1", 200)
+    assert record.status is PackageScanStatus.SUCCESS
+    assert record.token is not None
+    assert record.reviewed is False
+
+
+async def test_review_every_new_success_gets_a_fresh_token(
+    hass: HomeAssistant,
+    mock_config_entry: MockConfigEntry,
+) -> None:
+    """T2: identical rows still get a distinct token on each new success."""
+    transport = GateTransport()
+    manager = _manager(hass, mock_config_entry, transport)
+    task = manager.async_start_scan("pve1", 200, target_is_running=True)
+    transport.release(200)
+    await task
+    first = manager.record("pve1", 200)
+
+    task = manager.async_start_scan("pve1", 200, target_is_running=True)
+    transport.release(200)
+    await task
+    second = manager.record("pve1", 200)
+
+    assert second.status is PackageScanStatus.SUCCESS
+    assert second.result == first.result
+    assert second.token != first.token
+    assert second.reviewed is False
+
+
+async def test_review_new_scan_start_immediately_clears_prior_review(
+    hass: HomeAssistant,
+    mock_config_entry: MockConfigEntry,
+) -> None:
+    """T3: starting a new scan destroys the prior successful review at once."""
+    transport = GateTransport()
+    manager = _manager(hass, mock_config_entry, transport)
+    task = manager.async_start_scan("pve1", 200, target_is_running=True)
+    transport.release(200)
+    await task
+    token = manager.record("pve1", 200).token
+    assert manager.confirm_review("pve1", 200, token) is True
+
+    transport.rearm(200)
+    task = manager.async_start_scan("pve1", 200, target_is_running=True)
+    current = manager.record("pve1", 200)
+    assert current.status is PackageScanStatus.RUNNING
+    assert current.token is None
+    assert current.reviewed is False
+
+    transport.release(200)
+    await task
+
+
+async def test_review_failed_scan_leaves_no_active_review(
+    hass: HomeAssistant,
+    mock_config_entry: MockConfigEntry,
+) -> None:
+    """T4: a failed re-scan replaces a reviewed success with no token/review."""
+    transport = GateTransport()
+    manager = _manager(hass, mock_config_entry, transport)
+    task = manager.async_start_scan("pve1", 200, target_is_running=True)
+    transport.release(200)
+    await task
+    token = manager.record("pve1", 200).token
+    assert manager.confirm_review("pve1", 200, token) is True
+
+    transport.outcomes[200] = PackageScanError(
+        PackageScanFailure.SIMULATION_FAILED, "APT simulation failed"
+    )
+    task = manager.async_start_scan("pve1", 200, target_is_running=True)
+    transport.release(200)
+    await task
+
+    failed = manager.record("pve1", 200)
+    assert failed.status is PackageScanStatus.FAILED
+    assert failed.token is None
+    assert failed.reviewed is False
+
+
+async def test_review_stale_token_is_rejected_without_raising(
+    hass: HomeAssistant,
+    mock_config_entry: MockConfigEntry,
+) -> None:
+    """T5: a token from a superseded scan cannot confirm the new one."""
+    transport = GateTransport()
+    manager = _manager(hass, mock_config_entry, transport)
+    task = manager.async_start_scan("pve1", 200, target_is_running=True)
+    transport.release(200)
+    await task
+    stale_token = manager.record("pve1", 200).token
+
+    task = manager.async_start_scan("pve1", 200, target_is_running=True)
+    transport.release(200)
+    await task
+
+    assert manager.confirm_review("pve1", 200, stale_token) is False
+    assert manager.record("pve1", 200).reviewed is False
+
+
+async def test_review_token_from_one_target_does_not_confirm_another(
+    hass: HomeAssistant,
+    mock_config_entry: MockConfigEntry,
+) -> None:
+    """T6: a token scoped to one LXC cannot confirm a different LXC."""
+    transport = GateTransport()
+    manager = _manager(hass, mock_config_entry, transport)
+    task_ct106 = manager.async_start_scan("pve1", 106, target_is_running=True)
+    transport.release(106)
+    await task_ct106
+    task_ct107 = manager.async_start_scan("pve1", 107, target_is_running=True)
+    transport.release(107)
+    await task_ct107
+
+    token_ct107 = manager.record("pve1", 107).token
+    assert manager.confirm_review("pve1", 106, token_ct107) is False
+    assert manager.record("pve1", 106).reviewed is False
+
+
+async def test_review_confirmation_preserves_result_and_token(
+    hass: HomeAssistant,
+    mock_config_entry: MockConfigEntry,
+) -> None:
+    """T7: confirming changes only `reviewed`; result and token are untouched."""
+    transport = GateTransport()
+    manager = _manager(hass, mock_config_entry, transport)
+    task = manager.async_start_scan("pve1", 200, target_is_running=True)
+    transport.release(200)
+    await task
+    before = manager.record("pve1", 200)
+
+    assert manager.confirm_review("pve1", 200, before.token) is True
+    after = manager.record("pve1", 200)
+    assert after.reviewed is True
+    assert after.token == before.token
+    assert after.result is before.result
+
+
+async def test_review_confirming_twice_is_idempotent(
+    hass: HomeAssistant,
+    mock_config_entry: MockConfigEntry,
+) -> None:
+    """T8: confirming an already-reviewed record with the same token succeeds again."""
+    transport = GateTransport()
+    manager = _manager(hass, mock_config_entry, transport)
+    task = manager.async_start_scan("pve1", 200, target_is_running=True)
+    transport.release(200)
+    await task
+    token = manager.record("pve1", 200).token
+
+    assert manager.confirm_review("pve1", 200, token) is True
+    assert manager.confirm_review("pve1", 200, token) is True
+    assert manager.record("pve1", 200).reviewed is True
+
+
+async def test_review_confirm_during_in_flight_scan_does_not_disturb_it(
+    hass: HomeAssistant,
+    mock_config_entry: MockConfigEntry,
+) -> None:
+    """T9: confirming a stale token while a scan is running rejects cleanly.
+
+    Confirmation only ever reads and replaces the currently stored record;
+    it must not disturb the RUNNING record's own in-flight completion,
+    proving `_finish_scan`'s object-identity guard survives a confirmation
+    attempt racing it.
+    """
+    transport = GateTransport()
+    manager = _manager(hass, mock_config_entry, transport)
+    task = manager.async_start_scan("pve1", 200, target_is_running=True)
+    transport.release(200)
+    await task
+    stale_token = manager.record("pve1", 200).token
+
+    transport.rearm(200)
+    task = manager.async_start_scan("pve1", 200, target_is_running=True)
+    assert manager.record("pve1", 200).status is PackageScanStatus.RUNNING
+
+    assert manager.confirm_review("pve1", 200, stale_token) is False
+    assert manager.record("pve1", 200).status is PackageScanStatus.RUNNING
+
+    transport.release(200)
+    await task
+    landed = manager.record("pve1", 200)
+    assert landed.status is PackageScanStatus.SUCCESS
+    assert landed.token is not None
+    assert landed.token != stale_token
+    assert landed.reviewed is False
+
+
+async def test_review_empty_plan_cannot_be_confirmed(
+    hass: HomeAssistant,
+    mock_config_entry: MockConfigEntry,
+) -> None:
+    """T10: an empty successful plan may be viewed but never confirmed."""
+    transport = GateTransport()
+    empty_result = PackageScanResult(
+        os_id="debian",
+        os_version="12",
+        packages=(),
+        reboot_required=None,
+        not_upgraded_count=0,
+    )
+    transport.outcomes[200] = empty_result
+    manager = _manager(hass, mock_config_entry, transport)
+    task = manager.async_start_scan("pve1", 200, target_is_running=True)
+    transport.release(200)
+    await task
+
+    record = manager.record("pve1", 200)
+    assert record.status is PackageScanStatus.SUCCESS
+    assert record.token is not None
+    assert record.reviewed is False
+
+    assert manager.confirm_review("pve1", 200, record.token) is False
+    assert manager.record("pve1", 200).reviewed is False
+
+
+async def test_review_prune_discards_review_with_the_record(
+    hass: HomeAssistant,
+    mock_config_entry: MockConfigEntry,
+) -> None:
+    """T11: pruning a reviewed target discards its review with the record."""
+    transport = GateTransport()
+    manager = _manager(hass, mock_config_entry, transport)
+    task = manager.async_start_scan("pve1", 200, target_is_running=True)
+    transport.release(200)
+    await task
+    token = manager.record("pve1", 200).token
+    assert manager.confirm_review("pve1", 200, token) is True
+
+    manager.async_prune(current_targets=set())
+    assert manager.record("pve1", 200) == PackageScanRecord()
 
 
 @pytest.mark.parametrize(
@@ -599,4 +839,83 @@ async def test_stopped_lxc_hides_stored_package_count_but_preserves_it(
     sensor_state = hass.states.get("sensor.ct_nginx_pending_package_updates")
     assert sensor_state is not None
     assert sensor_state.state == "0"
+    assert transport.calls == [("pve1", 200)]
+
+
+async def test_stopped_lxc_preserves_reviewed_state_and_resumes_without_rescan(
+    hass: HomeAssistant,
+    mock_proxmox_client: MagicMock,
+    mock_config_entry: MockConfigEntry,
+    package_transport_material: None,
+) -> None:
+    """T12: a stopped LXC keeps its stored review; starting shows it again.
+
+    Stopping the LXC does not clear the manager's stored review or token;
+    only the sensor's (and button's) availability changes while stopped.
+    No automatic re-scan happens once it starts again.
+    """
+    transport = GateTransport()
+
+    async def fake_scan(_self, expected_node, vmid):
+        return await transport.async_scan(expected_node, vmid)
+
+    with patch(
+        "custom_components.hubinet_ops.packages.transport."
+        "AsyncSSHPackageTransport.async_scan",
+        new=fake_scan,
+    ):
+        await setup_integration(hass, mock_config_entry)
+        await hass.services.async_call(
+            "button",
+            SERVICE_PRESS,
+            {ATTR_ENTITY_ID: "button.ct_nginx_scan_pending_packages"},
+            blocking=True,
+        )
+        await asyncio.wait_for(transport.entered(200).wait(), 1)
+        transport.release(200)
+        await _wait_for_state(hass, "sensor.ct_nginx_pending_package_updates", "2")
+
+    coordinator = mock_config_entry.runtime_data
+    token = coordinator.package_manager.record("pve1", 200).token
+    assert coordinator.package_manager.confirm_review("pve1", 200, token) is True
+
+    state = hass.states.get("sensor.ct_nginx_pending_package_updates")
+    assert state is not None
+    assert state.attributes["reviewed"] is True
+
+    # The guest stops.
+    stopped_containers = deepcopy(
+        mock_proxmox_client._node_mock.lxc.get.return_value  # noqa: SLF001
+    )
+    for container in stopped_containers:
+        if container["vmid"] == "200":
+            container["status"] = "stopped"
+    mock_proxmox_client._node_mock.lxc.get.return_value = (  # noqa: SLF001
+        stopped_containers
+    )
+    await coordinator.async_refresh()
+    await hass.async_block_till_done()
+
+    sensor_state = hass.states.get("sensor.ct_nginx_pending_package_updates")
+    assert sensor_state is not None
+    assert sensor_state.state == STATE_UNAVAILABLE
+    record = coordinator.package_manager.record("pve1", 200)
+    assert record.reviewed is True
+    assert record.token == token
+
+    # The guest starts again; review becomes visible again, with no new scan.
+    running_containers = deepcopy(stopped_containers)
+    for container in running_containers:
+        if container["vmid"] == "200":
+            container["status"] = "running"
+    mock_proxmox_client._node_mock.lxc.get.return_value = (  # noqa: SLF001
+        running_containers
+    )
+    await coordinator.async_refresh()
+    await hass.async_block_till_done()
+
+    sensor_state = hass.states.get("sensor.ct_nginx_pending_package_updates")
+    assert sensor_state is not None
+    assert sensor_state.state == "2"
+    assert sensor_state.attributes["reviewed"] is True
     assert transport.calls == [("pve1", 200)]

@@ -68,10 +68,20 @@ class PackageScanResult:
 
 @dataclass(frozen=True, slots=True)
 class PackageScanRecord:
-    """Ephemeral state for the latest scan attempt of one LXC guest."""
+    """Ephemeral state for the latest scan attempt of one LXC guest.
+
+    ``token`` and ``reviewed`` carry package-review state on this same
+    record; there is no separate review object, copy, or history. ``token``
+    is present only for a successful attempt and is a fresh opaque value
+    for optimistic concurrency between viewing and confirming a plan -- it
+    is not a credential, identity, or persisted value. ``reviewed`` is true
+    only once this exact record's plan has been explicitly confirmed.
+    """
 
     status: PackageScanStatus = PackageScanStatus.NEVER
     last_attempt: datetime | None = None
     result: PackageScanResult | None = None
     failure: PackageScanFailure | None = None
     error_message: str | None = None
+    token: str | None = None
+    reviewed: bool = False

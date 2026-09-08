@@ -341,5 +341,21 @@
         "pve": "Proxmox user - Proxmox VE authentication server"
       }
     }
+  },
+  "services": {
+    "confirm_package_review": {
+      "name": "Confirm package review",
+      "description": "Confirms the exact package plan previously returned by Get package plan as reviewed, if it is still the current one. The token is not a password; it only proves the plan being confirmed is still the one shown, not a newer or different scan.",
+      "fields": {
+        "token": {
+          "name": "Token",
+          "description": "The token returned alongside the plan by Get package plan. Confirmation is rejected, without raising an error, if a new scan has since replaced it."
+        }
+      }
+    },
+    "get_package_plan": {
+      "name": "Get package plan",
+      "description": "Returns the latest scan status for one LXC, and for a successful scan, its exact pending-package plan and a token to confirm it with. Never starts a scan and never changes review state."
+    }
   }
 }

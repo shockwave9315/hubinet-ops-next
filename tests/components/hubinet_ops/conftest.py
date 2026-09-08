@@ -1,17 +1,11 @@
 """Common fixtures for the ProxmoxVE tests."""
 
-from collections.abc import Generator
+from collections.abc import Generator, Iterator
+from contextlib import suppress
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from homeassistant.const import (
-    CONF_HOST,
-    CONF_PASSWORD,
-    CONF_PORT,
-    CONF_TOKEN,
-    CONF_USERNAME,
-    CONF_VERIFY_SSL,
-)
 from tests.common import (
     MockConfigEntry,
     load_json_array_fixture,
@@ -28,8 +22,19 @@ from custom_components.hubinet_ops.const import (
     CONF_TOKEN_SECRET,
     CONF_VMS,
     DOMAIN,
+    PACKAGE_SCAN_KNOWN_HOSTS,
+    PACKAGE_SCAN_PRIVATE_KEY,
     ProxmoxPermission,
 )
+from homeassistant.const import (
+    CONF_HOST,
+    CONF_PASSWORD,
+    CONF_PORT,
+    CONF_TOKEN,
+    CONF_USERNAME,
+    CONF_VERIFY_SSL,
+)
+from homeassistant.core import HomeAssistant
 
 from . import MERGED_PERMISSIONS
 
@@ -208,3 +213,18 @@ def mock_config_entry_token_other() -> MockConfigEntry:
         data=MOCK_TEST_TOKEN_OTHER_CONFIG,
         entry_id="1234",
     )
+
+
+@pytest.fixture
+def package_transport_material(hass: HomeAssistant) -> Iterator[None]:
+    """Provide and then remove the two local package transport prerequisites."""
+    private_key = Path(hass.config.path(PACKAGE_SCAN_PRIVATE_KEY))
+    known_hosts = Path(hass.config.path(PACKAGE_SCAN_KNOWN_HOSTS))
+    private_key.parent.mkdir(parents=True, exist_ok=True)
+    private_key.write_text("test private key")
+    known_hosts.write_text("test host key")
+    yield
+    private_key.unlink(missing_ok=True)
+    known_hosts.unlink(missing_ok=True)
+    with suppress(OSError):
+        private_key.parent.rmdir()
