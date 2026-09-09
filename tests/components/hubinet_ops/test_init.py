@@ -1,7 +1,9 @@
 """Tests for the Proxmox VE integration initialization."""
 
+from pathlib import Path
 from unittest.mock import MagicMock
 
+import asyncssh
 import pytest
 import requests
 from freezegun.api import FrozenDateTimeFactory
@@ -27,12 +29,18 @@ from tests.common import (
     async_load_json_array_fixture,
 )
 
+from custom_components.hubinet_ops import async_migrate_entry
 from custom_components.hubinet_ops.const import (
     AUTH_OTHER,
     AUTH_PAM,
     CONF_AUTH_METHOD,
+    CONF_PACKAGE_NODE,
     CONF_REALM,
+    CONF_SSH_HOST_KEY,
+    CONF_SSH_PRIVATE_KEY,
     DOMAIN,
+    PACKAGE_SCAN_KNOWN_HOSTS,
+    PACKAGE_SCAN_PRIVATE_KEY,
 )
 from custom_components.hubinet_ops.coordinator import (
     DEFAULT_UPDATE_INTERVAL,
@@ -41,6 +49,67 @@ from custom_components.hubinet_ops.coordinator import (
 )
 
 from . import setup_integration
+from .conftest import MOCK_TEST_CONFIG
+
+
+async def test_migration_v3_imports_unambiguous_legacy_transport(
+    hass: HomeAssistant,
+) -> None:
+    """Complete single-node legacy files move into data and remain on disk."""
+    private_key = asyncssh.generate_private_key("ssh-ed25519")
+    host_key = asyncssh.generate_private_key("ssh-ed25519")
+    private_key_bytes = private_key.export_private_key()
+    private_path = Path(hass.config.path(PACKAGE_SCAN_PRIVATE_KEY))
+    known_hosts_path = Path(hass.config.path(PACKAGE_SCAN_KNOWN_HOSTS))
+    private_path.parent.mkdir(parents=True, exist_ok=True)
+    private_path.unlink(missing_ok=True)
+    known_hosts_path.unlink(missing_ok=True)
+    private_path.write_bytes(private_key_bytes)
+    known_hosts_path.write_bytes(b"127.0.0.1 " + host_key.export_public_key())
+    entry = MockConfigEntry(
+        domain=DOMAIN, version=3, data=MOCK_TEST_CONFIG, entry_id="legacy"
+    )
+    entry.add_to_hass(hass)
+
+    try:
+        assert await async_migrate_entry(hass, entry) is True
+        assert entry.version == 4
+        assert entry.data[CONF_PACKAGE_NODE] == "pve1"
+        assert entry.data[CONF_SSH_PRIVATE_KEY] == private_key_bytes.decode()
+        assert entry.data[CONF_SSH_HOST_KEY] == (
+            host_key.export_public_key().decode().strip()
+        )
+        assert private_path.exists()
+        assert known_hosts_path.exists()
+    finally:
+        private_path.unlink(missing_ok=True)
+        known_hosts_path.unlink(missing_ok=True)
+
+
+async def test_migration_v3_ignores_incomplete_legacy_transport(
+    hass: HomeAssistant,
+) -> None:
+    """Unsafe legacy material is never partially copied into entry data."""
+    private_path = Path(hass.config.path(PACKAGE_SCAN_PRIVATE_KEY))
+    known_hosts_path = Path(hass.config.path(PACKAGE_SCAN_KNOWN_HOSTS))
+    private_path.parent.mkdir(parents=True, exist_ok=True)
+    private_path.unlink(missing_ok=True)
+    known_hosts_path.unlink(missing_ok=True)
+    private_path.write_text("not a private key")
+    entry = MockConfigEntry(
+        domain=DOMAIN, version=3, data=MOCK_TEST_CONFIG, entry_id="legacy-bad"
+    )
+    entry.add_to_hass(hass)
+
+    try:
+        assert await async_migrate_entry(hass, entry) is True
+        assert entry.version == 4
+        assert CONF_SSH_PRIVATE_KEY not in entry.data
+        assert CONF_SSH_HOST_KEY not in entry.data
+        assert CONF_PACKAGE_NODE not in entry.data
+    finally:
+        private_path.unlink(missing_ok=True)
+        known_hosts_path.unlink(missing_ok=True)
 
 
 @pytest.mark.parametrize(
@@ -167,7 +236,7 @@ async def test_setup_exceptions(
         ),
     ],
 )
-async def test_migration_v1_to_v3(
+async def test_migration_v1_to_v4(
     hass: HomeAssistant,
     entity_registry: er.EntityRegistry,
     device_registry: dr.DeviceRegistry,
@@ -175,7 +244,7 @@ async def test_migration_v1_to_v3(
     expected_auth_method: str,
     expected_realm: str,
 ) -> None:
-    """Test migration from version 1 to 3."""
+    """Test migration from version 1 to the current version."""
     entry = mock_config_entry
 
     entry.add_to_hass(hass)
@@ -220,7 +289,7 @@ async def test_migration_v1_to_v3(
     await hass.config_entries.async_setup(entry.entry_id)
     await hass.async_block_till_done()
 
-    assert entry.version == 3
+    assert entry.version == 4
     assert entry.data[CONF_AUTH_METHOD] == expected_auth_method
     assert entry.data[CONF_REALM] == expected_realm
 
@@ -302,13 +371,13 @@ async def test_migration_v1_to_v3(
         ),
     ],
 )
-async def test_migration_v2_to_v3(
+async def test_migration_v2_to_v4(
     hass: HomeAssistant,
     mock_config_entry: MockConfigEntry,
     expected_auth_method: str,
     expected_realm: str,
 ) -> None:
-    """Test migration from version 2 to 3."""
+    """Test migration from version 2 to the current version."""
     entry = mock_config_entry
 
     entry.add_to_hass(hass)
@@ -317,7 +386,7 @@ async def test_migration_v2_to_v3(
     await hass.config_entries.async_setup(entry.entry_id)
     await hass.async_block_till_done()
 
-    assert entry.version == 3
+    assert entry.version == 4
     assert entry.data[CONF_AUTH_METHOD] == expected_auth_method
     assert entry.data[CONF_REALM] == expected_realm
 

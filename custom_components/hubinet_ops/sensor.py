@@ -541,6 +541,7 @@ async def async_setup_entry(
             entities.extend(
                 PackageScanSensor(coordinator, container, node_data)
                 for node_data, container in containers
+                if node_data.node["node"] == coordinator.package_node
             )
         async_add_entities(entities)
 

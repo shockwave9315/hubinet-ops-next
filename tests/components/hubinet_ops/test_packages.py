@@ -12,10 +12,6 @@ from unittest.mock import MagicMock, patch
 import pytest
 from tests.common import MockConfigEntry  # noqa: TID251
 
-from custom_components.hubinet_ops.const import (
-    PACKAGE_SCAN_KNOWN_HOSTS,
-    PACKAGE_SCAN_PRIVATE_KEY,
-)
 from custom_components.hubinet_ops.packages.manager import PackageManager
 from custom_components.hubinet_ops.packages.models import (
     PackageScanError,
@@ -467,49 +463,74 @@ async def test_review_prune_discards_review_with_the_record(
     assert manager.record("pve1", 200) == PackageScanRecord()
 
 
-@pytest.mark.parametrize(
-    "present_file", [None, PACKAGE_SCAN_PRIVATE_KEY, PACKAGE_SCAN_KNOWN_HOSTS]
-)
 async def test_package_entities_are_absent_without_transport_material(
     hass: HomeAssistant,
     mock_proxmox_client: MagicMock,
     mock_config_entry: MockConfigEntry,
-    present_file: str | None,
 ) -> None:
-    """Controls and summaries are not exposed when key or known_hosts is absent."""
-    path = Path(hass.config.path(present_file)) if present_file is not None else None
-    if path is not None:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text("test material")
-    try:
-        await setup_integration(hass, mock_config_entry)
-        assert hass.states.get("button.ct_nginx_scan_pending_packages") is None
-        assert hass.states.get("sensor.ct_nginx_pending_package_updates") is None
-    finally:
-        if path is not None:
-            path.unlink(missing_ok=True)
-            with suppress(OSError):
-                path.parent.rmdir()
-
-
-async def test_trust_files_added_without_reload_do_not_enable_entities(
-    hass: HomeAssistant,
-    mock_proxmox_client: MagicMock,
-    mock_config_entry: MockConfigEntry,
-) -> None:
-    """H2/N5: reload, not a live refresh, is the trust-material boundary.
-
-    Trust material is evaluated once per config-entry setup. Creating both
-    files afterward, without a reload, must not retroactively enable
-    package entities -- even after a normal coordinator data refresh.
-    Reloading (a fresh coordinator, and a fresh async_prepare) does.
-    """
+    """Controls and summaries are absent without in-entry trust material."""
     await setup_integration(hass, mock_config_entry)
     assert hass.states.get("button.ct_nginx_scan_pending_packages") is None
     assert hass.states.get("sensor.ct_nginx_pending_package_updates") is None
 
-    private_key = Path(hass.config.path(PACKAGE_SCAN_PRIVATE_KEY))
-    known_hosts = Path(hass.config.path(PACKAGE_SCAN_KNOWN_HOSTS))
+
+async def test_package_entities_are_limited_to_authenticated_local_node(
+    hass: HomeAssistant,
+    mock_proxmox_client: MagicMock,
+    mock_config_entry: MockConfigEntry,
+    package_transport_material: None,
+) -> None:
+    """Remote-node LXCs retain native entities but receive no package controls."""
+    mock_proxmox_client.nodes.get.return_value = mock_proxmox_client._all_nodes[:2]
+    local_resource = mock_proxmox_client._node_mock
+    remote_resource = MagicMock()
+    remote_resource.qemu.get.return_value = []
+    remote_resource.lxc.get.return_value = [
+        {
+            "vmid": "300",
+            "name": "ct-remote",
+            "status": "running",
+            "maxmem": 1073741824,
+            "cpus": 1,
+            "mem": 536870912,
+            "cpu": 0.05,
+            "maxdisk": 21474836480,
+            "disk": 1125899906,
+            "uptime": 43200,
+            "netin": 1048576,
+            "netout": 524288,
+        }
+    ]
+    remote_resource.storage.get.return_value = []
+    remote_resource.tasks.get.return_value = []
+    mock_proxmox_client.nodes.side_effect = lambda node: (
+        local_resource if node == "pve1" else remote_resource
+    )
+
+    await setup_integration(hass, mock_config_entry)
+
+    assert hass.states.get("sensor.ct_nginx_pending_package_updates") is not None
+    assert hass.states.get("button.ct_nginx_scan_pending_packages") is not None
+    assert hass.states.get("sensor.ct_remote_status") is not None
+    assert hass.states.get("binary_sensor.ct_remote_status") is not None
+    assert hass.states.get("sensor.ct_remote_pending_package_updates") is None
+    assert hass.states.get("button.ct_remote_scan_pending_packages") is None
+
+
+async def test_legacy_trust_files_are_not_runtime_inputs(
+    hass: HomeAssistant,
+    mock_proxmox_client: MagicMock,
+    mock_config_entry: MockConfigEntry,
+) -> None:
+    """Version-4 runtime never discovers trust from files, even on reload."""
+    await setup_integration(hass, mock_config_entry)
+    assert hass.states.get("button.ct_nginx_scan_pending_packages") is None
+    assert hass.states.get("sensor.ct_nginx_pending_package_updates") is None
+
+    private_key = hass.config.path(".ssh/hubinet_ops")
+    known_hosts = hass.config.path(".ssh/known_hosts")
+    private_key = Path(private_key)
+    known_hosts = Path(known_hosts)
     private_key.parent.mkdir(parents=True, exist_ok=True)
     private_key.write_text("test private key")
     known_hosts.write_text("test host key")
@@ -522,10 +543,8 @@ async def test_trust_files_added_without_reload_do_not_enable_entities(
 
         assert await hass.config_entries.async_reload(mock_config_entry.entry_id)
         await hass.async_block_till_done()
-        assert hass.states.get("button.ct_nginx_scan_pending_packages") is not None
-        assert (
-            hass.states.get("sensor.ct_nginx_pending_package_updates") is not None
-        )
+        assert hass.states.get("button.ct_nginx_scan_pending_packages") is None
+        assert hass.states.get("sensor.ct_nginx_pending_package_updates") is None
     finally:
         private_key.unlink(missing_ok=True)
         known_hosts.unlink(missing_ok=True)

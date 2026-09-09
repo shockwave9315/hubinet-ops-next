@@ -4,7 +4,6 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import timedelta
 import logging
-from pathlib import Path
 from typing import Any, override
 
 from proxmoxer import AuthenticationError, ProxmoxAPI
@@ -30,14 +29,15 @@ from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, Upda
 from .common import sanitize_config_entry
 from .const import (
     CONF_NODE,
+    CONF_PACKAGE_NODE,
+    CONF_SSH_HOST_KEY,
+    CONF_SSH_PRIVATE_KEY,
     CONF_TOKEN_ID,
     CONF_TOKEN_SECRET,
     DEFAULT_TIMEOUT,
     DEFAULT_VERIFY_SSL,
     DOMAIN,
     NODE_ONLINE,
-    PACKAGE_SCAN_KNOWN_HOSTS,
-    PACKAGE_SCAN_PRIVATE_KEY,
 )
 from .packages.manager import PackageManager
 from .packages.transport import AsyncSSHPackageTransport
@@ -120,11 +120,12 @@ class ProxmoxCoordinator(DataUpdateCoordinator[dict[str, ProxmoxNodeData]]):
             config_entry,
             transport=AsyncSSHPackageTransport(
                 endpoint=config_entry.data[CONF_HOST],
-                private_key_path=Path(hass.config.path(PACKAGE_SCAN_PRIVATE_KEY)),
-                known_hosts_path=Path(hass.config.path(PACKAGE_SCAN_KNOWN_HOSTS)),
+                private_key=config_entry.data.get(CONF_SSH_PRIVATE_KEY),
+                host_key=config_entry.data.get(CONF_SSH_HOST_KEY),
             ),
             on_state_change=self.async_update_listeners,
         )
+        self.package_node: str | None = config_entry.data.get(CONF_PACKAGE_NODE)
 
         self.known_nodes: set[str] = set()
         self.known_vms: set[tuple[str, int]] = set()
@@ -146,9 +147,6 @@ class ProxmoxCoordinator(DataUpdateCoordinator[dict[str, ProxmoxNodeData]]):
     @override
     async def _async_setup(self) -> None:
         """Set up the coordinator."""
-        # Package SSH trust material is evaluated once per config-entry
-        # setup, off the event loop; reload remains the boundary for
-        # picking up trust files added or changed afterward.
         await self.package_manager.async_prepare()
         try:
             await self.hass.async_add_executor_job(self._init_proxmox)

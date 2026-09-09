@@ -34,11 +34,15 @@ from .common import sanitize_config_entry
 from .const import (
     AUTH_METHODS,
     AUTH_OTHER,
+    AUTH_PVE,
     CONF_AUTH_METHOD,
     CONF_CONTAINERS,
     CONF_NODE,
     CONF_NODES,
+    CONF_PACKAGE_NODE,
     CONF_REALM,
+    CONF_SSH_HOST_KEY,
+    CONF_SSH_PRIVATE_KEY,
     CONF_TOKEN_ID,
     CONF_TOKEN_SECRET,
     CONF_VMS,
@@ -47,7 +51,19 @@ from .const import (
     DEFAULT_TIMEOUT,
     DEFAULT_VERIFY_SSL,
     DOMAIN,
+    GUIDED_TOKEN_ID,
+    GUIDED_USERNAME,
+    INTEGRATION_VERSION,
     NODE_ONLINE,
+)
+from .enrollment import EnrollmentError, parse_enrollment
+from .packages.transport import (
+    AsyncSSHPackageTransport,
+    PackageHelperProtocolError,
+    PackageHelperUnavailableError,
+    PackageTransportAuthenticationError,
+    PackageTransportConnectionError,
+    PackageTransportHostKeyError,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -85,6 +101,26 @@ TOKEN_SCHEMA = vol.Schema(
         vol.Required(CONF_TOKEN_ID): cv.string,
         vol.Required(CONF_TOKEN_SECRET): cv.string,
     }
+)
+GUIDED_SCHEMA = vol.Schema(
+    {
+        vol.Required(CONF_HOST): cv.string,
+        vol.Required(CONF_PORT, default=DEFAULT_PORT): cv.port,
+        vol.Optional(CONF_VERIFY_SSL, default=DEFAULT_VERIFY_SSL): cv.boolean,
+    }
+)
+CONF_ENROLLMENT = "enrollment"
+ENROLLMENT_SCHEMA = vol.Schema(
+    {
+        vol.Required(CONF_ENROLLMENT): TextSelector(
+            TextSelectorConfig(type=TextSelectorType.PASSWORD)
+        )
+    }
+)
+BOOTSTRAP_COMMAND = (
+    "curl -fsSL "
+    "https://raw.githubusercontent.com/shockwave9315/hubinet-ops-next/"
+    f"{INTEGRATION_VERSION}/deploy/bootstrap-proxmox.sh | bash"
 )
 
 
@@ -173,7 +209,7 @@ def _get_nodes_data(data: dict[str, Any]) -> list[dict[str, Any]]:
 class ProxmoxveConfigFlow(ConfigFlow, domain=DOMAIN):
     """Handle a config flow for Proxmox VE."""
 
-    VERSION = 3
+    VERSION = 4
     _data: dict[str, Any] = {}
     _entry: ConfigEntry
 
@@ -182,13 +218,99 @@ class ProxmoxveConfigFlow(ConfigFlow, domain=DOMAIN):
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
         """Handle the initial step."""
+        return self.async_show_menu(
+            step_id="user", menu_options=["guided", "existing_credentials"]
+        )
+
+    async def async_step_existing_credentials(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Preserve the upstream-compatible manual credential path."""
         if user_input is not None:
             self._data = user_input
             return await self.async_step_user_auth()
 
         return self.async_show_form(
-            step_id="user",
+            step_id="existing_credentials",
             data_schema=BASE_SCHEMA,
+        )
+
+    async def async_step_guided(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Collect only the endpoint settings needed before bootstrap."""
+        if user_input is not None:
+            self._async_abort_entries_match({CONF_HOST: user_input[CONF_HOST]})
+            self._data = {
+                **user_input,
+                CONF_AUTH_METHOD: AUTH_PVE,
+                CONF_REALM: AUTH_PVE,
+                CONF_USERNAME: GUIDED_USERNAME,
+                CONF_TOKEN: True,
+                CONF_TOKEN_ID: GUIDED_TOKEN_ID,
+            }
+            return await self.async_step_enrollment()
+
+        return self.async_show_form(step_id="guided", data_schema=GUIDED_SCHEMA)
+
+    async def async_step_enrollment(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Validate the temporary enrollment and create one ready entry."""
+        errors: dict[str, str] = {}
+        if user_input is not None:
+            try:
+                enrollment = parse_enrollment(user_input[CONF_ENROLLMENT])
+            except EnrollmentError as err:
+                errors["base"] = err.code
+            else:
+                final_data = {
+                    **self._data,
+                    CONF_TOKEN_SECRET: enrollment.token_secret,
+                    CONF_SSH_PRIVATE_KEY: enrollment.private_key,
+                    CONF_SSH_HOST_KEY: enrollment.host_key,
+                }
+                proxmox_nodes, errors = await self._validate_input(final_data)
+                if not errors:
+                    try:
+                        transport = AsyncSSHPackageTransport(
+                            endpoint=final_data[CONF_HOST],
+                            private_key=enrollment.private_key,
+                            host_key=enrollment.host_key,
+                        )
+                        probe = await transport.async_probe()
+                    except ValueError:
+                        errors["base"] = "ssh_cannot_connect"
+                    except PackageTransportHostKeyError:
+                        errors["base"] = "ssh_host_key_mismatch"
+                    except PackageTransportAuthenticationError:
+                        errors["base"] = "ssh_auth_failed"
+                    except PackageTransportConnectionError:
+                        errors["base"] = "ssh_cannot_connect"
+                    except PackageHelperUnavailableError:
+                        errors["base"] = "helper_missing_or_outdated"
+                    except PackageHelperProtocolError:
+                        errors["base"] = "helper_protocol_mismatch"
+                    else:
+                        if probe.node not in {
+                            node[CONF_NODE] for node in proxmox_nodes
+                        }:
+                            errors["base"] = "package_node_not_found"
+                        else:
+                            return self.async_create_entry(
+                                title=final_data[CONF_HOST],
+                                data={
+                                    **final_data,
+                                    CONF_NODES: proxmox_nodes,
+                                    CONF_PACKAGE_NODE: probe.node,
+                                },
+                            )
+
+        return self.async_show_form(
+            step_id="enrollment",
+            data_schema=ENROLLMENT_SCHEMA,
+            errors=errors,
+            description_placeholders={"bootstrap_command": BOOTSTRAP_COMMAND},
         )
 
     async def async_step_user_auth(

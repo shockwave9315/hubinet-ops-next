@@ -3,9 +3,9 @@
 import asyncio
 from collections.abc import Mapping
 from contextlib import AbstractAsyncContextManager
+from dataclasses import dataclass
 import json
 import logging
-from pathlib import Path
 import re
 from typing import Any, Protocol
 
@@ -19,7 +19,7 @@ from .parser import PackageScanParseError, parse_apt_simulation, parse_os_releas
 _LOGGER = logging.getLogger(__name__)
 
 PROTOCOL_VERSION = 1
-HELPER_VERSION = 1
+OPERATION_PROBE = "probe"
 OPERATION_SCAN_PACKAGES = "scan_packages"
 
 _NODE_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9.-]{0,62}")
@@ -28,6 +28,48 @@ _MAX_RESPONSE_BYTES = 48 * 1024 * 1024
 _MAX_STDERR_BYTES = 64 * 1024
 _READ_CHUNK_BYTES = 64 * 1024
 TRANSPORT_TIMEOUT_SECONDS = 300.0
+
+
+def _build_known_hosts(endpoint: str, host_key: str, port: int = 22) -> bytes:
+    """Bind one enrolled public host key to the user-entered endpoint."""
+    if not endpoint or any(char.isspace() for char in endpoint) or "," in endpoint:
+        raise ValueError("PVE SSH endpoint is invalid")
+    if "\n" in host_key or "\r" in host_key:
+        raise ValueError("PVE SSH host key must contain exactly one key")
+    host_pattern = endpoint if port == 22 else f"[{endpoint}]:{port}"
+    return f"{host_pattern} {host_key}\n".encode("ascii")
+
+
+class PackageTransportConnectionError(Exception):
+    """The SSH endpoint could not be reached."""
+
+
+class PackageTransportTimeoutError(PackageTransportConnectionError):
+    """The SSH request exceeded its bounded deadline."""
+
+
+class PackageTransportAuthenticationError(Exception):
+    """The enrolled SSH key was not accepted."""
+
+
+class PackageTransportHostKeyError(Exception):
+    """The SSH endpoint did not present the enrolled host key."""
+
+
+class PackageHelperUnavailableError(Exception):
+    """The forced-command helper is missing or does not support probing."""
+
+
+class PackageHelperProtocolError(Exception):
+    """The helper returned an incompatible or malformed protocol response."""
+
+
+@dataclass(frozen=True, slots=True)
+class PackageHelperProbe:
+    """Authenticated identity returned by the local PVE helper."""
+
+    node: str
+    helper_version: int
 
 
 class _SSHReader(Protocol):
@@ -85,8 +127,8 @@ class AsyncSSHPackageTransport:
         self,
         *,
         endpoint: str,
-        private_key_path: Path,
-        known_hosts_path: Path,
+        private_key: str | None,
+        host_key: str | None,
         connector: _SSHConnector = asyncssh.connect,
         port: int = 22,
     ) -> None:
@@ -96,55 +138,65 @@ class AsyncSSHPackageTransport:
         exists only so tests can point the real AsyncSSH client at a local
         in-process test server.
         """
-        if not private_key_path.is_absolute() or not known_hosts_path.is_absolute():
-            raise ValueError("package scan SSH trust paths must be absolute")
         self._endpoint = endpoint
-        self._private_key_path = private_key_path
-        self._known_hosts_path = known_hosts_path
         self._connector = connector
         self._port = port
+        self._client_key: asyncssh.SSHKey | None = None
         self._known_hosts_data: bytes | None = None
-        self._ready = False
+        if private_key and host_key:
+            self._client_key = asyncssh.import_private_key(private_key.encode())
+            if self._client_key.get_algorithm() != "ssh-ed25519":
+                raise ValueError("package SSH private key must be Ed25519")
+            imported_host_key = asyncssh.import_public_key(host_key.encode())
+            if imported_host_key.get_algorithm() != "ssh-ed25519":
+                raise ValueError("package SSH host key must be Ed25519")
+            canonical_host_key = imported_host_key.export_public_key().decode().strip()
+            self._known_hosts_data = _build_known_hosts(
+                endpoint, canonical_host_key, port
+            )
 
     @property
     def configured(self) -> bool:
-        """Return whether trust material was ready at the last setup pass.
-
-        This never touches the filesystem itself; it only reports the
-        outcome cached by :meth:`async_prepare`. Trust material added or
-        changed without a reload is intentionally not reflected here.
-        """
-        return self._ready
+        """Return whether both in-memory trust inputs are present."""
+        return self._client_key is not None and self._known_hosts_data is not None
 
     async def async_prepare(self, hass: HomeAssistant) -> None:
-        """Evaluate and cache local SSH trust material once, off the loop.
+        """Retain the package-manager setup hook; no filesystem I/O is needed."""
 
-        Both required files are checked, and known_hosts content is read
-        into memory here so :meth:`async_scan` never opens it itself; per
-        the accepted architecture, readiness stays fixed until the next
-        config-entry setup (reload).
-        """
-        self._known_hosts_data = await hass.async_add_executor_job(
-            self._load_known_hosts
+    def _require_configured(self) -> None:
+        """Fail closed before connecting when either trust input is absent."""
+        if not self.configured:
+            raise PackageTransportConnectionError(
+                "package SSH trust material is not configured"
+            )
+
+    async def async_probe(self) -> PackageHelperProbe:
+        """Prove SSH trust, forced-command routing, protocol, and local node."""
+        payload = await self._async_request(
+            {
+                "protocol_version": PROTOCOL_VERSION,
+                "operation": OPERATION_PROBE,
+            }
         )
-        self._ready = self._known_hosts_data is not None
-
-    def _load_known_hosts(self) -> bytes | None:
-        """Blockingly check both trust files and read known_hosts content."""
-        try:
-            if not (
-                self._private_key_path.is_file()
-                and self._private_key_path.stat().st_size > 0
-            ):
-                return None
-            if not (
-                self._known_hosts_path.is_file()
-                and self._known_hosts_path.stat().st_size > 0
-            ):
-                return None
-            return self._known_hosts_path.read_bytes()
-        except OSError:
-            return None
+        if not isinstance(payload, Mapping):
+            raise PackageHelperProtocolError("helper returned malformed probe data")
+        if payload.get("protocol_version") != PROTOCOL_VERSION:
+            raise PackageHelperProtocolError("helper protocol is incompatible")
+        helper_version = payload.get("helper_version")
+        if type(helper_version) is not int or helper_version < 1:
+            raise PackageHelperProtocolError("helper version metadata is malformed")
+        if payload.get("operation") != OPERATION_PROBE:
+            raise PackageHelperUnavailableError(
+                "helper is missing or outdated; run the bootstrap command again"
+            )
+        node = payload.get("node")
+        if payload.get("ok") is not True or not isinstance(node, str):
+            raise PackageHelperUnavailableError(
+                "helper probe failed; run the bootstrap command again"
+            )
+        if not _NODE_RE.fullmatch(node):
+            raise PackageHelperProtocolError("helper returned an invalid PVE node")
+        return PackageHelperProbe(node=node, helper_version=helper_version)
 
     async def async_scan(self, expected_node: str, vmid: int) -> PackageScanResult:
         """Scan one upstream-discovered LXC through the configured API endpoint."""
@@ -154,13 +206,38 @@ class AsyncSSHPackageTransport:
             "operation": OPERATION_SCAN_PACKAGES,
             "target": {"node": expected_node, "vmid": vmid},
         }
-        encoded = json.dumps(request, separators=(",", ":"), sort_keys=True).encode()
-        if len(encoded) > _MAX_REQUEST_BYTES:
+        try:
+            payload = await self._async_request(request)
+        except PackageTransportTimeoutError as err:
+            raise PackageScanError(
+                PackageScanFailure.TIMEOUT, "package scan helper timed out"
+            ) from err
+        except PackageTransportHostKeyError as err:
             raise PackageScanError(
                 PackageScanFailure.EXECUTION_FAILED,
-                "package scan request exceeded its bound",
-            )
+                "package scan SSH host key did not match",
+            ) from err
+        except PackageTransportAuthenticationError as err:
+            raise PackageScanError(
+                PackageScanFailure.EXECUTION_FAILED,
+                "package scan SSH authentication failed",
+            ) from err
+        except (
+            PackageTransportConnectionError,
+            PackageHelperUnavailableError,
+            PackageHelperProtocolError,
+        ) as err:
+            raise PackageScanError(
+                PackageScanFailure.EXECUTION_FAILED, str(err)
+            ) from err
+        return _parse_response(payload, expected_node, vmid)
 
+    async def _async_request(self, request: Mapping[str, Any]) -> Any:
+        """Send one bounded typed request through the pinned SSH connection."""
+        self._require_configured()
+        encoded = json.dumps(request, separators=(",", ":"), sort_keys=True).encode()
+        if len(encoded) > _MAX_REQUEST_BYTES:
+            raise PackageHelperProtocolError("package helper request exceeded its bound")
         try:
             async with asyncio.timeout(TRANSPORT_TIMEOUT_SECONDS):
                 async with self._connector(
@@ -169,7 +246,7 @@ class AsyncSSHPackageTransport:
                     username="root",
                     config=None,
                     known_hosts=self._known_hosts_data,
-                    client_keys=[str(self._private_key_path)],
+                    client_keys=[self._client_key],
                     agent_path=None,
                     pkcs11_provider=None,
                     password=None,
@@ -196,36 +273,32 @@ class AsyncSSHPackageTransport:
                     stdout, stderr = await _drain_process_output(process)
                     completed = await process.wait()
         except TimeoutError as err:
-            raise PackageScanError(
-                PackageScanFailure.TIMEOUT, "package scan helper timed out"
+            raise PackageTransportTimeoutError("package helper timed out") from err
+        except asyncssh.HostKeyNotVerifiable as err:
+            raise PackageTransportHostKeyError("PVE SSH host key did not match") from err
+        except asyncssh.PermissionDenied as err:
+            raise PackageTransportAuthenticationError(
+                "PVE SSH authentication failed"
             ) from err
         except (asyncssh.Error, OSError, ValueError) as err:
-            raise PackageScanError(
-                PackageScanFailure.EXECUTION_FAILED,
-                "package scan SSH execution failed",
-            ) from err
+            raise PackageTransportConnectionError("PVE SSH connection failed") from err
 
         if not isinstance(stdout, bytes):
-            raise PackageScanError(
-                PackageScanFailure.EXECUTION_FAILED,
-                "package scan helper returned invalid output",
-            )
+            raise PackageHelperProtocolError("package helper returned invalid output")
         if completed.returncode != 0 and not stdout:
             _LOGGER.debug(
                 "package scan helper exited %s with bounded diagnostics: %r",
                 completed.returncode,
                 stderr[:200],
             )
-            raise PackageScanError(
-                PackageScanFailure.EXECUTION_FAILED,
-                "package scan SSH execution failed",
+            raise PackageHelperUnavailableError(
+                "helper is missing or could not be executed"
             )
         try:
             payload = json.loads(stdout.decode())
         except (UnicodeDecodeError, ValueError) as err:
-            raise PackageScanError(
-                PackageScanFailure.EXECUTION_FAILED,
-                "package scan helper returned a malformed response",
+            raise PackageHelperProtocolError(
+                "package helper returned a malformed response"
             ) from err
         # The deployed helper contract is ok:true -> exit 0; ok:false may
         # legitimately use a nonzero exit. A structured success payload
@@ -234,11 +307,10 @@ class AsyncSSHPackageTransport:
         # rather than be accepted as a successful scan.
         if isinstance(payload, Mapping) and payload.get("ok") is True:
             if completed.returncode != 0:
-                raise PackageScanError(
-                    PackageScanFailure.EXECUTION_FAILED,
-                    "package scan helper reported success with an abnormal exit",
+                raise PackageHelperProtocolError(
+                    "package helper reported success with an abnormal exit"
                 )
-        return _parse_response(payload, expected_node, vmid)
+        return payload
 
 
 async def _read_until_eof(
@@ -300,9 +372,8 @@ async def _drain_process_output(process: _SSHProcess) -> tuple[bytes, bytes]:
                 process.kill()
                 process.close()
                 await process.wait_closed()
-                raise PackageScanError(
-                    PackageScanFailure.EXECUTION_FAILED,
-                    "package scan helper output exceeded its bound",
+                raise PackageHelperProtocolError(
+                    "package helper output exceeded its bound"
                 )
     finally:
         # Any task not yet done here (the peer that never reached its own
@@ -343,7 +414,7 @@ def _parse_response(
         type(payload.get("protocol_version")) is not int
         or payload.get("protocol_version") != PROTOCOL_VERSION
         or type(payload.get("helper_version")) is not int
-        or payload.get("helper_version") != HELPER_VERSION
+        or payload.get("helper_version") < 1
         or payload.get("operation") != OPERATION_SCAN_PACKAGES
     ):
         raise PackageScanError(
