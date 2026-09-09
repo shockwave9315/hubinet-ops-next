@@ -9,6 +9,12 @@ from tests.common import MockConfigEntry
 from tests.components.diagnostics import get_diagnostics_for_config_entry
 from tests.typing import ClientSessionGenerator
 
+from custom_components.hubinet_ops.const import (
+    CONF_SSH_HOST_KEY,
+    CONF_SSH_PRIVATE_KEY,
+    CONF_TOKEN_SECRET,
+)
+
 from . import setup_integration
 
 
@@ -21,6 +27,16 @@ async def test_get_config_entry_diagnostics(
 ) -> None:
     """Test if get_config_entry_diagnostics returns the correct data."""
     await setup_integration(hass, mock_config_entry)
+    hass.config_entries.async_update_entry(
+        mock_config_entry,
+        data={
+            **mock_config_entry.data,
+            CONF_TOKEN_SECRET: "api-secret",
+            CONF_SSH_PRIVATE_KEY: "private-secret",
+            CONF_SSH_HOST_KEY: "host-key-material",
+            "enrollment": "HUBINET1-raw-secret",
+        },
+    )
 
     diagnostics_entry = await get_diagnostics_for_config_entry(
         hass, hass_client, mock_config_entry
@@ -31,3 +47,8 @@ async def test_get_config_entry_diagnostics(
             "modified_at",
         ),
     )
+    diagnostic_data = diagnostics_entry["config_entry"]["data"]
+    assert diagnostic_data[CONF_TOKEN_SECRET] == "**REDACTED**"
+    assert diagnostic_data[CONF_SSH_PRIVATE_KEY] == "**REDACTED**"
+    assert diagnostic_data[CONF_SSH_HOST_KEY] == "**REDACTED**"
+    assert diagnostic_data["enrollment"] == "**REDACTED**"

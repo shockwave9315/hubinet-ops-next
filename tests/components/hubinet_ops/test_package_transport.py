@@ -14,7 +14,16 @@ from custom_components.hubinet_ops.packages.models import (
     PackageScanError,
     PackageScanFailure,
 )
-from custom_components.hubinet_ops.packages.transport import AsyncSSHPackageTransport
+from custom_components.hubinet_ops.packages.transport import (
+    AsyncSSHPackageTransport,
+    PackageHelperProtocolError,
+    PackageHelperUnavailableError,
+    PackageTransportAuthenticationError,
+    PackageTransportConnectionError,
+    PackageTransportHostKeyError,
+    PROBE_TIMEOUT_SECONDS,
+    TRANSPORT_TIMEOUT_SECONDS,
+)
 from homeassistant.core import HomeAssistant
 
 ZERO_SIMULATION = "0 upgraded, 0 newly installed, 0 to remove and 7 not upgraded.\n"
@@ -169,30 +178,44 @@ class FakeConnector:
         return context()
 
 
+class FailingConnector:
+    """Connection factory which fails while entering the SSH context."""
+
+    def __init__(self, error: Exception) -> None:
+        self.error = error
+
+    def __call__(self, *args, **kwargs):
+        @asynccontextmanager
+        async def context():
+            raise self.error
+            yield  # pragma: no cover
+
+        return context()
+
+
 async def _transport(
     hass: HomeAssistant, tmp_path: Path, payload: dict[str, object], **process_kwargs
 ):
-    private_key = tmp_path / "hubinet_ops"
-    known_hosts = tmp_path / "known_hosts"
-    private_key.write_text("private key")
-    known_hosts.write_text("host key")
+    private_key = asyncssh.generate_private_key("ssh-ed25519")
+    host_key = asyncssh.generate_private_key("ssh-ed25519")
+    host_key_text = host_key.export_public_key().decode().strip()
     connection = FakeConnection(FakeProcess(payload, **process_kwargs))
     connector = FakeConnector(connection)
     transport = AsyncSSHPackageTransport(
         endpoint="192.0.2.10",
-        private_key_path=private_key,
-        known_hosts_path=known_hosts,
+        private_key=private_key.export_private_key().decode(),
+        host_key=host_key_text,
         connector=connector,
     )
     await transport.async_prepare(hass)
-    return transport, connector, connection, private_key, known_hosts
+    return transport, connector, connection, private_key, host_key_text
 
 
 async def test_asyncssh_transport_separates_endpoint_and_identity_and_pins_auth(
     hass: HomeAssistant, tmp_path: Path
 ) -> None:
     """SSH uses CONF_HOST while the helper request carries node/VMID identity."""
-    transport, connector, connection, private_key, known_hosts = await _transport(
+    transport, connector, connection, private_key, host_key = await _transport(
         hass, tmp_path, _response()
     )
     result = await transport.async_scan("pve1", 200)
@@ -203,8 +226,10 @@ async def test_asyncssh_transport_separates_endpoint_and_identity_and_pins_auth(
     assert connector.args == ("192.0.2.10",)
     assert connector.args[0] != "pve1"
     assert connector.kwargs["port"] == 22
-    assert connector.kwargs["known_hosts"] == known_hosts.read_bytes()
-    assert connector.kwargs["client_keys"] == [str(private_key)]
+    assert connector.kwargs["known_hosts"] == f"192.0.2.10 {host_key}\n".encode()
+    assert connector.kwargs["client_keys"][0].get_fingerprint() == (
+        private_key.get_fingerprint()
+    )
     assert connector.kwargs["config"] is None
     assert connector.kwargs["agent_path"] is None
     assert connector.kwargs["pkcs11_provider"] is None
@@ -271,10 +296,6 @@ async def test_real_asyncssh_round_trip_with_chunked_stdout_and_stderr(
     host_key = asyncssh.generate_private_key("ssh-ed25519")
     client_key = asyncssh.generate_private_key("ssh-ed25519")
 
-    private_key_path = tmp_path / "hubinet_ops"
-    client_key.write_private_key(private_key_path)
-    private_key_path.chmod(0o600)
-
     payload = json.dumps(_response()).encode()
     received_requests: list[bytes] = []
 
@@ -314,15 +335,10 @@ async def test_real_asyncssh_round_trip_with_chunked_stdout_and_stderr(
     )
     try:
         port = server.sockets[0].getsockname()[1]
-        known_hosts_path = tmp_path / "known_hosts"
-        known_hosts_path.write_bytes(
-            f"[127.0.0.1]:{port} ".encode() + host_key.export_public_key()
-        )
-
         transport = AsyncSSHPackageTransport(
             endpoint="127.0.0.1",
-            private_key_path=private_key_path,
-            known_hosts_path=known_hosts_path,
+            private_key=client_key.export_private_key().decode(),
+            host_key=host_key.export_public_key().decode().strip(),
             port=port,
         )
         await transport.async_prepare(hass)
@@ -355,10 +371,6 @@ async def test_real_asyncssh_success_payload_with_nonzero_exit_fails_closed(
     host_key = asyncssh.generate_private_key("ssh-ed25519")
     client_key = asyncssh.generate_private_key("ssh-ed25519")
 
-    private_key_path = tmp_path / "hubinet_ops"
-    client_key.write_private_key(private_key_path)
-    private_key_path.chmod(0o600)
-
     payload = json.dumps(_response()).encode()
 
     async def _serve_success_but_nonzero_exit(
@@ -384,15 +396,10 @@ async def test_real_asyncssh_success_payload_with_nonzero_exit_fails_closed(
     )
     try:
         port = server.sockets[0].getsockname()[1]
-        known_hosts_path = tmp_path / "known_hosts"
-        known_hosts_path.write_bytes(
-            f"[127.0.0.1]:{port} ".encode() + host_key.export_public_key()
-        )
-
         transport = AsyncSSHPackageTransport(
             endpoint="127.0.0.1",
-            private_key_path=private_key_path,
-            known_hosts_path=known_hosts_path,
+            private_key=client_key.export_private_key().decode(),
+            host_key=host_key.export_public_key().decode().strip(),
             port=port,
         )
         await transport.async_prepare(hass)
@@ -420,10 +427,6 @@ async def test_real_asyncssh_stuck_peer_oversize_terminates_promptly(
     host_key = asyncssh.generate_private_key("ssh-ed25519")
     client_key = asyncssh.generate_private_key("ssh-ed25519")
 
-    private_key_path = tmp_path / "hubinet_ops"
-    client_key.write_private_key(private_key_path)
-    private_key_path.chmod(0o600)
-
     server_tasks: list[asyncio.Task] = []
 
     async def _stuck_forced_command(process: asyncssh.SSHServerProcess) -> None:
@@ -447,15 +450,10 @@ async def test_real_asyncssh_stuck_peer_oversize_terminates_promptly(
     )
     try:
         port = server.sockets[0].getsockname()[1]
-        known_hosts_path = tmp_path / "known_hosts"
-        known_hosts_path.write_bytes(
-            f"[127.0.0.1]:{port} ".encode() + host_key.export_public_key()
-        )
-
         transport = AsyncSSHPackageTransport(
             endpoint="127.0.0.1",
-            private_key_path=private_key_path,
-            known_hosts_path=known_hosts_path,
+            private_key=client_key.export_private_key().decode(),
+            host_key=host_key.export_public_key().decode().strip(),
             port=port,
         )
         await transport.async_prepare(hass)
@@ -493,57 +491,38 @@ async def test_real_asyncssh_stuck_peer_oversize_terminates_promptly(
     assert leaked_pending == []
 
 
-def test_transport_prerequisites_require_both_nonempty_trust_files(
-    tmp_path: Path,
+@pytest.mark.parametrize(
+    ("private_key", "host_key"), [(None, None), ("private", None), (None, "host")]
+)
+async def test_transport_requires_both_in_memory_trust_inputs(
+    private_key: str | None, host_key: str | None
 ) -> None:
-    """Missing or empty private-key/known-hosts material disables transport."""
+    """Missing either trust input disables and blocks the transport."""
+    transport = AsyncSSHPackageTransport(
+        endpoint="192.0.2.10", private_key=private_key, host_key=host_key
+    )
+    assert transport.configured is False
+    with pytest.raises(Exception, match="trust material is not configured"):
+        await transport.async_probe()
+
+
+def test_transport_configured_from_valid_in_memory_keys() -> None:
+    """Valid Ed25519 identities make the transport ready immediately."""
+    private_key = asyncssh.generate_private_key("ssh-ed25519")
+    host_key = asyncssh.generate_private_key("ssh-ed25519")
     transport = AsyncSSHPackageTransport(
         endpoint="192.0.2.10",
-        private_key_path=tmp_path / "key",
-        known_hosts_path=tmp_path / "known_hosts",
+        private_key=private_key.export_private_key().decode(),
+        host_key=host_key.export_public_key().decode().strip(),
     )
-    assert transport.configured is False
-    assert transport._load_known_hosts() is None  # noqa: SLF001
-    (tmp_path / "key").write_text("key")
-    assert transport._load_known_hosts() is None  # noqa: SLF001
-    (tmp_path / "known_hosts").write_text("")
-    assert transport._load_known_hosts() is None  # noqa: SLF001
-    (tmp_path / "known_hosts").write_text("host key")
-    assert transport._load_known_hosts() == b"host key"  # noqa: SLF001
-
-
-async def test_transport_configured_reflects_last_prepare_only(
-    hass: HomeAssistant, tmp_path: Path
-) -> None:
-    """H2/N5: readiness is fixed at async_prepare and never re-checked live.
-
-    Trust files changing after setup must not change `.configured` until
-    the next config-entry setup (reload) calls async_prepare again.
-    """
-    private_key = tmp_path / "key"
-    known_hosts = tmp_path / "known_hosts"
-    transport = AsyncSSHPackageTransport(
-        endpoint="192.0.2.10", private_key_path=private_key, known_hosts_path=known_hosts
-    )
-    assert transport.configured is False
-
-    private_key.write_text("key")
-    known_hosts.write_text("host key")
-    await transport.async_prepare(hass)
     assert transport.configured is True
-
-    known_hosts.unlink()
-    assert transport.configured is True  # stale on purpose until reload
-
-    with patch.object(Path, "is_file", side_effect=AssertionError("touched fs")):
-        assert transport.configured is True
 
 
 @pytest.mark.parametrize(
     "response",
     [
         _response(protocol_version=2),
-        _response(helper_version=2),
+        _response(helper_version=0),
         _response(operation="other"),
         {**_response(), "protocol_version": True},
         {**_response(), "protocol_version": 1.0},
@@ -557,6 +536,139 @@ async def test_incompatible_helper_protocol_fails_clearly(
     with pytest.raises(PackageScanError) as caught:
         await transport.async_scan("pve1", 200)
     assert caught.value.failure is PackageScanFailure.PROTOCOL_MISMATCH
+
+
+async def test_scan_accepts_newer_informational_helper_version(
+    hass: HomeAssistant, tmp_path: Path
+) -> None:
+    """Protocol version, not helper implementation version, is authoritative."""
+    transport, *_ = await _transport(hass, tmp_path, _response(helper_version=99))
+    assert (await transport.async_scan("pve1", 200)).packages == ()
+
+
+async def test_probe_returns_local_node_without_target(
+    hass: HomeAssistant, tmp_path: Path
+) -> None:
+    """Probe uses its minimal exact request and returns typed node identity."""
+    response = {
+        "protocol_version": 1,
+        "helper_version": 2,
+        "operation": "probe",
+        "ok": True,
+        "node": "pve1",
+    }
+    transport, _connector, connection, *_ = await _transport(
+        hass, tmp_path, response
+    )
+    probe = await transport.async_probe()
+    assert probe.node == "pve1"
+    assert probe.helper_version == 2
+    assert json.loads(connection.process_kwargs["input"]) == {
+        "protocol_version": 1,
+        "operation": "probe",
+    }
+
+
+async def test_probe_and_scan_use_distinct_bounded_timeouts(
+    hass: HomeAssistant, tmp_path: Path
+) -> None:
+    """Setup probing is short while potentially long package scans stay unchanged."""
+    probe_response = {
+        "protocol_version": 1,
+        "helper_version": 2,
+        "operation": "probe",
+        "ok": True,
+        "node": "pve1",
+    }
+    transport, *_ = await _transport(hass, tmp_path, probe_response)
+    real_timeout = asyncio.timeout
+    with patch(
+        "custom_components.hubinet_ops.packages.transport.asyncio.timeout",
+        side_effect=real_timeout,
+    ) as timeout:
+        await transport.async_probe()
+    timeout.assert_called_once_with(PROBE_TIMEOUT_SECONDS)
+    assert PROBE_TIMEOUT_SECONDS == 30.0
+
+    transport, *_ = await _transport(hass, tmp_path, _response())
+    with patch(
+        "custom_components.hubinet_ops.packages.transport.asyncio.timeout",
+        side_effect=real_timeout,
+    ) as timeout:
+        await transport.async_scan("pve1", 200)
+    timeout.assert_called_once_with(TRANSPORT_TIMEOUT_SECONDS)
+    assert TRANSPORT_TIMEOUT_SECONDS == 300.0
+
+
+@pytest.mark.parametrize(
+    ("response", "error_type"),
+    [
+        ([], PackageHelperProtocolError),
+        (
+            {
+                "protocol_version": 2,
+                "helper_version": 2,
+                "operation": "probe",
+                "ok": True,
+                "node": "pve1",
+            },
+            PackageHelperProtocolError,
+        ),
+        (_response(helper_version=1), PackageHelperUnavailableError),
+    ],
+)
+async def test_probe_rejects_malformed_wrong_protocol_and_old_helper(
+    hass: HomeAssistant,
+    tmp_path: Path,
+    response: object,
+    error_type: type[Exception],
+) -> None:
+    """Probe failures distinguish incompatible data from an old helper."""
+    transport, *_ = await _transport(hass, tmp_path, response)
+    with pytest.raises(error_type):
+        await transport.async_probe()
+
+
+@pytest.mark.parametrize(
+    ("ssh_error", "transport_error"),
+    [
+        (
+            asyncssh.HostKeyNotVerifiable("host key mismatch"),
+            PackageTransportHostKeyError,
+        ),
+        (asyncssh.PermissionDenied("denied"), PackageTransportAuthenticationError),
+        (OSError("refused"), PackageTransportConnectionError),
+    ],
+)
+async def test_probe_classifies_connection_failures(
+    ssh_error: Exception, transport_error: type[Exception]
+) -> None:
+    """Host-key mismatch, auth rejection, and connectivity stay distinct."""
+    private_key = asyncssh.generate_private_key("ssh-ed25519")
+    host_key = asyncssh.generate_private_key("ssh-ed25519")
+    transport = AsyncSSHPackageTransport(
+        endpoint="192.0.2.10",
+        private_key=private_key.export_private_key().decode(),
+        host_key=host_key.export_public_key().decode().strip(),
+        connector=FailingConnector(ssh_error),
+    )
+    with pytest.raises(transport_error):
+        await transport.async_probe()
+
+
+async def test_scan_preserves_timeout_classification() -> None:
+    """The shared probe transport does not erase the existing scan timeout result."""
+    private_key = asyncssh.generate_private_key("ssh-ed25519")
+    host_key = asyncssh.generate_private_key("ssh-ed25519")
+    transport = AsyncSSHPackageTransport(
+        endpoint="192.0.2.10",
+        private_key=private_key.export_private_key().decode(),
+        host_key=host_key.export_public_key().decode().strip(),
+        connector=FailingConnector(TimeoutError()),
+    )
+    with pytest.raises(PackageScanError) as caught:
+        await transport.async_scan("pve1", 200)
+    assert caught.value.failure is PackageScanFailure.TIMEOUT
 
 
 @pytest.mark.parametrize("response", [_response(node="pve2"), _response(vmid=201)])

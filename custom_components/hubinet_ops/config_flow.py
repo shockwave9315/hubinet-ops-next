@@ -34,11 +34,15 @@ from .common import sanitize_config_entry
 from .const import (
     AUTH_METHODS,
     AUTH_OTHER,
+    AUTH_PVE,
     CONF_AUTH_METHOD,
     CONF_CONTAINERS,
     CONF_NODE,
     CONF_NODES,
+    CONF_PACKAGE_NODE,
     CONF_REALM,
+    CONF_SSH_HOST_KEY,
+    CONF_SSH_PRIVATE_KEY,
     CONF_TOKEN_ID,
     CONF_TOKEN_SECRET,
     CONF_VMS,
@@ -47,7 +51,19 @@ from .const import (
     DEFAULT_TIMEOUT,
     DEFAULT_VERIFY_SSL,
     DOMAIN,
+    GUIDED_TOKEN_ID,
+    GUIDED_USERNAME,
+    INTEGRATION_VERSION,
     NODE_ONLINE,
+)
+from .enrollment import EnrollmentError, parse_enrollment
+from .packages.transport import (
+    AsyncSSHPackageTransport,
+    PackageHelperProtocolError,
+    PackageHelperUnavailableError,
+    PackageTransportAuthenticationError,
+    PackageTransportConnectionError,
+    PackageTransportHostKeyError,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -86,6 +102,53 @@ TOKEN_SCHEMA = vol.Schema(
         vol.Required(CONF_TOKEN_SECRET): cv.string,
     }
 )
+GUIDED_SCHEMA = vol.Schema(
+    {
+        vol.Required(CONF_HOST): cv.string,
+        vol.Required(CONF_PORT, default=DEFAULT_PORT): cv.port,
+        vol.Optional(CONF_VERIFY_SSL, default=DEFAULT_VERIFY_SSL): cv.boolean,
+    }
+)
+CONF_ENROLLMENT = "enrollment"
+ENROLLMENT_SCHEMA = vol.Schema(
+    {
+        vol.Required(CONF_ENROLLMENT): TextSelector(
+            TextSelectorConfig(type=TextSelectorType.PASSWORD)
+        )
+    }
+)
+BOOTSTRAP_COMMAND = (
+    "curl -fsSL "
+    "https://raw.githubusercontent.com/shockwave9315/hubinet-ops-next/"
+    f"{INTEGRATION_VERSION}/deploy/bootstrap-proxmox.sh | bash"
+)
+RESET_BOOTSTRAP_COMMAND = f"{BOOTSTRAP_COMMAND} -s -- --reset"
+
+_GUIDED_DATA_KEYS = (
+    CONF_AUTH_METHOD,
+    CONF_REALM,
+    CONF_USERNAME,
+    CONF_HOST,
+    CONF_PORT,
+    CONF_VERIFY_SSL,
+    CONF_TOKEN,
+    CONF_TOKEN_ID,
+    CONF_TOKEN_SECRET,
+    CONF_SSH_PRIVATE_KEY,
+    CONF_SSH_HOST_KEY,
+    CONF_PACKAGE_NODE,
+    CONF_NODES,
+    CONF_ENROLLMENT,
+)
+
+
+def _is_guided_entry(data: Mapping[str, Any]) -> bool:
+    """Return whether an entry uses the fixed guided API identity."""
+    return (
+        data.get(CONF_USERNAME) == GUIDED_USERNAME
+        and data.get(CONF_TOKEN_ID) == GUIDED_TOKEN_ID
+        and data.get(CONF_TOKEN) is True
+    )
 
 
 def _get_nodes_data(data: dict[str, Any]) -> list[dict[str, Any]]:
@@ -173,7 +236,7 @@ def _get_nodes_data(data: dict[str, Any]) -> list[dict[str, Any]]:
 class ProxmoxveConfigFlow(ConfigFlow, domain=DOMAIN):
     """Handle a config flow for Proxmox VE."""
 
-    VERSION = 3
+    VERSION = 4
     _data: dict[str, Any] = {}
     _entry: ConfigEntry
 
@@ -182,13 +245,56 @@ class ProxmoxveConfigFlow(ConfigFlow, domain=DOMAIN):
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
         """Handle the initial step."""
+        return self.async_show_menu(
+            step_id="user", menu_options=["guided", "existing_credentials"]
+        )
+
+    async def async_step_existing_credentials(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Preserve the upstream-compatible manual credential path."""
         if user_input is not None:
             self._data = user_input
             return await self.async_step_user_auth()
 
         return self.async_show_form(
-            step_id="user",
+            step_id="existing_credentials",
             data_schema=BASE_SCHEMA,
+        )
+
+    async def async_step_guided(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Collect only the endpoint settings needed before bootstrap."""
+        if user_input is not None:
+            self._async_abort_entries_match({CONF_HOST: user_input[CONF_HOST]})
+            self._data = {
+                **user_input,
+                CONF_AUTH_METHOD: AUTH_PVE,
+                CONF_REALM: AUTH_PVE,
+                CONF_USERNAME: GUIDED_USERNAME,
+                CONF_TOKEN: True,
+                CONF_TOKEN_ID: GUIDED_TOKEN_ID,
+            }
+            return await self.async_step_enrollment()
+
+        return self.async_show_form(step_id="guided", data_schema=GUIDED_SCHEMA)
+
+    async def async_step_enrollment(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Validate the temporary enrollment and create one ready entry."""
+        final_data, errors = await self._async_validate_enrollment(user_input)
+        if final_data is not None:
+            return self.async_create_entry(
+                title=final_data[CONF_HOST], data=final_data
+            )
+
+        return self.async_show_form(
+            step_id="enrollment",
+            data_schema=ENROLLMENT_SCHEMA,
+            errors=errors,
+            description_placeholders={"bootstrap_command": BOOTSTRAP_COMMAND},
         )
 
     async def async_step_user_auth(
@@ -219,7 +325,21 @@ class ProxmoxveConfigFlow(ConfigFlow, domain=DOMAIN):
         self, entry_data: Mapping[str, Any]
     ) -> ConfigFlowResult:
         """Perform reauth when Proxmox VE authentication fails."""
+        self._entry = self._get_reauth_entry()
+        if _is_guided_entry(self._entry.data):
+            self._data = dict(self._entry.data)
+            return await self.async_step_reauth_enrollment()
         return await self.async_step_reauth_confirm()
+
+    async def async_step_reauth_enrollment(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Replace a guided entry's credentials from one new enrollment."""
+        self._entry = self._get_reauth_entry()
+        self._data = dict(self._entry.data)
+        return await self._async_existing_enrollment_step(
+            "reauth_enrollment", user_input
+        )
 
     async def async_step_reauth_confirm(
         self, user_input: dict[str, Any] | None = None
@@ -247,6 +367,53 @@ class ProxmoxveConfigFlow(ConfigFlow, domain=DOMAIN):
     ) -> ConfigFlowResult:
         """Handle the initial reconfiguration step."""
         self._entry = self._get_reconfigure_entry()
+        return self.async_show_menu(
+            step_id="reconfigure",
+            menu_options=[
+                "reconfigure_guided",
+                "reconfigure_existing_credentials",
+            ],
+        )
+
+    async def async_step_reconfigure_guided(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Collect the endpoint before rotating guided credentials."""
+        self._entry = self._get_reconfigure_entry()
+        if user_input is not None:
+            self._async_abort_entries_match({CONF_HOST: user_input[CONF_HOST]})
+            self._data = {
+                **user_input,
+                CONF_AUTH_METHOD: AUTH_PVE,
+                CONF_REALM: AUTH_PVE,
+                CONF_USERNAME: GUIDED_USERNAME,
+                CONF_TOKEN: True,
+                CONF_TOKEN_ID: GUIDED_TOKEN_ID,
+            }
+            return await self.async_step_reconfigure_enrollment()
+
+        return self.async_show_form(
+            step_id="reconfigure_guided",
+            data_schema=self.add_suggested_values_to_schema(
+                data_schema=GUIDED_SCHEMA,
+                suggested_values=self._entry.data,
+            ),
+        )
+
+    async def async_step_reconfigure_enrollment(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Atomically apply a valid guided re-enrollment."""
+        self._entry = self._get_reconfigure_entry()
+        return await self._async_existing_enrollment_step(
+            "reconfigure_enrollment", user_input
+        )
+
+    async def async_step_reconfigure_existing_credentials(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Retain the upstream-compatible credential reconfiguration path."""
+        self._entry = self._get_reconfigure_entry()
         suggested_values = {
             CONF_AUTH_METHOD: self._entry.data.get(
                 CONF_AUTH_METHOD, self._entry.data.get(CONF_REALM, DEFAULT_REALM)
@@ -265,7 +432,7 @@ class ProxmoxveConfigFlow(ConfigFlow, domain=DOMAIN):
             return await self.async_step_reconfigure_auth()
 
         return self.async_show_form(
-            step_id="reconfigure",
+            step_id="reconfigure_existing_credentials",
             data_schema=self.add_suggested_values_to_schema(
                 data_schema=BASE_SCHEMA,
                 suggested_values=self._data or suggested_values,
@@ -281,32 +448,42 @@ class ProxmoxveConfigFlow(ConfigFlow, domain=DOMAIN):
         if user_input is not None:
             self._async_abort_entries_match({CONF_HOST: self._data[CONF_HOST]})
             self._data = sanitize_config_entry({**self._data, **user_input})
-            _, errors = await self._validate_input(self._data)
-            # Discard password/token from data to avoid storing
-            data_kwargs = {
-                CONF_PASSWORD: self._data.get(CONF_PASSWORD),
-                CONF_TOKEN_ID: None,
-                CONF_TOKEN_SECRET: None,
-            }
+            proxmox_nodes, errors = await self._validate_input(self._data)
+            data_kwargs = {CONF_PASSWORD: self._data.get(CONF_PASSWORD)}
             if self._data[CONF_TOKEN]:
                 data_kwargs = {
                     CONF_TOKEN_ID: self._data[CONF_TOKEN_ID],
                     CONF_TOKEN_SECRET: self._data[CONF_TOKEN_SECRET],
-                    CONF_PASSWORD: None,
                 }
             if not errors:
+                updated_data = {
+                    **self._entry.data,
+                    CONF_AUTH_METHOD: self._data[CONF_AUTH_METHOD],
+                    CONF_HOST: self._data[CONF_HOST],
+                    CONF_USERNAME: self._data[CONF_USERNAME],
+                    CONF_PORT: self._data[CONF_PORT],
+                    CONF_VERIFY_SSL: self._data[CONF_VERIFY_SSL],
+                    CONF_TOKEN: self._data[CONF_TOKEN],
+                    CONF_REALM: self._data[CONF_REALM],
+                    CONF_NODES: proxmox_nodes,
+                    **data_kwargs,
+                }
+                if self._data[CONF_TOKEN]:
+                    updated_data.pop(CONF_PASSWORD, None)
+                else:
+                    updated_data.pop(CONF_TOKEN_ID, None)
+                    updated_data.pop(CONF_TOKEN_SECRET, None)
+                if self._data[CONF_HOST] != self._entry.data[CONF_HOST]:
+                    for key in (
+                        CONF_SSH_PRIVATE_KEY,
+                        CONF_SSH_HOST_KEY,
+                        CONF_PACKAGE_NODE,
+                    ):
+                        updated_data.pop(key, None)
                 return self.async_update_reload_and_abort(
                     self._entry,
-                    data_updates={
-                        CONF_AUTH_METHOD: self._data[CONF_AUTH_METHOD],
-                        CONF_HOST: self._data[CONF_HOST],
-                        CONF_USERNAME: self._data[CONF_USERNAME],
-                        CONF_PORT: self._data[CONF_PORT],
-                        CONF_VERIFY_SSL: self._data[CONF_VERIFY_SSL],
-                        CONF_TOKEN: self._data[CONF_TOKEN],
-                        CONF_REALM: self._data[CONF_REALM],
-                        **data_kwargs,
-                    },
+                    data=updated_data,
+                    title=self._data[CONF_HOST],
                 )
 
         return self.async_show_form(
@@ -317,6 +494,89 @@ class ProxmoxveConfigFlow(ConfigFlow, domain=DOMAIN):
             ),
             errors=errors,
         )
+
+    async def _async_existing_enrollment_step(
+        self,
+        step_id: str,
+        user_input: dict[str, Any] | None,
+    ) -> ConfigFlowResult:
+        """Validate and atomically apply enrollment to an existing entry."""
+        final_data, errors = await self._async_validate_enrollment(user_input)
+        if final_data is not None:
+            updated_data = dict(self._entry.data)
+            for key in (*_GUIDED_DATA_KEYS, CONF_PASSWORD):
+                updated_data.pop(key, None)
+            updated_data.update(final_data)
+            return self.async_update_reload_and_abort(
+                self._entry,
+                data=updated_data,
+                title=final_data[CONF_HOST],
+            )
+
+        return self.async_show_form(
+            step_id=step_id,
+            data_schema=ENROLLMENT_SCHEMA,
+            errors=errors,
+            description_placeholders={
+                "bootstrap_command": RESET_BOOTSTRAP_COMMAND
+            },
+        )
+
+    async def _async_validate_enrollment(
+        self, user_input: dict[str, Any] | None
+    ) -> tuple[dict[str, Any] | None, dict[str, str]]:
+        """Validate enrollment, API, pinned SSH, helper, and node agreement."""
+        errors: dict[str, str] = {}
+        if user_input is None:
+            return None, errors
+        try:
+            enrollment = parse_enrollment(user_input[CONF_ENROLLMENT])
+        except EnrollmentError as err:
+            errors["base"] = err.code
+            return None, errors
+
+        final_data = {
+            **{
+                key: value
+                for key, value in self._data.items()
+                if key not in (CONF_PASSWORD, CONF_ENROLLMENT)
+            },
+            CONF_TOKEN_SECRET: enrollment.token_secret,
+            CONF_SSH_PRIVATE_KEY: enrollment.private_key,
+            CONF_SSH_HOST_KEY: enrollment.host_key,
+        }
+        proxmox_nodes, errors = await self._validate_input(final_data)
+        if errors:
+            return None, errors
+        try:
+            transport = AsyncSSHPackageTransport(
+                endpoint=final_data[CONF_HOST],
+                private_key=enrollment.private_key,
+                host_key=enrollment.host_key,
+            )
+            probe = await transport.async_probe()
+        except ValueError:
+            errors["base"] = "ssh_cannot_connect"
+        except PackageTransportHostKeyError:
+            errors["base"] = "ssh_host_key_mismatch"
+        except PackageTransportAuthenticationError:
+            errors["base"] = "ssh_auth_failed"
+        except PackageTransportConnectionError:
+            errors["base"] = "ssh_cannot_connect"
+        except PackageHelperUnavailableError:
+            errors["base"] = "helper_missing_or_outdated"
+        except PackageHelperProtocolError:
+            errors["base"] = "helper_protocol_mismatch"
+        else:
+            if probe.node not in {node[CONF_NODE] for node in proxmox_nodes}:
+                errors["base"] = "package_node_not_found"
+            else:
+                return {
+                    **final_data,
+                    CONF_NODES: proxmox_nodes,
+                    CONF_PACKAGE_NODE: probe.node,
+                }, errors
+        return None, errors
 
     async def _validate_input(
         self, user_input: dict[str, Any]

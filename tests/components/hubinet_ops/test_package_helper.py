@@ -117,7 +117,7 @@ def test_helper_uses_fixed_commands_and_returns_versioned_identity() -> None:
     response = _handle(runner)
     assert response["ok"] is True
     assert response["protocol_version"] == 1
-    assert response["helper_version"] == 1
+    assert response["helper_version"] == 2
     assert response["operation"] == "scan_packages"
     assert response["target"] == {"node": "pve1", "vmid": 200}
     assert response["evidence"]["reboot_required"] is True
@@ -139,6 +139,38 @@ def test_helper_uses_fixed_commands_and_returns_versioned_identity() -> None:
     assert any(
         command[-3:] == ("apt-get", "-s", "upgrade") for command in guest_commands
     )
+
+
+def test_probe_returns_local_node_and_never_calls_pct() -> None:
+    """The setup probe performs only PVE-native local-node identification."""
+    runner = FakeHelperRunner()
+    response = helper.handle_request(
+        {"protocol_version": 1, "operation": "probe"}, runner=runner
+    )
+    assert response == {
+        "protocol_version": 1,
+        "helper_version": 2,
+        "operation": "probe",
+        "ok": True,
+        "node": "pve1",
+    }
+    assert [call[0] for call in runner.calls] == [
+        ("readlink", "-f", "/etc/pve/local")
+    ]
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"protocol_version": 1, "operation": "probe", "target": {}},
+        {"protocol_version": 2, "operation": "probe"},
+        {"protocol_version": 1, "operation": "unknown"},
+    ],
+)
+def test_malformed_probe_and_protocol_mismatch_are_rejected(payload) -> None:
+    """Probe accepts only its exact versioned request shape."""
+    with pytest.raises(helper.RequestError):
+        helper.handle_request(payload, runner=FakeHelperRunner())
 
 
 def test_helper_classifies_apt_busy_and_stops() -> None:

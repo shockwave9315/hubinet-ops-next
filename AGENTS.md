@@ -57,12 +57,25 @@ The coding agent is not allowed to become the architect by accident.
 Coding and review agents may identify problems, propose designs, compare
 alternatives, and recommend architecture. Architectural acceptance is a
 maintainer/human decision: agents must not unilaterally declare a new
-architecture accepted. Until that decision is reflected in merged
-`ARCHITECTURE.md`, the proposal remains unaccepted. Implementation in a draft
-pull request does not make its design accepted.
+architecture accepted.
 
-An agent may propose architecture. An agent may not accept architecture on
-behalf of the maintainer.
+Acceptance is established only by an explicit maintainer decision, recorded
+either:
+
+- in already-merged `ARCHITECTURE.md`; or
+- by an explicit maintainer instruction governing the current task, in which
+  case the same pull request records that decision in `ARCHITECTURE.md` and
+  marks it accepted in `STATUS.md`.
+
+A separate documentation-only pull request is therefore not required when the
+maintainer has already approved the design for the work in hand. Implementing
+more than the maintainer approved, or a different design from the one
+approved, is not covered by that acceptance.
+
+An agent may never treat acceptance as established because it authored or
+modified `ARCHITECTURE.md` itself, because a design appears in a pull request,
+or because a review recommended it. An agent may propose architecture. An
+agent may not accept architecture on behalf of the maintainer.
 
 ## Prohibited architecture
 

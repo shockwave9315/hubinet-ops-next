@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Root-owned forced-command PVE boundary for package scans only."""
+"""Root-owned forced-command PVE boundary for package scans and setup probe."""
 
 from collections.abc import Callable, Iterator, Mapping
 from contextlib import AbstractContextManager, contextmanager, suppress
@@ -18,8 +18,11 @@ import time
 from typing import Any
 
 PROTOCOL_VERSION = 1
-HELPER_VERSION = 1
-OPERATION = "scan_packages"
+HELPER_VERSION = 2
+OPERATION_PROBE = "probe"
+OPERATION_SCAN_PACKAGES = "scan_packages"
+# Retained as a compatibility alias for existing helper tests/importers.
+OPERATION = OPERATION_SCAN_PACKAGES
 
 MAX_REQUEST_BYTES = 1024
 MAX_COMMAND_OUTPUT_BYTES = 16 * 1024 * 1024
@@ -221,21 +224,24 @@ def _target_lock(vmid: int) -> Iterator[None]:
         os.close(fd)
 
 
-def validate_request(payload: Any) -> tuple[str, int]:
-    """Validate the sole accepted operation and return target identity."""
-    if not isinstance(payload, Mapping) or set(payload) != {
-        "protocol_version",
-        "operation",
-        "target",
-    }:
-        raise RequestError("request must have the exact package-scan shape")
+def validate_request(payload: Any) -> tuple[str, str | None, int | None]:
+    """Validate one of the two exact typed request shapes."""
+    if not isinstance(payload, Mapping):
+        raise RequestError("request must be a JSON object")
     if (
-        type(payload["protocol_version"]) is not int
-        or payload["protocol_version"] != PROTOCOL_VERSION
+        type(payload.get("protocol_version")) is not int
+        or payload.get("protocol_version") != PROTOCOL_VERSION
     ):
-        raise RequestError("unsupported package-scan protocol version")
-    if payload["operation"] != OPERATION:
+        raise RequestError("unsupported helper protocol version")
+    operation = payload.get("operation")
+    if operation == OPERATION_PROBE:
+        if set(payload) != {"protocol_version", "operation"}:
+            raise RequestError("request must have the exact probe shape")
+        return operation, None, None
+    if operation != OPERATION_SCAN_PACKAGES:
         raise RequestError("unknown host-control operation")
+    if set(payload) != {"protocol_version", "operation", "target"}:
+        raise RequestError("request must have the exact package-scan shape")
     target = payload["target"]
     if not isinstance(target, Mapping) or set(target) != {"node", "vmid"}:
         raise RequestError("target must have the exact package-scan shape")
@@ -245,7 +251,7 @@ def validate_request(payload: Any) -> tuple[str, int]:
         raise RequestError("node must be a valid PVE node identity")
     if type(vmid) is not int or not 100 <= vmid <= 999_999_999:
         raise RequestError("vmid must be a valid PVE integer VMID")
-    return node, vmid
+    return operation, node, vmid
 
 
 def _command(
@@ -296,10 +302,8 @@ def _decode(result: CommandResult) -> tuple[str, str]:
         ) from err
 
 
-def _validate_local_node(
-    expected_node: str, runner: Runner, deadline: OperationDeadline
-) -> None:
-    """Verify the expected PVE node against PVE-native local identity.
+def _get_local_node(runner: Runner, deadline: OperationDeadline) -> str:
+    """Return the PVE-native local node identity.
 
     Raw ``hostname`` may be an FQDN while PVE node identity is short, so the
     local node is instead resolved from ``/etc/pve/local``, a PVE-managed
@@ -323,6 +327,14 @@ def _validate_local_node(
         raise ScanError(
             "execution_failed", "local PVE node identity has an unexpected shape"
         )
+    return local_node
+
+
+def _validate_local_node(
+    expected_node: str, runner: Runner, deadline: OperationDeadline
+) -> None:
+    """Verify the expected node against the PVE-native local identity."""
+    local_node = _get_local_node(runner, deadline)
     if local_node != expected_node:
         raise ScanError(
             "identity_mismatch", "local PVE node does not match the expected node"
@@ -522,7 +534,7 @@ def _response_base(node: str, vmid: int) -> dict[str, Any]:
     return {
         "protocol_version": PROTOCOL_VERSION,
         "helper_version": HELPER_VERSION,
-        "operation": OPERATION,
+        "operation": OPERATION_SCAN_PACKAGES,
         "target": {"node": node, "vmid": vmid},
     }
 
@@ -535,9 +547,32 @@ def handle_request(
     lock_factory: LockFactory = _target_lock,
 ) -> dict[str, Any]:
     """Perform the fixed, read/refresh-only package scan command sequence."""
-    expected_node, vmid = validate_request(payload)
-    response = _response_base(expected_node, vmid)
+    operation, expected_node, vmid = validate_request(payload)
     deadline = OperationDeadline(clock(), OPERATION_TIMEOUT_SECONDS, clock)
+    if operation == OPERATION_PROBE:
+        try:
+            node = _get_local_node(runner, deadline)
+        except ScanError as err:
+            return {
+                "protocol_version": PROTOCOL_VERSION,
+                "helper_version": HELPER_VERSION,
+                "operation": OPERATION_PROBE,
+                "ok": False,
+                "error": {
+                    "classification": err.classification,
+                    "message": err.message[:500],
+                },
+            }
+        return {
+            "protocol_version": PROTOCOL_VERSION,
+            "helper_version": HELPER_VERSION,
+            "operation": OPERATION_PROBE,
+            "ok": True,
+            "node": node,
+        }
+    assert expected_node is not None
+    assert vmid is not None
+    response = _response_base(expected_node, vmid)
     try:
         with lock_factory(vmid):
             evidence = _scan(expected_node, vmid, runner, deadline)
@@ -553,24 +588,29 @@ def handle_request(
     return {**response, "ok": True, "evidence": evidence}
 
 
-def _request_failure(message: str) -> dict[str, Any]:
+def _request_failure(
+    message: str, operation: str = OPERATION_SCAN_PACKAGES
+) -> dict[str, Any]:
     """Return a versioned response for input rejected before target validation."""
-    return {
+    response = {
         "protocol_version": PROTOCOL_VERSION,
         "helper_version": HELPER_VERSION,
-        "operation": OPERATION,
-        "target": {},
+        "operation": operation,
         "ok": False,
         "error": {
             "classification": "execution_failed",
             "message": message[:500],
         },
     }
+    if operation == OPERATION_SCAN_PACKAGES:
+        response["target"] = {}
+    return response
 
 
 def main() -> int:
     """Read one bounded JSON request and emit one bounded JSON response."""
     error: str | None = None
+    failure_operation = OPERATION_SCAN_PACKAGES
     if os.geteuid() != 0:
         error = "package scan helper must run as root"
     elif os.environ.get("SSH_ORIGINAL_COMMAND"):
@@ -581,12 +621,18 @@ def main() -> int:
             error = "request exceeded its structural bound"
         else:
             try:
-                response = handle_request(json.loads(raw.decode()))
+                payload = json.loads(raw.decode())
+                if (
+                    isinstance(payload, Mapping)
+                    and payload.get("operation") == OPERATION_PROBE
+                ):
+                    failure_operation = OPERATION_PROBE
+                response = handle_request(payload)
                 sys.stdout.write(json.dumps(response, separators=(",", ":")))
                 return 0 if response["ok"] else 1
             except (UnicodeDecodeError, ValueError, RequestError) as err:
                 error = str(err)[:500] or "malformed package-scan request"
-    response = _request_failure(error or "malformed package-scan request")
+    response = _request_failure(error or "malformed helper request", failure_operation)
     sys.stdout.write(json.dumps(response, separators=(",", ":")))
     return 2
 

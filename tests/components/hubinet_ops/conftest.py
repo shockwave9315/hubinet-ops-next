@@ -1,10 +1,9 @@
 """Common fixtures for the ProxmoxVE tests."""
 
 from collections.abc import Generator, Iterator
-from contextlib import suppress
-from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import asyncssh
 import pytest
 from tests.common import (
     MockConfigEntry,
@@ -17,13 +16,14 @@ from custom_components.hubinet_ops.const import (
     CONF_CONTAINERS,
     CONF_NODE,
     CONF_NODES,
+    CONF_PACKAGE_NODE,
     CONF_REALM,
+    CONF_SSH_HOST_KEY,
+    CONF_SSH_PRIVATE_KEY,
     CONF_TOKEN_ID,
     CONF_TOKEN_SECRET,
     CONF_VMS,
     DOMAIN,
-    PACKAGE_SCAN_KNOWN_HOSTS,
-    PACKAGE_SCAN_PRIVATE_KEY,
     ProxmoxPermission,
 )
 from homeassistant.const import (
@@ -34,8 +34,6 @@ from homeassistant.const import (
     CONF_USERNAME,
     CONF_VERIFY_SSL,
 )
-from homeassistant.core import HomeAssistant
-
 from . import MERGED_PERMISSIONS
 
 MOCK_TEST_CONFIG_BASE = {
@@ -201,6 +199,7 @@ def mock_config_entry() -> MockConfigEntry:
         title="ProxmoxVE test",
         data=MOCK_TEST_CONFIG,
         entry_id="1234",
+        version=4,
     )
 
 
@@ -212,19 +211,23 @@ def mock_config_entry_token_other() -> MockConfigEntry:
         title="ProxmoxVE test",
         data=MOCK_TEST_TOKEN_OTHER_CONFIG,
         entry_id="1234",
+        version=4,
     )
 
 
 @pytest.fixture
-def package_transport_material(hass: HomeAssistant) -> Iterator[None]:
-    """Provide and then remove the two local package transport prerequisites."""
-    private_key = Path(hass.config.path(PACKAGE_SCAN_PRIVATE_KEY))
-    known_hosts = Path(hass.config.path(PACKAGE_SCAN_KNOWN_HOSTS))
-    private_key.parent.mkdir(parents=True, exist_ok=True)
-    private_key.write_text("test private key")
-    known_hosts.write_text("test host key")
+def package_transport_material(mock_config_entry: MockConfigEntry) -> Iterator[None]:
+    """Provide a configured in-memory transport boundary for entity tests."""
+    private_key = asyncssh.generate_private_key("ssh-ed25519")
+    host_key = asyncssh.generate_private_key("ssh-ed25519")
+    object.__setattr__(
+        mock_config_entry,
+        "data",
+        {
+            **mock_config_entry.data,
+            CONF_PACKAGE_NODE: "pve1",
+            CONF_SSH_PRIVATE_KEY: private_key.export_private_key().decode(),
+            CONF_SSH_HOST_KEY: host_key.export_public_key().decode().strip(),
+        },
+    )
     yield
-    private_key.unlink(missing_ok=True)
-    known_hosts.unlink(missing_ok=True)
-    with suppress(OSError):
-        private_key.parent.rmdir()
