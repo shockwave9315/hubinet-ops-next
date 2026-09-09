@@ -161,6 +161,7 @@ class PackageManager:
         self._tasks: dict[tuple[str, int], asyncio.Task[None]] = {}
         self._update_records: dict[tuple[str, int], PackageUpdateRecord] = {}
         self._update_tasks: dict[tuple[str, int], asyncio.Task[None]] = {}
+        self._viewed_tokens: dict[tuple[str, int], str] = {}
         self._scan_slots = asyncio.Semaphore(_MAX_GLOBAL_SCANS)
         self._update_slot = asyncio.Semaphore(1)
 
@@ -201,6 +202,7 @@ class PackageManager:
         for key in stale:
             self._records.pop(key, None)
             self._update_records.pop(key, None)
+            self._viewed_tokens.pop(key, None)
             task = self._tasks.pop(key, None)
             if task is not None and not task.done():
                 task.cancel()
@@ -242,6 +244,7 @@ class PackageManager:
             )
 
         attempted_at = self._now()
+        self._viewed_tokens.pop((node, vmid), None)
         own_record = PackageScanRecord(
             status=PackageScanStatus.RUNNING,
             last_attempt=attempted_at,
@@ -346,7 +349,34 @@ class PackageManager:
         ):
             return False
         self._set_record(node, vmid, replace(record, reviewed=True))
+        self._viewed_tokens.pop((node, vmid), None)
         return True
+
+    @callback
+    def mark_viewed(self, node: str, vmid: int, token: str) -> bool:
+        """Remember only the token for the exact successful plan just rendered."""
+        record = self._records.get((node, vmid))
+        if (
+            record is None
+            or record.status is not PackageScanStatus.SUCCESS
+            or record.result is None
+            or not record.result.packages
+            or record.token != token
+        ):
+            return False
+        self._viewed_tokens[(node, vmid)] = token
+        self._on_state_change()
+        return True
+
+    def viewed_token(self, node: str, vmid: int) -> str | None:
+        """Return the ephemeral token stored by the Review button."""
+        return self._viewed_tokens.get((node, vmid))
+
+    @callback
+    def confirm_viewed_review(self, node: str, vmid: int) -> bool:
+        """Approve exactly the viewed token through existing confirmation logic."""
+        token = self._viewed_tokens.get((node, vmid))
+        return token is not None and self.confirm_review(node, vmid, token)
 
     @callback
     def async_start_update(
@@ -401,6 +431,7 @@ class PackageManager:
         attempted_at = self._now()
         reviewed_plan = package_plan_tuple(reviewed.result.packages)
         # Old package evidence is invalid from the instant Update is accepted.
+        self._viewed_tokens.pop((node, vmid), None)
         self._set_record(node, vmid, PackageScanRecord())
         own_record = PackageUpdateRecord(
             status=PackageUpdateStatus.RUNNING,
