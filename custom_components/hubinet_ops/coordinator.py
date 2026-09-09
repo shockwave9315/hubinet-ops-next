@@ -115,14 +115,25 @@ class ProxmoxCoordinator(DataUpdateCoordinator[dict[str, ProxmoxNodeData]]):
             update_interval=DEFAULT_UPDATE_INTERVAL,
         )
         self.proxmox: ProxmoxAPI
-        self.package_manager = PackageManager(
-            hass,
-            config_entry,
-            transport=AsyncSSHPackageTransport(
+        try:
+            package_transport = AsyncSSHPackageTransport(
                 endpoint=config_entry.data[CONF_HOST],
                 private_key=config_entry.data.get(CONF_SSH_PRIVATE_KEY),
                 host_key=config_entry.data.get(CONF_SSH_HOST_KEY),
-            ),
+            )
+        except (TypeError, UnicodeError, ValueError):
+            _LOGGER.warning(
+                "Stored Hubinet-Ops package SSH trust is invalid; native Proxmox "
+                "entities will continue without package controls. Use Reconfigure "
+                "→ Re-enroll to restore package controls"
+            )
+            package_transport = AsyncSSHPackageTransport(
+                endpoint="", private_key=None, host_key=None
+            )
+        self.package_manager = PackageManager(
+            hass,
+            config_entry,
+            transport=package_transport,
             on_state_change=self.async_update_listeners,
         )
         self.package_node: str | None = config_entry.data.get(CONF_PACKAGE_NODE)

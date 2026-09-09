@@ -48,7 +48,7 @@
           "enrollment": "HUBINET enrollment value"
         },
         "data_description": {
-          "enrollment": "Paste the complete HUBINET1 value printed by bootstrap. It is used once and is not stored verbatim."
+          "enrollment": "Paste the complete HUBINET1 value printed by bootstrap. It is sensitive credential material: Hubinet-Ops does not store the raw blob, but you should discard terminal and clipboard copies after enrollment."
         },
         "description": "Run this command once as root on the Proxmox VE host:\n\n```text\n{bootstrap_command}\n```\n\nThen paste the enrollment value below. Hubinet-Ops validates the API, SSH host key, SSH authentication, helper protocol, and local node before saving.",
         "title": "Enroll Hubinet-Ops"
@@ -69,7 +69,21 @@
         "description": "The connection to the Proxmox VE server requires re-authentication. Please update your credentials to continue.",
         "title": "Re-authenticate Proxmox VE integration"
       },
+      "reauth_enrollment": {
+        "data": {
+          "enrollment": "HUBINET enrollment value"
+        },
+        "data_description": {
+          "enrollment": "Paste the new HUBINET1 value. It remains sensitive while its credentials are valid; Hubinet-Ops does not store the raw blob."
+        },
+        "description": "Run this command as root on the Proxmox VE host to replace the Hubinet credentials:\n\n```text\n{bootstrap_command}\n```\n\nThen paste the new enrollment value. The old Hubinet credentials are invalidated by --reset.",
+        "title": "Re-enroll Hubinet-Ops"
+      },
       "reconfigure": {
+        "menu_options": {
+          "reconfigure_guided": "Re-enroll (guided)",
+          "reconfigure_existing_credentials": "Existing credentials (advanced)"
+        },
         "data": {
           "auth_method": "[%key:component::hubinet_ops::config::step::existing_credentials::data::auth_method%]",
           "host": "[%key:common::config_flow::data::host%]",
@@ -86,8 +100,52 @@
           "username": "[%key:component::hubinet_ops::config::step::existing_credentials::data_description::username%]",
           "verify_ssl": "[%key:component::hubinet_ops::config::step::existing_credentials::data_description::verify_ssl%]"
         },
-        "description": "Use the following form to reconfigure your Proxmox VE server connection.",
-        "title": "Reconfigure Proxmox VE integration"
+        "description": "Choose guided re-enrollment to replace Hubinet-managed credentials, or use the advanced path for existing Proxmox credentials.",
+        "title": "Reconfigure Hubinet-Ops"
+      },
+      "reconfigure_guided": {
+        "data": {
+          "host": "[%key:common::config_flow::data::host%]",
+          "port": "[%key:common::config_flow::data::port%]",
+          "verify_ssl": "[%key:common::config_flow::data::verify_ssl%]"
+        },
+        "data_description": {
+          "host": "The hostname or IP address of the Proxmox VE host",
+          "port": "The Proxmox VE API port (default: 8006)",
+          "verify_ssl": "Whether to verify the Proxmox VE API certificate"
+        },
+        "description": "Confirm the endpoint that will receive the new guided credentials.",
+        "title": "Guided re-enrollment"
+      },
+      "reconfigure_enrollment": {
+        "data": {
+          "enrollment": "HUBINET enrollment value"
+        },
+        "data_description": {
+          "enrollment": "Paste the new HUBINET1 value. It remains sensitive while its credentials are valid; Hubinet-Ops does not store the raw blob."
+        },
+        "description": "Run this command as root on the Proxmox VE host to replace the Hubinet credentials:\n\n```text\n{bootstrap_command}\n```\n\nThen paste the new enrollment value. All endpoint, API, SSH, helper, and node data is validated before the existing entry changes.",
+        "title": "Re-enroll Hubinet-Ops"
+      },
+      "reconfigure_existing_credentials": {
+        "data": {
+          "auth_method": "[%key:component::hubinet_ops::config::step::existing_credentials::data::auth_method%]",
+          "host": "[%key:common::config_flow::data::host%]",
+          "port": "[%key:common::config_flow::data::port%]",
+          "token": "[%key:component::hubinet_ops::config::step::existing_credentials::data::token%]",
+          "username": "[%key:common::config_flow::data::username%]",
+          "verify_ssl": "[%key:common::config_flow::data::verify_ssl%]"
+        },
+        "data_description": {
+          "auth_method": "[%key:component::hubinet_ops::config::step::existing_credentials::data_description::auth_method%]",
+          "host": "[%key:component::hubinet_ops::config::step::existing_credentials::data_description::host%]",
+          "port": "[%key:component::hubinet_ops::config::step::existing_credentials::data_description::port%]",
+          "token": "[%key:component::hubinet_ops::config::step::existing_credentials::data_description::token%]",
+          "username": "[%key:component::hubinet_ops::config::step::existing_credentials::data_description::username%]",
+          "verify_ssl": "[%key:component::hubinet_ops::config::step::existing_credentials::data_description::verify_ssl%]"
+        },
+        "description": "Use existing Proxmox credentials. Changing the host clears package SSH trust until guided re-enrollment.",
+        "title": "Existing credentials (advanced)"
       },
       "reconfigure_auth": {
         "data": {

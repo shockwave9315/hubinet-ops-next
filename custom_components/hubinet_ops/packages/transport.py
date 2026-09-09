@@ -28,6 +28,7 @@ _MAX_RESPONSE_BYTES = 48 * 1024 * 1024
 _MAX_STDERR_BYTES = 64 * 1024
 _READ_CHUNK_BYTES = 64 * 1024
 TRANSPORT_TIMEOUT_SECONDS = 300.0
+PROBE_TIMEOUT_SECONDS = 30.0
 
 
 def _build_known_hosts(endpoint: str, host_key: str, port: int = 22) -> bytes:
@@ -176,7 +177,8 @@ class AsyncSSHPackageTransport:
             {
                 "protocol_version": PROTOCOL_VERSION,
                 "operation": OPERATION_PROBE,
-            }
+            },
+            timeout=PROBE_TIMEOUT_SECONDS,
         )
         if not isinstance(payload, Mapping):
             raise PackageHelperProtocolError("helper returned malformed probe data")
@@ -207,7 +209,9 @@ class AsyncSSHPackageTransport:
             "target": {"node": expected_node, "vmid": vmid},
         }
         try:
-            payload = await self._async_request(request)
+            payload = await self._async_request(
+                request, timeout=TRANSPORT_TIMEOUT_SECONDS
+            )
         except PackageTransportTimeoutError as err:
             raise PackageScanError(
                 PackageScanFailure.TIMEOUT, "package scan helper timed out"
@@ -232,14 +236,16 @@ class AsyncSSHPackageTransport:
             ) from err
         return _parse_response(payload, expected_node, vmid)
 
-    async def _async_request(self, request: Mapping[str, Any]) -> Any:
+    async def _async_request(
+        self, request: Mapping[str, Any], *, timeout: float
+    ) -> Any:
         """Send one bounded typed request through the pinned SSH connection."""
         self._require_configured()
         encoded = json.dumps(request, separators=(",", ":"), sort_keys=True).encode()
         if len(encoded) > _MAX_REQUEST_BYTES:
             raise PackageHelperProtocolError("package helper request exceeded its bound")
         try:
-            async with asyncio.timeout(TRANSPORT_TIMEOUT_SECONDS):
+            async with asyncio.timeout(timeout):
                 async with self._connector(
                     self._endpoint,
                     port=self._port,

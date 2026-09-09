@@ -112,6 +112,91 @@ async def test_migration_v3_ignores_incomplete_legacy_transport(
         known_hosts_path.unlink(missing_ok=True)
 
 
+async def test_migration_refuses_entire_known_hosts_file_with_marker(
+    hass: HomeAssistant,
+    mock_proxmox_client: MagicMock,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """An active @revoked line prevents even a separate plain-key import."""
+    private_key = asyncssh.generate_private_key("ssh-ed25519")
+    host_key = asyncssh.generate_private_key("ssh-ed25519")
+    private_path = Path(hass.config.path(PACKAGE_SCAN_PRIVATE_KEY))
+    known_hosts_path = Path(hass.config.path(PACKAGE_SCAN_KNOWN_HOSTS))
+    private_path.parent.mkdir(parents=True, exist_ok=True)
+    private_path.unlink(missing_ok=True)
+    known_hosts_path.unlink(missing_ok=True)
+    private_path.write_bytes(private_key.export_private_key())
+    public_key = host_key.export_public_key().decode().strip()
+    known_hosts_path.write_text(
+        f"127.0.0.1 {public_key}\n@revoked 127.0.0.1 {public_key}\n"
+    )
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        version=3,
+        data=MOCK_TEST_CONFIG,
+        entry_id="legacy-marker",
+    )
+    entry.add_to_hass(hass)
+
+    try:
+        assert await async_migrate_entry(hass, entry) is True
+        assert entry.version == 4
+        assert CONF_SSH_PRIVATE_KEY not in entry.data
+        assert CONF_SSH_HOST_KEY not in entry.data
+        assert CONF_PACKAGE_NODE not in entry.data
+        assert "Reconfigure → Re-enroll" in caplog.text
+        await hass.config_entries.async_setup(entry.entry_id)
+        await hass.async_block_till_done()
+        assert entry.state is ConfigEntryState.LOADED
+    finally:
+        private_path.unlink(missing_ok=True)
+        known_hosts_path.unlink(missing_ok=True)
+
+
+@pytest.mark.parametrize(
+    ("host", "private_key", "host_key"),
+    [
+        ("127.0.0.1", "not-a-private-key", None),
+        ("127.0.0.1", None, "not-a-host-key"),
+        ("bad,host", None, None),
+    ],
+)
+async def test_invalid_stored_package_trust_does_not_block_native_setup(
+    hass: HomeAssistant,
+    mock_proxmox_client: MagicMock,
+    caplog: pytest.LogCaptureFixture,
+    host: str,
+    private_key: str | None,
+    host_key: str | None,
+) -> None:
+    """Package transport construction failure degrades without killing native PVE."""
+    valid_private = asyncssh.generate_private_key("ssh-ed25519")
+    valid_host = asyncssh.generate_private_key("ssh-ed25519")
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        version=4,
+        entry_id="corrupt-package-trust",
+        data={
+            **MOCK_TEST_CONFIG,
+            CONF_HOST: host,
+            CONF_PACKAGE_NODE: "pve1",
+            CONF_SSH_PRIVATE_KEY: private_key
+            if private_key is not None
+            else valid_private.export_private_key().decode(),
+            CONF_SSH_HOST_KEY: host_key
+            if host_key is not None
+            else valid_host.export_public_key().decode().strip(),
+        },
+    )
+
+    await setup_integration(hass, entry)
+
+    assert entry.state is ConfigEntryState.LOADED
+    assert entry.runtime_data.data["pve1"].node["node"] == "pve1"
+    assert entry.runtime_data.package_manager.configured is False
+    assert "Reconfigure → Re-enroll" in caplog.text
+
+
 @pytest.mark.parametrize(
     ("exception", "expected_state", "target"),
     [

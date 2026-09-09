@@ -69,6 +69,8 @@ def _read_legacy_transport_data(
         if not line or line.startswith("#"):
             continue
         parts = line.split()
+        if parts[0].startswith("@"):
+            raise ValueError("legacy package host keys contain an SSH marker")
         if len(parts) < 3 or parts[1] != "ssh-ed25519":
             continue
         host_patterns = parts[0].split(",")
@@ -175,7 +177,8 @@ async def async_migrate_entry(hass: HomeAssistant, entry: ProxmoxConfigEntry) ->
         except (KeyError, OSError, TypeError, UnicodeError, ValueError, asyncssh.Error):
             _LOGGER.warning(
                 "Could not safely import legacy Hubinet-Ops package SSH trust; "
-                "native Proxmox entities will continue without package controls"
+                "native Proxmox entities will continue without package controls. "
+                "Use Reconfigure → Re-enroll to restore package controls"
             )
         else:
             data.update(migrated_transport)

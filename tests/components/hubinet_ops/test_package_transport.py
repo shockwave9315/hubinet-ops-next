@@ -21,6 +21,8 @@ from custom_components.hubinet_ops.packages.transport import (
     PackageTransportAuthenticationError,
     PackageTransportConnectionError,
     PackageTransportHostKeyError,
+    PROBE_TIMEOUT_SECONDS,
+    TRANSPORT_TIMEOUT_SECONDS,
 )
 from homeassistant.core import HomeAssistant
 
@@ -565,6 +567,37 @@ async def test_probe_returns_local_node_without_target(
         "protocol_version": 1,
         "operation": "probe",
     }
+
+
+async def test_probe_and_scan_use_distinct_bounded_timeouts(
+    hass: HomeAssistant, tmp_path: Path
+) -> None:
+    """Setup probing is short while potentially long package scans stay unchanged."""
+    probe_response = {
+        "protocol_version": 1,
+        "helper_version": 2,
+        "operation": "probe",
+        "ok": True,
+        "node": "pve1",
+    }
+    transport, *_ = await _transport(hass, tmp_path, probe_response)
+    real_timeout = asyncio.timeout
+    with patch(
+        "custom_components.hubinet_ops.packages.transport.asyncio.timeout",
+        side_effect=real_timeout,
+    ) as timeout:
+        await transport.async_probe()
+    timeout.assert_called_once_with(PROBE_TIMEOUT_SECONDS)
+    assert PROBE_TIMEOUT_SECONDS == 30.0
+
+    transport, *_ = await _transport(hass, tmp_path, _response())
+    with patch(
+        "custom_components.hubinet_ops.packages.transport.asyncio.timeout",
+        side_effect=real_timeout,
+    ) as timeout:
+        await transport.async_scan("pve1", 200)
+    timeout.assert_called_once_with(TRANSPORT_TIMEOUT_SECONDS)
+    assert TRANSPORT_TIMEOUT_SECONDS == 300.0
 
 
 @pytest.mark.parametrize(

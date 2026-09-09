@@ -189,6 +189,73 @@ async def _start_guided(hass: HomeAssistant) -> dict[str, Any]:
     return result
 
 
+async def _start_advanced_reconfigure(
+    hass: HomeAssistant, entry: MockConfigEntry
+) -> dict[str, Any]:
+    """Advance an existing entry through the reconfigure menu."""
+    result = await entry.start_reconfigure_flow(hass)
+    assert result["type"] is FlowResultType.MENU
+    assert result["menu_options"] == [
+        "reconfigure_guided",
+        "reconfigure_existing_credentials",
+    ]
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"],
+        {"next_step_id": "reconfigure_existing_credentials"},
+    )
+    assert result["type"] is FlowResultType.FORM
+    assert result["step_id"] == "reconfigure_existing_credentials"
+    return result
+
+
+def _guided_config_entry() -> MockConfigEntry:
+    """Return an existing entry created by guided enrollment."""
+    private_key = asyncssh.generate_private_key("ssh-ed25519")
+    host_key = asyncssh.generate_private_key("ssh-ed25519")
+    return MockConfigEntry(
+        domain=DOMAIN,
+        title="Guided Proxmox",
+        entry_id="guided-entry",
+        version=4,
+        data={
+            **MOCK_TEST_TOKEN_CONFIG,
+            CONF_AUTH_METHOD: "pve",
+            CONF_REALM: "pve",
+            CONF_USERNAME: "hubinetnext@pve",
+            CONF_TOKEN_ID: "ha",
+            CONF_TOKEN_SECRET: "old-token-secret",
+            CONF_SSH_PRIVATE_KEY: private_key.export_private_key().decode(),
+            CONF_SSH_HOST_KEY: host_key.export_public_key().decode().strip(),
+            CONF_PACKAGE_NODE: "pve1",
+        },
+    )
+
+
+async def _start_guided_reconfigure(
+    hass: HomeAssistant,
+    entry: MockConfigEntry,
+    *,
+    host: str = "127.0.0.1",
+) -> dict[str, Any]:
+    """Advance an existing entry to its guided enrollment form."""
+    result = await entry.start_reconfigure_flow(hass)
+    assert result["type"] is FlowResultType.MENU
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"], {"next_step_id": "reconfigure_guided"}
+    )
+    assert result["step_id"] == "reconfigure_guided"
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"],
+        {CONF_HOST: host, CONF_PORT: 8006, CONF_VERIFY_SSL: True},
+    )
+    assert result["type"] is FlowResultType.FORM
+    assert result["step_id"] == "reconfigure_enrollment"
+    assert result["description_placeholders"]["bootstrap_command"].endswith(
+        "| bash -s -- --reset"
+    )
+    return result
+
+
 async def test_guided_happy_path_creates_one_ready_entry(
     hass: HomeAssistant, mock_proxmox_client: MagicMock
 ) -> None:
@@ -762,9 +829,7 @@ async def test_full_flow_reconfigure(
 ) -> None:
     """Test the full flow of the config flow."""
     mock_config_entry.add_to_hass(hass)
-    result = await mock_config_entry.start_reconfigure_flow(hass)
-    assert result["type"] is FlowResultType.FORM
-    assert result["step_id"] == "reconfigure"
+    result = await _start_advanced_reconfigure(hass, mock_config_entry)
 
     result = await hass.config_entries.flow.async_configure(
         result["flow_id"],
@@ -780,6 +845,226 @@ async def test_full_flow_reconfigure(
     assert result["reason"] == "reconfigure_successful"
     sanitized = sanitize_config_entry(mock_config_entry.data)
     assert sanitized == mock_test_config
+
+
+async def test_guided_reconfigure_reenroll_updates_every_field_atomically(
+    hass: HomeAssistant,
+    mock_proxmox_client: MagicMock,
+    mock_setup_entry: MagicMock,
+) -> None:
+    """A validated enrollment replaces endpoint, auth, SSH, and node together."""
+    entry = _guided_config_entry()
+    entry.add_to_hass(hass)
+    old_data = dict(entry.data)
+    result = await _start_guided_reconfigure(
+        hass, entry, host="192.0.2.55"
+    )
+    value, private_key, host_key = _enrollment()
+
+    with patch(
+        "custom_components.hubinet_ops.config_flow."
+        "AsyncSSHPackageTransport.async_probe",
+        return_value=PackageHelperProbe(node="pve1", helper_version=2),
+    ):
+        result = await hass.config_entries.flow.async_configure(
+            result["flow_id"], {"enrollment": value}
+        )
+    await hass.async_block_till_done()
+
+    assert result["type"] is FlowResultType.ABORT
+    assert result["reason"] == "reconfigure_successful"
+    assert entry.data != old_data
+    assert {
+        key: entry.data[key]
+        for key in (
+            CONF_AUTH_METHOD,
+            CONF_REALM,
+            CONF_USERNAME,
+            CONF_HOST,
+            CONF_PORT,
+            CONF_VERIFY_SSL,
+            CONF_TOKEN,
+            CONF_TOKEN_ID,
+            CONF_TOKEN_SECRET,
+            CONF_SSH_PRIVATE_KEY,
+            CONF_SSH_HOST_KEY,
+            CONF_PACKAGE_NODE,
+            CONF_NODES,
+        )
+    } == {
+        CONF_AUTH_METHOD: "pve",
+        CONF_REALM: "pve",
+        CONF_USERNAME: "hubinetnext@pve",
+        CONF_HOST: "192.0.2.55",
+        CONF_PORT: 8006,
+        CONF_VERIFY_SSL: True,
+        CONF_TOKEN: True,
+        CONF_TOKEN_ID: "ha",
+        CONF_TOKEN_SECRET: "guided-token-secret",
+        CONF_SSH_PRIVATE_KEY: private_key,
+        CONF_SSH_HOST_KEY: host_key,
+        CONF_PACKAGE_NODE: "pve1",
+        CONF_NODES: MOCK_TEST_CONFIG[CONF_NODES],
+    }
+    assert CONF_PASSWORD not in entry.data
+    assert "enrollment" not in entry.data
+    assert len(mock_setup_entry.mock_calls) == 1
+
+
+@pytest.mark.parametrize(
+    ("enrollment_value", "probe_error", "probe_node", "reason"),
+    [
+        ("not-an-enrollment", None, "pve1", "invalid_enrollment_prefix"),
+        (None, PackageTransportAuthenticationError(), "pve1", "ssh_auth_failed"),
+        (None, PackageTransportHostKeyError(), "pve1", "ssh_host_key_mismatch"),
+        (None, None, "other-node", "package_node_not_found"),
+    ],
+)
+async def test_guided_reenroll_failure_leaves_entry_exactly_unchanged(
+    hass: HomeAssistant,
+    mock_proxmox_client: MagicMock,
+    mock_setup_entry: MagicMock,
+    enrollment_value: str | None,
+    probe_error: Exception | None,
+    probe_node: str,
+    reason: str,
+) -> None:
+    """No guided field is partially written when any validation check fails."""
+    entry = _guided_config_entry()
+    entry.add_to_hass(hass)
+    before = dict(entry.data)
+    result = await _start_guided_reconfigure(hass, entry)
+    value = enrollment_value or _enrollment()[0]
+
+    with patch(
+        "custom_components.hubinet_ops.config_flow."
+        "AsyncSSHPackageTransport.async_probe",
+        side_effect=probe_error,
+        return_value=PackageHelperProbe(node=probe_node, helper_version=2),
+    ):
+        result = await hass.config_entries.flow.async_configure(
+            result["flow_id"], {"enrollment": value}
+        )
+
+    assert result["type"] is FlowResultType.FORM
+    assert result["errors"] == {"base": reason}
+    assert entry.data == before
+    assert len(mock_setup_entry.mock_calls) == 0
+
+
+async def test_guided_reenroll_api_failure_leaves_entry_unchanged(
+    hass: HomeAssistant,
+    mock_proxmox_client: MagicMock,
+    mock_setup_entry: MagicMock,
+) -> None:
+    """API validation failure happens before SSH and before atomic replacement."""
+    entry = _guided_config_entry()
+    entry.add_to_hass(hass)
+    before = dict(entry.data)
+    result = await _start_guided_reconfigure(hass, entry)
+    mock_proxmox_client._mock_api_cf.side_effect = AuthenticationError("bad token")
+
+    with patch(
+        "custom_components.hubinet_ops.config_flow."
+        "AsyncSSHPackageTransport.async_probe"
+    ) as probe:
+        result = await hass.config_entries.flow.async_configure(
+            result["flow_id"], {"enrollment": _enrollment()[0]}
+        )
+
+    assert result["type"] is FlowResultType.FORM
+    assert result["errors"] == {"base": "invalid_auth"}
+    assert entry.data == before
+    probe.assert_not_called()
+    assert len(mock_setup_entry.mock_calls) == 0
+
+
+async def test_guided_reauth_uses_enrollment_and_atomically_reloads(
+    hass: HomeAssistant,
+    mock_proxmox_client: MagicMock,
+    mock_setup_entry: MagicMock,
+) -> None:
+    """Guided API reauth never asks for a separately exposed token secret."""
+    entry = _guided_config_entry()
+    entry.add_to_hass(hass)
+    result = await entry.start_reauth_flow(hass)
+    assert result["type"] is FlowResultType.FORM
+    assert result["step_id"] == "reauth_enrollment"
+    assert set(result["data_schema"].schema) == {"enrollment"}
+    assert "--reset" in result["description_placeholders"]["bootstrap_command"]
+
+    value, private_key, host_key = _enrollment()
+    with patch(
+        "custom_components.hubinet_ops.config_flow."
+        "AsyncSSHPackageTransport.async_probe",
+        return_value=PackageHelperProbe(node="pve1", helper_version=2),
+    ):
+        result = await hass.config_entries.flow.async_configure(
+            result["flow_id"], {"enrollment": value}
+        )
+    await hass.async_block_till_done()
+
+    assert result["reason"] == "reauth_successful"
+    assert entry.data[CONF_TOKEN_SECRET] == "guided-token-secret"
+    assert entry.data[CONF_SSH_PRIVATE_KEY] == private_key
+    assert entry.data[CONF_SSH_HOST_KEY] == host_key
+    assert "enrollment" not in entry.data
+    assert len(mock_setup_entry.mock_calls) == 1
+
+
+async def test_advanced_entry_with_legacy_trust_keeps_upstream_reauth(
+    hass: HomeAssistant,
+    mock_config_entry: MockConfigEntry,
+) -> None:
+    """Migrated SSH trust does not misclassify an advanced API identity."""
+    private_key = asyncssh.generate_private_key("ssh-ed25519")
+    host_key = asyncssh.generate_private_key("ssh-ed25519")
+    object.__setattr__(
+        mock_config_entry,
+        "data",
+        {
+            **mock_config_entry.data,
+            CONF_SSH_PRIVATE_KEY: private_key.export_private_key().decode(),
+            CONF_SSH_HOST_KEY: host_key.export_public_key().decode().strip(),
+            CONF_PACKAGE_NODE: "pve1",
+        },
+    )
+    mock_config_entry.add_to_hass(hass)
+
+    result = await mock_config_entry.start_reauth_flow(hass)
+
+    assert result["type"] is FlowResultType.FORM
+    assert result["step_id"] == "reauth_confirm"
+    assert {str(key) for key in result["data_schema"].schema} == {CONF_PASSWORD}
+
+
+async def test_advanced_reconfigure_host_change_clears_stale_package_trust(
+    hass: HomeAssistant,
+    mock_proxmox_client: MagicMock,
+    mock_setup_entry: MagicMock,
+) -> None:
+    """Advanced endpoint changes cannot retain trust bound to the old host."""
+    entry = _guided_config_entry()
+    entry.add_to_hass(hass)
+    result = await _start_advanced_reconfigure(hass, entry)
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"],
+        {
+            **MOCK_USER_STEP,
+            CONF_HOST: "192.0.2.88",
+        },
+    )
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"], MOCK_USER_AUTH_STEP_PASSWORD
+    )
+    await hass.async_block_till_done()
+
+    assert result["reason"] == "reconfigure_successful"
+    assert entry.data[CONF_HOST] == "192.0.2.88"
+    assert CONF_SSH_PRIVATE_KEY not in entry.data
+    assert CONF_SSH_HOST_KEY not in entry.data
+    assert CONF_PACKAGE_NODE not in entry.data
+    assert len(mock_setup_entry.mock_calls) == 1
 
 
 async def test_full_flow_reconfigure_match_entries(
@@ -803,9 +1088,7 @@ async def test_full_flow_reconfigure_match_entries(
     )
     second_entry.add_to_hass(hass)
 
-    result = await mock_config_entry.start_reconfigure_flow(hass)
-    assert result["type"] is FlowResultType.FORM
-    assert result["step_id"] == "reconfigure"
+    result = await _start_advanced_reconfigure(hass, mock_config_entry)
 
     result = await hass.config_entries.flow.async_configure(
         result["flow_id"],
@@ -857,9 +1140,7 @@ async def test_full_flow_reconfigure_exceptions(
 ) -> None:
     """Test the full flow of the config flow."""
     mock_config_entry.add_to_hass(hass)
-    result = await mock_config_entry.start_reconfigure_flow(hass)
-    assert result["type"] is FlowResultType.FORM
-    assert result["step_id"] == "reconfigure"
+    result = await _start_advanced_reconfigure(hass, mock_config_entry)
 
     mock_proxmox_client.nodes.get.side_effect = exception
     result = await hass.config_entries.flow.async_configure(
