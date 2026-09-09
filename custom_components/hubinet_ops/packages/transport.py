@@ -13,14 +13,29 @@ import asyncssh
 
 from homeassistant.core import HomeAssistant
 
-from .models import PackageScanError, PackageScanFailure, PackageScanResult
-from .parser import PackageScanParseError, parse_apt_simulation, parse_os_release
+from .models import (
+    PackageMutationResult,
+    PackageScanError,
+    PackageScanFailure,
+    PackageScanResult,
+    PackageUpdateError,
+    PackageUpdateOutcome,
+)
+from .parser import (
+    PackageScanParseError,
+    ParsedAptSimulation,
+    parse_apt_simulation,
+    parse_installed_inventory,
+    parse_os_release,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
 PROTOCOL_VERSION = 1
 OPERATION_PROBE = "probe"
 OPERATION_SCAN_PACKAGES = "scan_packages"
+OPERATION_PLAN_PACKAGES = "plan_packages"
+OPERATION_UPDATE_PACKAGES = "update_packages"
 
 _NODE_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9.-]{0,62}")
 _MAX_REQUEST_BYTES = 1024
@@ -28,6 +43,7 @@ _MAX_RESPONSE_BYTES = 48 * 1024 * 1024
 _MAX_STDERR_BYTES = 64 * 1024
 _READ_CHUNK_BYTES = 64 * 1024
 TRANSPORT_TIMEOUT_SECONDS = 300.0
+UPDATE_TRANSPORT_TIMEOUT_SECONDS = 1860.0
 PROBE_TIMEOUT_SECONDS = 30.0
 
 
@@ -236,6 +252,124 @@ class AsyncSSHPackageTransport:
             ) from err
         return _parse_response(payload, expected_node, vmid)
 
+    async def async_plan(
+        self, expected_node: str, vmid: int
+    ) -> ParsedAptSimulation:
+        """Return a fresh hardened simulation without refreshing APT metadata."""
+        payload = await self._async_update_request(
+            expected_node,
+            vmid,
+            OPERATION_PLAN_PACKAGES,
+            timeout=TRANSPORT_TIMEOUT_SECONDS,
+            timeout_outcome=PackageUpdateOutcome.PLAN_FAILED,
+        )
+        evidence = _parse_update_response(
+            payload, expected_node, vmid, OPERATION_PLAN_PACKAGES
+        )
+        try:
+            native_architecture = evidence["native_architecture"]
+            installed_inventory = evidence["installed_inventory"]
+            simulation = evidence["simulation"]
+        except KeyError as err:
+            raise PackageUpdateError(
+                PackageUpdateOutcome.PLAN_FAILED,
+                "package plan helper returned incomplete evidence",
+            ) from err
+        if not all(
+            isinstance(value, str)
+            for value in (native_architecture, installed_inventory, simulation)
+        ):
+            raise PackageUpdateError(
+                PackageUpdateOutcome.PLAN_FAILED,
+                "package plan helper returned malformed evidence",
+            )
+        try:
+            return parse_apt_simulation(
+                simulation,
+                native_architecture=native_architecture,
+                installed_inventory=installed_inventory,
+            )
+        except PackageScanParseError as err:
+            raise PackageUpdateError(
+                PackageUpdateOutcome.PLAN_FAILED, str(err)
+            ) from err
+
+    async def async_update(
+        self, expected_node: str, vmid: int
+    ) -> PackageMutationResult:
+        """Run one fixed bare upgrade and parse its before/after inventories."""
+        payload = await self._async_update_request(
+            expected_node,
+            vmid,
+            OPERATION_UPDATE_PACKAGES,
+            timeout=UPDATE_TRANSPORT_TIMEOUT_SECONDS,
+            timeout_outcome=PackageUpdateOutcome.MUTATION_TIMED_OUT,
+        )
+        evidence = _parse_update_response(
+            payload, expected_node, vmid, OPERATION_UPDATE_PACKAGES
+        )
+        try:
+            before_text = evidence["before_inventory"]
+            after_text = evidence["after_inventory"]
+        except KeyError as err:
+            raise PackageUpdateError(
+                PackageUpdateOutcome.MUTATION_UNCERTAIN,
+                "package update helper returned incomplete inventory evidence",
+            ) from err
+        if not isinstance(before_text, str) or not isinstance(after_text, str):
+            raise PackageUpdateError(
+                PackageUpdateOutcome.MUTATION_UNCERTAIN,
+                "package update helper returned malformed inventory evidence",
+            )
+        try:
+            before = parse_installed_inventory(before_text)
+            after = parse_installed_inventory(after_text)
+        except PackageScanParseError as err:
+            raise PackageUpdateError(
+                PackageUpdateOutcome.MUTATION_FAILED,
+                "post-update package inventory could not be parsed",
+            ) from err
+        if before.unfinished or after.unfinished:
+            raise PackageUpdateError(
+                PackageUpdateOutcome.MUTATION_FAILED,
+                "dpkg reports unfinished package state after update",
+            )
+        return PackageMutationResult(before=before.installed, after=after.installed)
+
+    async def _async_update_request(
+        self,
+        expected_node: str,
+        vmid: int,
+        operation: str,
+        *,
+        timeout: float,
+        timeout_outcome: PackageUpdateOutcome,
+    ) -> Any:
+        """Send one typed update-path request and classify transport failures."""
+        _validate_update_target(expected_node, vmid)
+        request = {
+            "protocol_version": PROTOCOL_VERSION,
+            "operation": operation,
+            "target": {"node": expected_node, "vmid": vmid},
+        }
+        try:
+            return await self._async_request(request, timeout=timeout)
+        except PackageTransportTimeoutError as err:
+            raise PackageUpdateError(timeout_outcome, "package operation timed out") from err
+        except (
+            PackageTransportConnectionError,
+            PackageTransportAuthenticationError,
+            PackageTransportHostKeyError,
+            PackageHelperUnavailableError,
+            PackageHelperProtocolError,
+        ) as err:
+            outcome = (
+                PackageUpdateOutcome.PLAN_FAILED
+                if operation == OPERATION_PLAN_PACKAGES
+                else PackageUpdateOutcome.MUTATION_UNCERTAIN
+            )
+            raise PackageUpdateError(outcome, str(err)) from err
+
     async def _async_request(
         self, request: Mapping[str, Any], *, timeout: float
     ) -> Any:
@@ -405,6 +539,88 @@ def _validate_target(expected_node: str, vmid: int) -> None:
             PackageScanFailure.EXECUTION_FAILED,
             "Proxmox LXC VMID is invalid for package scanning",
         )
+
+
+def _validate_update_target(expected_node: str, vmid: int) -> None:
+    """Validate update-path identity without translating through scan errors."""
+    if not _NODE_RE.fullmatch(expected_node) or type(vmid) is not int or not (
+        100 <= vmid <= 999_999_999
+    ):
+        raise PackageUpdateError(
+            PackageUpdateOutcome.GUEST_UNAVAILABLE,
+            "Proxmox LXC identity is invalid for package operations",
+        )
+
+
+def _parse_update_response(
+    payload: Any,
+    expected_node: str,
+    expected_vmid: int,
+    expected_operation: str,
+) -> Mapping[str, Any]:
+    """Validate one plan/mutation response and return its evidence."""
+    if not isinstance(payload, Mapping):
+        raise PackageUpdateError(
+            PackageUpdateOutcome.HELPER_OUTDATED,
+            "package helper is incompatible; run the bootstrap command again",
+        )
+    if (
+        type(payload.get("protocol_version")) is not int
+        or payload.get("protocol_version") != PROTOCOL_VERSION
+        or type(payload.get("helper_version")) is not int
+        or payload.get("helper_version") < 1
+        or payload.get("operation") != expected_operation
+    ):
+        raise PackageUpdateError(
+            PackageUpdateOutcome.HELPER_OUTDATED,
+            "package helper is outdated; run the current bootstrap command again",
+        )
+
+    target = payload.get("target")
+    target_matches = (
+        isinstance(target, Mapping)
+        and bool(target)
+        and target.get("node") == expected_node
+        and type(target.get("vmid")) is int
+        and target.get("vmid") == expected_vmid
+    )
+    if payload.get("ok") is True:
+        if not target_matches:
+            raise PackageUpdateError(
+                PackageUpdateOutcome.GUEST_UNAVAILABLE,
+                "package helper returned the wrong node or LXC identity",
+            )
+    else:
+        error = payload.get("error")
+        if isinstance(target, Mapping) and target and not target_matches:
+            raise PackageUpdateError(
+                PackageUpdateOutcome.GUEST_UNAVAILABLE,
+                "package helper returned the wrong node or LXC identity",
+            )
+        classification = (
+            error.get("classification") if isinstance(error, Mapping) else None
+        )
+        if classification == "package_manager_busy":
+            outcome = PackageUpdateOutcome.PACKAGE_MANAGER_BUSY
+        elif classification in {"guest_unavailable", "identity_mismatch"}:
+            outcome = PackageUpdateOutcome.GUEST_UNAVAILABLE
+        elif expected_operation == OPERATION_PLAN_PACKAGES:
+            outcome = PackageUpdateOutcome.PLAN_FAILED
+        elif classification == "timeout":
+            outcome = PackageUpdateOutcome.MUTATION_TIMED_OUT
+        else:
+            outcome = PackageUpdateOutcome.MUTATION_FAILED
+        raise PackageUpdateError(outcome, f"package operation failed: {outcome}")
+
+    evidence = payload.get("evidence")
+    if not isinstance(evidence, Mapping):
+        outcome = (
+            PackageUpdateOutcome.PLAN_FAILED
+            if expected_operation == OPERATION_PLAN_PACKAGES
+            else PackageUpdateOutcome.MUTATION_UNCERTAIN
+        )
+        raise PackageUpdateError(outcome, "package helper returned malformed evidence")
+    return evidence
 
 
 def _parse_response(

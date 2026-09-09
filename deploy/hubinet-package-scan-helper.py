@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Root-owned forced-command PVE boundary for package scans and setup probe."""
+"""Root-owned forced-command PVE boundary for typed guest package operations."""
 
 from collections.abc import Callable, Iterator, Mapping
 from contextlib import AbstractContextManager, contextmanager, suppress
@@ -18,9 +18,11 @@ import time
 from typing import Any
 
 PROTOCOL_VERSION = 1
-HELPER_VERSION = 2
+HELPER_VERSION = 3
 OPERATION_PROBE = "probe"
 OPERATION_SCAN_PACKAGES = "scan_packages"
+OPERATION_PLAN_PACKAGES = "plan_packages"
+OPERATION_UPDATE_PACKAGES = "update_packages"
 # Retained as a compatibility alias for existing helper tests/importers.
 OPERATION = OPERATION_SCAN_PACKAGES
 
@@ -28,11 +30,14 @@ MAX_REQUEST_BYTES = 1024
 MAX_COMMAND_OUTPUT_BYTES = 16 * 1024 * 1024
 OPERATION_TIMEOUT_SECONDS = 240.0
 COMMAND_TIMEOUT_SECONDS = 120.0
+UPDATE_OPERATION_TIMEOUT_SECONDS = 1800.0
+UPDATE_COMMAND_TIMEOUT_SECONDS = 1500.0
 LOCK_DIRECTORY = "/run/lock"
 PVE_LOCAL_NODE_LINK = "/etc/pve/local"
 PVE_LOCAL_NODE_PREFIX = "/etc/pve/nodes/"
 
 NODE_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9.-]{0,62}")
+ARCHITECTURE_RE = re.compile(r"[a-z][a-z0-9]*(-[a-z0-9]+)*")
 # Only the numeric upstream feature version is gated; distribution revision
 # suffixes such as "build2" or "ubuntu1" are not part of the feature check
 # and are intentionally not validated here.
@@ -43,6 +48,79 @@ BUSY_PATTERNS = (
     "unable to acquire the dpkg frontend lock",
     "is another process using it",
     "could not open lock file",
+)
+DPKG_STATUS_WORDS = frozenset(
+    {
+        "installed",
+        "not-installed",
+        "config-files",
+        "half-installed",
+        "unpacked",
+        "half-configured",
+        "triggers-awaited",
+        "triggers-pending",
+    }
+)
+DPKG_UNFINISHED_STATUS_WORDS = frozenset(
+    {
+        "half-installed",
+        "unpacked",
+        "half-configured",
+        "triggers-awaited",
+        "triggers-pending",
+    }
+)
+
+# Scan simulation, execution-time simulation, and mutation intentionally share
+# the same policy options. The only differences are simulation's ``-s`` and
+# mutation's absence of it. No request material is ever appended to either
+# command.
+APT_HARDENED_OPTIONS = (
+    "-y",
+    "-o",
+    "APT::Get::Upgrade-Allow-New=false",
+    "-o",
+    "APT::Get::Remove=false",
+    "-o",
+    "APT::Get::Force-Yes=false",
+    "-o",
+    "APT::Get::allow-downgrades=false",
+    "-o",
+    "APT::Get::allow-remove-essential=false",
+    "-o",
+    "APT::Get::allow-change-held-packages=false",
+    "-o",
+    "APT::Get::AllowUnauthenticated=false",
+    "-o",
+    "APT::Ignore-Hold=false",
+    "-o",
+    "Dpkg::Options::=--force-confdef",
+    "-o",
+    "Dpkg::Options::=--force-confold",
+)
+APT_SIMULATION_COMMAND = (
+    "env",
+    "LC_ALL=C",
+    "DEBIAN_FRONTEND=noninteractive",
+    "apt-get",
+    "-s",
+    "upgrade",
+    *APT_HARDENED_OPTIONS,
+)
+APT_MUTATION_COMMAND = (
+    "env",
+    "LC_ALL=C",
+    "DEBIAN_FRONTEND=noninteractive",
+    "apt-get",
+    "upgrade",
+    *APT_HARDENED_OPTIONS,
+)
+INVENTORY_COMMAND = (
+    "env",
+    "LC_ALL=C",
+    "dpkg-query",
+    "-W",
+    "-f=${Package}\\t${Architecture}\\t${Version}\\t${db:Status-Status}\\n",
 )
 
 
@@ -225,7 +303,7 @@ def _target_lock(vmid: int) -> Iterator[None]:
 
 
 def validate_request(payload: Any) -> tuple[str, str | None, int | None]:
-    """Validate one of the two exact typed request shapes."""
+    """Validate one exact typed request shape."""
     if not isinstance(payload, Mapping):
         raise RequestError("request must be a JSON object")
     if (
@@ -238,13 +316,17 @@ def validate_request(payload: Any) -> tuple[str, str | None, int | None]:
         if set(payload) != {"protocol_version", "operation"}:
             raise RequestError("request must have the exact probe shape")
         return operation, None, None
-    if operation != OPERATION_SCAN_PACKAGES:
+    if operation not in {
+        OPERATION_SCAN_PACKAGES,
+        OPERATION_PLAN_PACKAGES,
+        OPERATION_UPDATE_PACKAGES,
+    }:
         raise RequestError("unknown host-control operation")
     if set(payload) != {"protocol_version", "operation", "target"}:
-        raise RequestError("request must have the exact package-scan shape")
+        raise RequestError("request must have the exact package-operation shape")
     target = payload["target"]
     if not isinstance(target, Mapping) or set(target) != {"node", "vmid"}:
-        raise RequestError("target must have the exact package-scan shape")
+        raise RequestError("target must have the exact package-operation shape")
     node = target["node"]
     vmid = target["vmid"]
     if not isinstance(node, str) or not NODE_RE.fullmatch(node):
@@ -260,12 +342,13 @@ def _command(
     argv: tuple[str, ...],
     *,
     max_output: int = MAX_COMMAND_OUTPUT_BYTES,
+    command_timeout: float = COMMAND_TIMEOUT_SECONDS,
 ) -> CommandResult:
     """Run one command using no more than the global remaining time."""
     remaining = deadline.remaining()
     if remaining <= 0:
         raise ScanError("timeout", "package scan operation deadline exceeded")
-    result = runner(argv, min(COMMAND_TIMEOUT_SECONDS, remaining), max_output)
+    result = runner(argv, min(command_timeout, remaining), max_output)
     if result.timed_out:
         raise ScanError("timeout", "package scan command timed out")
     if deadline.remaining() <= 0:
@@ -282,6 +365,7 @@ def _guest_command(
     tail: tuple[str, ...],
     *,
     max_output: int = MAX_COMMAND_OUTPUT_BYTES,
+    command_timeout: float = COMMAND_TIMEOUT_SECONDS,
 ) -> CommandResult:
     """Run one fixed command in the target LXC."""
     return _command(
@@ -289,6 +373,7 @@ def _guest_command(
         deadline,
         ("pct", "exec", str(vmid), "--", *tail),
         max_output=max_output,
+        command_timeout=command_timeout,
     )
 
 
@@ -408,7 +493,116 @@ def _package_failure(stage: str, stderr: str) -> ScanError:
         return ScanError("package_manager_busy", "APT or dpkg is busy")
     if stage == "metadata_refresh":
         return ScanError("metadata_refresh_failed", "APT metadata refresh failed")
+    if stage == "mutation":
+        return ScanError("mutation_failed", "APT package mutation failed")
     return ScanError("simulation_failed", "APT upgrade simulation failed")
+
+
+def _read_inventory(
+    runner: Runner, deadline: OperationDeadline, vmid: int
+) -> str:
+    """Read one bounded dpkg inventory through a fixed command."""
+    inventory = _guest_command(runner, deadline, vmid, INVENTORY_COMMAND)
+    installed_inventory, _ = _decode(inventory)
+    if inventory.returncode != 0:
+        raise ScanError("execution_failed", "could not read package inventory")
+    return installed_inventory
+
+
+def _validate_inventory_sane(installed_inventory: str) -> None:
+    """Fail closed before/after mutation on malformed or unfinished dpkg state."""
+    seen: set[tuple[str, str]] = set()
+    for raw_line in installed_inventory.splitlines():
+        if not raw_line:
+            continue
+        fields = raw_line.split("\t")
+        if len(fields) != 4 or fields[3] not in DPKG_STATUS_WORDS:
+            raise ScanError("dpkg_sanity_failed", "dpkg inventory is malformed")
+        name, architecture, version, status = fields
+        if (
+            not name
+            or len(name) > 300
+            or len(version) > 500
+            or not ARCHITECTURE_RE.fullmatch(architecture)
+        ):
+            raise ScanError("dpkg_sanity_failed", "dpkg inventory is malformed")
+        identity = (name, architecture)
+        if identity in seen:
+            raise ScanError("dpkg_sanity_failed", "dpkg inventory is malformed")
+        seen.add(identity)
+        if status in DPKG_UNFINISHED_STATUS_WORDS:
+            raise ScanError("dpkg_unfinished", "dpkg reports unfinished package state")
+        if status == "installed" and not version:
+            raise ScanError("dpkg_sanity_failed", "dpkg inventory is malformed")
+
+
+def _collect_plan(
+    vmid: int, runner: Runner, deadline: OperationDeadline
+) -> dict[str, str]:
+    """Collect plan evidence after target validation."""
+    simulation = _guest_command(
+        runner,
+        deadline,
+        vmid,
+        APT_SIMULATION_COMMAND,
+        max_output=8 * 1024 * 1024,
+    )
+    simulation_stdout, simulation_stderr = _decode(simulation)
+    if simulation.returncode != 0:
+        raise _package_failure("simulation", simulation_stderr)
+
+    architecture = _guest_command(
+        runner,
+        deadline,
+        vmid,
+        ("env", "LC_ALL=C", "dpkg", "--print-architecture"),
+        max_output=4096,
+    )
+    native_architecture, _ = _decode(architecture)
+    if architecture.returncode != 0:
+        raise ScanError("execution_failed", "could not determine guest architecture")
+
+    installed_inventory = _read_inventory(runner, deadline, vmid)
+    return {
+        "native_architecture": native_architecture,
+        "installed_inventory": installed_inventory,
+        "simulation": simulation_stdout,
+    }
+
+
+def _plan(
+    expected_node: str, vmid: int, runner: Runner, deadline: OperationDeadline
+) -> dict[str, str]:
+    """Collect a fresh execution-time plan without refreshing APT metadata."""
+    _validate_local_node(expected_node, runner, deadline)
+    _validate_target(vmid, runner, deadline)
+    return _collect_plan(vmid, runner, deadline)
+
+
+def _update_packages(
+    expected_node: str, vmid: int, runner: Runner, deadline: OperationDeadline
+) -> dict[str, str]:
+    """Run one fixed bare hardened upgrade and return before/after inventories."""
+    _validate_local_node(expected_node, runner, deadline)
+    _validate_target(vmid, runner, deadline)
+
+    before = _read_inventory(runner, deadline, vmid)
+    _validate_inventory_sane(before)
+
+    mutation = _guest_command(
+        runner,
+        deadline,
+        vmid,
+        APT_MUTATION_COMMAND,
+        command_timeout=UPDATE_COMMAND_TIMEOUT_SECONDS,
+    )
+    _, mutation_stderr = _decode(mutation)
+    if mutation.returncode != 0:
+        raise _package_failure("mutation", mutation_stderr)
+
+    after = _read_inventory(runner, deadline, vmid)
+    _validate_inventory_sane(after)
+    return {"before_inventory": before, "after_inventory": after}
 
 
 def _scan(
@@ -464,50 +658,7 @@ def _scan(
     if update.returncode != 0:
         raise _package_failure("metadata_refresh", update_stderr)
 
-    simulation = _guest_command(
-        runner,
-        deadline,
-        vmid,
-        (
-            "env",
-            "LC_ALL=C",
-            "DEBIAN_FRONTEND=noninteractive",
-            "apt-get",
-            "-s",
-            "upgrade",
-        ),
-        max_output=8 * 1024 * 1024,
-    )
-    simulation_stdout, simulation_stderr = _decode(simulation)
-    if simulation.returncode != 0:
-        raise _package_failure("simulation", simulation_stderr)
-
-    architecture = _guest_command(
-        runner,
-        deadline,
-        vmid,
-        ("env", "LC_ALL=C", "dpkg", "--print-architecture"),
-        max_output=4096,
-    )
-    native_architecture, _ = _decode(architecture)
-    if architecture.returncode != 0:
-        raise ScanError("execution_failed", "could not determine guest architecture")
-
-    inventory = _guest_command(
-        runner,
-        deadline,
-        vmid,
-        (
-            "env",
-            "LC_ALL=C",
-            "dpkg-query",
-            "-W",
-            "-f=${Package}\\t${Architecture}\\t${Version}\\t${db:Status-Status}\\n",
-        ),
-    )
-    installed_inventory, _ = _decode(inventory)
-    if inventory.returncode != 0:
-        raise ScanError("execution_failed", "could not read package inventory")
+    plan = _collect_plan(vmid, runner, deadline)
 
     reboot = _guest_command(
         runner,
@@ -522,19 +673,17 @@ def _scan(
     reboot_required = True if reboot.returncode == 0 else None
     return {
         "os_release": os_release,
-        "native_architecture": native_architecture,
-        "installed_inventory": installed_inventory,
-        "simulation": simulation_stdout,
+        **plan,
         "reboot_required": reboot_required,
     }
 
 
-def _response_base(node: str, vmid: int) -> dict[str, Any]:
+def _response_base(operation: str, node: str, vmid: int) -> dict[str, Any]:
     """Return compatibility and identity metadata shared by every response."""
     return {
         "protocol_version": PROTOCOL_VERSION,
         "helper_version": HELPER_VERSION,
-        "operation": OPERATION_SCAN_PACKAGES,
+        "operation": operation,
         "target": {"node": node, "vmid": vmid},
     }
 
@@ -548,7 +697,12 @@ def handle_request(
 ) -> dict[str, Any]:
     """Perform the fixed, read/refresh-only package scan command sequence."""
     operation, expected_node, vmid = validate_request(payload)
-    deadline = OperationDeadline(clock(), OPERATION_TIMEOUT_SECONDS, clock)
+    operation_timeout = (
+        UPDATE_OPERATION_TIMEOUT_SECONDS
+        if operation == OPERATION_UPDATE_PACKAGES
+        else OPERATION_TIMEOUT_SECONDS
+    )
+    deadline = OperationDeadline(clock(), operation_timeout, clock)
     if operation == OPERATION_PROBE:
         try:
             node = _get_local_node(runner, deadline)
@@ -572,10 +726,15 @@ def handle_request(
         }
     assert expected_node is not None
     assert vmid is not None
-    response = _response_base(expected_node, vmid)
+    response = _response_base(operation, expected_node, vmid)
     try:
         with lock_factory(vmid):
-            evidence = _scan(expected_node, vmid, runner, deadline)
+            if operation == OPERATION_SCAN_PACKAGES:
+                evidence = _scan(expected_node, vmid, runner, deadline)
+            elif operation == OPERATION_PLAN_PACKAGES:
+                evidence = _plan(expected_node, vmid, runner, deadline)
+            else:
+                evidence = _update_packages(expected_node, vmid, runner, deadline)
     except ScanError as err:
         return {
             **response,
@@ -602,7 +761,7 @@ def _request_failure(
             "message": message[:500],
         },
     }
-    if operation == OPERATION_SCAN_PACKAGES:
+    if operation != OPERATION_PROBE:
         response["target"] = {}
     return response
 
@@ -622,11 +781,13 @@ def main() -> int:
         else:
             try:
                 payload = json.loads(raw.decode())
-                if (
-                    isinstance(payload, Mapping)
-                    and payload.get("operation") == OPERATION_PROBE
-                ):
-                    failure_operation = OPERATION_PROBE
+                if isinstance(payload, Mapping) and payload.get("operation") in {
+                    OPERATION_PROBE,
+                    OPERATION_SCAN_PACKAGES,
+                    OPERATION_PLAN_PACKAGES,
+                    OPERATION_UPDATE_PACKAGES,
+                }:
+                    failure_operation = payload["operation"]
                 response = handle_request(payload)
                 sys.stdout.write(json.dumps(response, separators=(",", ":")))
                 return 0 if response["ok"] else 1

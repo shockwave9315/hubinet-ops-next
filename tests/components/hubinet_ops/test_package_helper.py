@@ -1,8 +1,9 @@
 """Tests for the separately deployed forced-command package helper."""
 
 import ast
-from contextlib import nullcontext
+from contextlib import contextmanager, nullcontext
 import importlib.util
+import json
 import os
 from pathlib import Path
 import stat
@@ -55,6 +56,9 @@ class FakeHelperRunner:
         status: str = "running",
         update_returncode: int = 0,
         update_stderr: str = "",
+        mutation_returncode: int = 0,
+        mutation_stderr: str = "",
+        inventory_outputs: tuple[str, ...] | None = None,
         reboot_returncode: int = 1,
     ) -> None:
         """Initialize fixed command outcomes."""
@@ -63,6 +67,10 @@ class FakeHelperRunner:
         self.status = status
         self.update_returncode = update_returncode
         self.update_stderr = update_stderr
+        self.mutation_returncode = mutation_returncode
+        self.mutation_stderr = mutation_stderr
+        self.inventory_outputs = inventory_outputs or (TWO_INVENTORY,)
+        self.inventory_reads = 0
         self.reboot_returncode = reboot_returncode
         self.calls: list[tuple[tuple[str, ...], float, int]] = []
 
@@ -88,19 +96,29 @@ class FakeHelperRunner:
             )
         if "apt-get -s upgrade" in rendered:
             return helper.CommandResult(0, TWO_UPDATES.encode(), b"")
+        if "apt-get upgrade" in rendered:
+            return helper.CommandResult(
+                self.mutation_returncode, b"", self.mutation_stderr.encode()
+            )
         if "dpkg --print-architecture" in rendered:
             return helper.CommandResult(0, b"amd64\n", b"")
         if "dpkg-query" in rendered:
-            return helper.CommandResult(0, TWO_INVENTORY.encode(), b"")
+            output = self.inventory_outputs[
+                min(self.inventory_reads, len(self.inventory_outputs) - 1)
+            ]
+            self.inventory_reads += 1
+            return helper.CommandResult(0, output.encode(), b"")
         if "/var/run/reboot-required" in rendered:
             return helper.CommandResult(self.reboot_returncode, b"", b"")
         raise AssertionError(f"unexpected command: {argv!r}")
 
 
-def _request(vmid: int = 200, node: str = "pve1") -> dict[str, object]:
+def _request(
+    vmid: int = 200, node: str = "pve1", operation: str = "scan_packages"
+) -> dict[str, object]:
     return {
         "protocol_version": 1,
-        "operation": "scan_packages",
+        "operation": operation,
         "target": {"node": node, "vmid": vmid},
     }
 
@@ -117,7 +135,7 @@ def test_helper_uses_fixed_commands_and_returns_versioned_identity() -> None:
     response = _handle(runner)
     assert response["ok"] is True
     assert response["protocol_version"] == 1
-    assert response["helper_version"] == 2
+    assert response["helper_version"] == 3
     assert response["operation"] == "scan_packages"
     assert response["target"] == {"node": "pve1", "vmid": 200}
     assert response["evidence"]["reboot_required"] is True
@@ -136,9 +154,7 @@ def test_helper_uses_fixed_commands_and_returns_versioned_identity() -> None:
         command[-4:] == ("apt-get", "update", "-qq", "--error-on=any")
         for command in guest_commands
     )
-    assert any(
-        command[-3:] == ("apt-get", "-s", "upgrade") for command in guest_commands
-    )
+    assert any(command[4:] == helper.APT_SIMULATION_COMMAND for command in guest_commands)
 
 
 def test_probe_returns_local_node_and_never_calls_pct() -> None:
@@ -149,7 +165,7 @@ def test_probe_returns_local_node_and_never_calls_pct() -> None:
     )
     assert response == {
         "protocol_version": 1,
-        "helper_version": 2,
+        "helper_version": 3,
         "operation": "probe",
         "ok": True,
         "node": "pve1",
@@ -157,6 +173,181 @@ def test_probe_returns_local_node_and_never_calls_pct() -> None:
     assert [call[0] for call in runner.calls] == [
         ("readlink", "-f", "/etc/pve/local")
     ]
+
+
+def test_scan_plan_and_mutation_share_hardened_apt_policy() -> None:
+    """Scan/plan/mutation cannot diverge because of guest apt configuration."""
+    scan_runner = FakeHelperRunner()
+    assert _handle(scan_runner)["ok"] is True
+
+    plan_runner = FakeHelperRunner()
+    plan = helper.handle_request(
+        _request(operation="plan_packages"),
+        runner=plan_runner,
+        lock_factory=lambda _vmid: nullcontext(),
+    )
+    assert plan["ok"] is True
+
+    update_runner = FakeHelperRunner(
+        inventory_outputs=(
+            TWO_INVENTORY,
+            "openssl\tamd64\t3.0.11-2\tinstalled\napt\tamd64\t2.6.2\tinstalled\n",
+        )
+    )
+    update = helper.handle_request(
+        _request(operation="update_packages"),
+        runner=update_runner,
+        lock_factory=lambda _vmid: nullcontext(),
+    )
+    assert update["ok"] is True
+
+    scan_simulation = next(
+        argv for argv, *_ in scan_runner.calls if argv[4:] == helper.APT_SIMULATION_COMMAND
+    )
+    plan_simulation = next(
+        argv for argv, *_ in plan_runner.calls if argv[4:] == helper.APT_SIMULATION_COMMAND
+    )
+    mutation = next(
+        argv for argv, *_ in update_runner.calls if argv[4:] == helper.APT_MUTATION_COMMAND
+    )
+    assert scan_simulation[4:] == plan_simulation[4:] == helper.APT_SIMULATION_COMMAND
+    assert "APT::Ignore-Hold=false" in scan_simulation
+    assert mutation[4:] == helper.APT_MUTATION_COMMAND
+    assert helper.APT_SIMULATION_COMMAND[-len(helper.APT_HARDENED_OPTIONS) :] == (
+        helper.APT_MUTATION_COMMAND[-len(helper.APT_HARDENED_OPTIONS) :]
+    )
+
+
+def test_plan_uses_current_apt_lists_without_refresh_or_version_gate() -> None:
+    """Execution-time planning simulates only; it never imports new metadata."""
+    runner = FakeHelperRunner()
+    response = helper.handle_request(
+        _request(operation="plan_packages"),
+        runner=runner,
+        lock_factory=lambda _vmid: nullcontext(),
+    )
+    assert response["ok"] is True
+    rendered = [" ".join(call[0]) for call in runner.calls]
+    assert not any("apt-get update" in command for command in rendered)
+    assert not any("apt-get --version" in command for command in rendered)
+    assert not any("/etc/os-release" in command for command in rendered)
+    assert sum(call[0][4:] == helper.APT_SIMULATION_COMMAND for call in runner.calls) == 1
+
+
+def test_update_uses_one_fixed_bare_upgrade_without_plan_material() -> None:
+    """Mutation argv is fixed and contains no caller package/version material."""
+    runner = FakeHelperRunner()
+    request = _request(operation="update_packages")
+    assert set(request) == {"protocol_version", "operation", "target"}
+    response = helper.handle_request(
+        request,
+        runner=runner,
+        lock_factory=lambda _vmid: nullcontext(),
+    )
+    assert response["ok"] is True
+    mutations = [
+        call for call in runner.calls if call[0][4:] == helper.APT_MUTATION_COMMAND
+    ]
+    assert len(mutations) == 1
+    argv, timeout, _max_output = mutations[0]
+    assert argv == ("pct", "exec", "200", "--", *helper.APT_MUTATION_COMMAND)
+    assert timeout == helper.UPDATE_COMMAND_TIMEOUT_SECONDS
+    assert "openssl" not in argv
+    assert "3.0.11-1~deb12u3" not in argv
+    assert not any("apt-get update" in " ".join(call[0]) for call in runner.calls)
+
+
+@pytest.mark.parametrize(
+    "operation", ["scan_packages", "plan_packages", "update_packages"]
+)
+def test_all_package_operations_use_same_vmid_lock(operation: str) -> None:
+    """Every package operation takes the unchanged per-VMID lock boundary."""
+    locked: list[int] = []
+
+    @contextmanager
+    def lock(vmid: int):
+        locked.append(vmid)
+        yield
+
+    response = helper.handle_request(
+        _request(operation=operation), runner=FakeHelperRunner(), lock_factory=lock
+    )
+    assert response["ok"] is True
+    assert locked == [200]
+
+
+def test_update_fails_closed_on_unfinished_inventory_before_mutation() -> None:
+    """Unfinished dpkg state is detected before apt-get can mutate anything."""
+    unfinished = "openssl\tamd64\t3.0.11-1\tunpacked\n"
+    runner = FakeHelperRunner(inventory_outputs=(unfinished,))
+    response = helper.handle_request(
+        _request(operation="update_packages"),
+        runner=runner,
+        lock_factory=lambda _vmid: nullcontext(),
+    )
+    assert response["error"]["classification"] == "dpkg_unfinished"
+    assert not any(call[0][4:] == helper.APT_MUTATION_COMMAND for call in runner.calls)
+
+
+@pytest.mark.parametrize(
+    ("runner", "classification"),
+    [
+        (
+            FakeHelperRunner(
+                mutation_returncode=100,
+                mutation_stderr="E: Could not get lock /var/lib/dpkg/lock-frontend",
+            ),
+            "package_manager_busy",
+        ),
+        (FakeHelperRunner(mutation_returncode=100), "mutation_failed"),
+    ],
+)
+def test_update_classifies_busy_and_apt_rc_100(
+    runner: FakeHelperRunner, classification: str
+) -> None:
+    """APT mutation failures remain bounded and semantic."""
+    response = helper.handle_request(
+        _request(operation="update_packages"),
+        runner=runner,
+        lock_factory=lambda _vmid: nullcontext(),
+    )
+    assert response["error"]["classification"] == classification
+
+
+def test_update_timeout_and_post_mutation_inventory_failures_are_bounded() -> None:
+    """Timeout, malformed inventory, and unfinished post-state all fail closed."""
+
+    def timeout_runner(argv, timeout, max_output):
+        result = FakeHelperRunner()(argv, timeout, max_output)
+        if argv[4:] == helper.APT_MUTATION_COMMAND:
+            return helper.CommandResult(-9, b"", b"", timed_out=True)
+        return result
+
+    timed_out = helper.handle_request(
+        _request(operation="update_packages"),
+        runner=timeout_runner,
+        lock_factory=lambda _vmid: nullcontext(),
+    )
+    assert timed_out["error"]["classification"] == "timeout"
+
+    for after, classification in (
+        ("malformed\n", "dpkg_sanity_failed"),
+        ("openssl\tamd64\t3.0.11-2\thalf-configured\n", "dpkg_unfinished"),
+    ):
+        response = helper.handle_request(
+            _request(operation="update_packages"),
+            runner=FakeHelperRunner(inventory_outputs=(TWO_INVENTORY, after)),
+            lock_factory=lambda _vmid: nullcontext(),
+        )
+        assert response["error"]["classification"] == classification
+
+
+def test_protocol_and_request_bound_are_unchanged() -> None:
+    """New typed operations do not enlarge or negotiate the request protocol."""
+    assert helper.PROTOCOL_VERSION == 1
+    assert helper.MAX_REQUEST_BYTES == 1024
+    for operation in ("scan_packages", "plan_packages", "update_packages"):
+        assert len(json.dumps(_request(operation=operation)).encode()) <= 1024
 
 
 @pytest.mark.parametrize(
