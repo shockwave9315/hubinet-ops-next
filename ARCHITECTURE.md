@@ -66,8 +66,54 @@ Hubinet-Ops owns:
 
 - its domain-isolated fork identity;
 - the technically required custom-integration adaptations recorded in
-  [UPSTREAM.md](UPSTREAM.md); and
+  [UPSTREAM.md](UPSTREAM.md);
+- the guided-enrollment bootstrap described below; and
 - the package-scan subsystem described below.
+
+## Guided fresh-install enrollment
+
+The default config-flow path is a guided setup layered beside the preserved
+upstream-compatible existing-credentials path. It first collects only the
+user-entered PVE API host, port, and SSL-verification preference. Duplicate
+host detection happens at that point, before any bootstrap instruction is
+shown.
+
+The next form displays one command pinned to the exact installed integration
+version. The root-run PVE bootstrap provisions only the fixed product
+resources: user `hubinetnext@pve`, role `HubinetOpsNext`, token ID `ha`, the
+root ACL, the forced-command helper, and the restricted key in
+`/root/.ssh/authorized_keys2`. The exact role privileges are
+`Datastore.Audit`, `Sys.Audit`, `Sys.PowerMgmt`, `VM.Audit`, `VM.PowerMgmt`,
+and `VM.Snapshot`. The bootstrap verifies that effective sshd configuration
+already enables `.ssh/authorized_keys2`; it never edits sshd configuration or
+the other authorized-key files.
+
+The bootstrap prints one bounded `HUBINET1-` base64url JSON enrollment value.
+It carries only the version, PVE token secret, compact Ed25519 private client
+key, and local PVE Ed25519 SSH host public key. The value is temporary setup
+transport and is never persisted verbatim. A normal run stops without any
+mutation if the fixed token already exists, because PVE cannot reveal its
+secret again. Explicit `--reset` re-enrollment recreates only the fixed token
+and replaces only the Hubinet key in `authorized_keys2`; deterministic
+role/user/ACL/helper resources are otherwise reconciled to their fixed shape.
+
+Before creating a config entry, Home Assistant strictly parses and imports the
+enrollment, validates the fixed API identity against the user-entered API
+endpoint, connects to the user-entered SSH endpoint using only the in-memory
+private key and enrolled pinned host key, and invokes the helper's typed
+`probe` operation. Protocol version is the compatibility authority; helper
+version is informational. The authenticated probe returns the local PVE node,
+which must be present in upstream API discovery. Only then is one entry created
+with the token secret, private key, host public key, and `package_node` in
+`entry.data`. There is no setup store, filesystem credential staging, custom
+inventory, durable enrollment state, or reload.
+
+Config-entry version 4 removes runtime use of `/config/.ssh/hubinet_ops` and
+`/config/.ssh/known_hosts`. Migration imports an existing file-based identity
+only when both files, the configured host key, and a single upstream node are
+unambiguous; it never deletes or modifies the old files. An unsafe or ambiguous
+legacy identity is left unimported, so native Proxmox operation continues while
+package controls remain unavailable until a fresh guided enrollment.
 
 ## Implemented package-scan architecture
 
@@ -139,11 +185,14 @@ Each request is conceptually
 derived from the PVE node name. The helper response must carry enough target
 identity to verify the expected node and VMID.
 
-Current single-host scope has no separate `package_scan_ssh_host`, cluster
-routing, node-address map, static VMID allowlist, or manually synchronized
-inventory. A future need for separate API and SSH endpoints requires another
-explicit architecture decision. Ordinary VMID and execution-time target
-validation remain required.
+The helper-authenticated local node is stored as `package_node`. Package
+sensors and buttons are created only for upstream-discovered LXCs whose node
+equals that value. Native entities continue to cover every API-discovered
+cluster node. Current single-host scope has no separate
+`package_scan_ssh_host`, cluster routing, node-address map, static VMID
+allowlist, or manually synchronized inventory. A future need for separate API
+and SSH endpoints requires another explicit architecture decision. Ordinary
+VMID and execution-time target validation remain required.
 
 ### State semantics
 
@@ -214,10 +263,14 @@ executable, and avoids client-side subprocess, process-group, and selector
 machinery.
 
 The integration connects to the configured `CONF_HOST` on SSH port 22 as root.
-It uses the dedicated `.ssh/hubinet_ops` private key and `.ssh/known_hosts`
-under the Home Assistant configuration directory. Password, keyboard-
-interactive, agent, PKCS#11, GSS, and host-based client authentication are
-disabled, and local SSH configuration is not loaded.
+It uses only the Ed25519 private client key and the pinned Ed25519 PVE host key
+stored in the config entry. Both are imported deliberately from in-memory
+bytes; the user-entered host is combined with the enrolled public key to build
+the trust input. The transport itself fails before connecting when either
+trust input is absent, and host-key mismatch is distinct from authentication
+failure. Password, keyboard-interactive, agent, PKCS#11, GSS, and host-based
+client authentication are disabled, and local SSH configuration is not
+loaded.
 
 The PVE host helper remains a root-owned forced-command boundary. It accepts no
 caller-supplied remote shell command text. It must:
@@ -230,7 +283,9 @@ caller-supplied remote shell command text. It must:
 - bound stdout and stderr; and
 - bound execution time.
 
-The helper has one global operation deadline. Individual guest commands may
+The helper accepts two operations: the read-only `probe`, which resolves only
+the PVE-native local node and never calls `pct`, and `scan_packages`. The helper
+has one global operation deadline. Individual guest commands may
 have smaller bounds, but sequential commands must share the remaining global
 time. The Home Assistant transport deadline must exceed the helper deadline so
 the helper normally terminates with a classified result first. A compatible
@@ -307,12 +362,9 @@ tri-state, security and unknown-security counts, held-back/not-upgraded count,
 last-attempt time, running status, and last error classification. Exact package
 rows remain inside package-subsystem state.
 
-Future review may expose exact rows through an action/service response or
-another explicit operator interaction, but that UI is not designed here.
-Package-specific entities are exposed only when both required local SSH trust
-files are present and non-empty. Adding or changing those files requires the
-integration to be reloaded; no package-specific onboarding or probing system
-exists.
+Exact rows are exposed only through the package-review action described below.
+Package-specific entities are exposed only when the config entry contains all
+enrolled SSH trust and a `package_node`, and only for LXCs on that node.
 
 ### Future extension boundary
 
