@@ -19,6 +19,7 @@ main() {
   PVE_DIRECTORY="/etc/pve"
   PVE_LOCAL="/etc/pve/local"
   HOST_KEY_FILE="/etc/ssh/ssh_host_ed25519_key.pub"
+  ROOT_DIRECTORY="/root"
   ROOT_SSH_DIRECTORY="/root/.ssh"
   AUTHORIZED_KEYS2="/root/.ssh/authorized_keys2"
 
@@ -42,6 +43,7 @@ main() {
     PVE_DIRECTORY="${_HUBINET_BOOTSTRAP_TEST_ROOT}/etc/pve"
     PVE_LOCAL="${PVE_DIRECTORY}/local"
     HOST_KEY_FILE="${_HUBINET_BOOTSTRAP_TEST_ROOT}/etc/ssh/ssh_host_ed25519_key.pub"
+    ROOT_DIRECTORY="${_HUBINET_BOOTSTRAP_TEST_ROOT}/root"
     ROOT_SSH_DIRECTORY="${_HUBINET_BOOTSTRAP_TEST_ROOT}/root/.ssh"
     AUTHORIZED_KEYS2="${ROOT_SSH_DIRECTORY}/authorized_keys2"
     HELPER_TARGET="${_HUBINET_BOOTSTRAP_TEST_ROOT}${FORCED_COMMAND}"
@@ -90,6 +92,34 @@ main() {
     $1 == "permitrootlogin" && $2 == "no" { incompatible = 1 }
     END { exit(incompatible ? 1 : 0) }
   ' || fail "root public-key SSH policy is incompatible; bootstrap stopped before mutation and Hubinet-Ops does not modify sshd_config"
+
+  ssh_path_metadata_is_safe() {
+    SSH_PATH_METADATA=$(stat -c '%u:%a' "$1") || fail "could not inspect SSH path metadata: $2"
+    printf '%s\n' "$SSH_PATH_METADATA" | python3 -c '
+import sys
+
+try:
+    uid, mode = sys.stdin.read().strip().split(":")
+    safe = int(uid) == 0 and (int(mode, 8) & 0o22) == 0
+except (TypeError, ValueError):
+    safe = False
+raise SystemExit(0 if safe else 1)
+'
+  }
+
+  require_safe_ssh_parent() {
+    if ! ssh_path_metadata_is_safe "$1" "$2"; then
+      fail "SSH key authentication cannot safely use $2 because of its ownership or permissions. Bootstrap stopped before mutation. Hubinet-Ops does not change ownership or permissions of existing system directories. Ensure the path is owned by root and is not group- or world-writable, then run bootstrap again"
+    fi
+  }
+
+  require_safe_ssh_parent "$ROOT_DIRECTORY" "/root"
+  if [ -e "$ROOT_SSH_DIRECTORY" ] || [ -L "$ROOT_SSH_DIRECTORY" ]; then
+    if [ ! -d "$ROOT_SSH_DIRECTORY" ] || [ -L "$ROOT_SSH_DIRECTORY" ]; then
+      fail "/root/.ssh is not a regular directory"
+    fi
+    require_safe_ssh_parent "$ROOT_SSH_DIRECTORY" "/root/.ssh"
+  fi
 
   # Inspect all fixed resources before mutation. Foreign authorized_keys2
   # contents are an unconditional preflight failure for this release.
@@ -150,6 +180,9 @@ else:
         print("foreign")
 PY
     ) || fail "could not inspect authorized_keys2"
+  fi
+  if [ "$SSH_CREDENTIAL_STATE" = "valid" ] && ! ssh_path_metadata_is_safe "$AUTHORIZED_KEYS2" "/root/.ssh/authorized_keys2"; then
+    SSH_CREDENTIAL_STATE="broken"
   fi
   if [ "$SSH_CREDENTIAL_STATE" = "foreign" ]; then
     fail "Hubinet-Ops requires exclusive use of /root/.ssh/authorized_keys2 for this release and did not modify it. Inspect the file. Only if none of its keys are relied upon should you deliberately remove it and run bootstrap again"

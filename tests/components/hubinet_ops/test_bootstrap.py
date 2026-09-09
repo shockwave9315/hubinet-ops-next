@@ -104,6 +104,7 @@ def _new_harness(tmp_path: Path) -> BootstrapHarness:
     (root / "etc/pve/local").mkdir(parents=True)
     (root / "etc/ssh").mkdir(parents=True)
     (root / "root").mkdir(parents=True)
+    (root / "root").chmod(0o755)
     (root / "usr/local/sbin").mkdir(parents=True)
 
     host_key = asyncssh.generate_private_key("ssh-ed25519")
@@ -265,7 +266,28 @@ def _new_harness(tmp_path: Path) -> BootstrapHarness:
         fake_bin / "readlink",
         '#!/bin/sh\nprintf "%s\\n" "/etc/pve/nodes/pve1"\n',
     )
-    _write_executable(fake_bin / "stat", '#!/bin/sh\nprintf "0:0:755\\n"\n')
+    _write_executable(
+        fake_bin / "stat",
+        r"""
+        #!/bin/sh
+        [ "${1-}" = "-c" ] || exit 2
+        format=$2
+        path=$3
+        if [ "$path" = "$FAKE_HELPER_TARGET" ]; then
+          printf '0:0:755\n'
+          exit 0
+        fi
+        uid=0
+        if [ "${FAKE_STAT_UID_PATH-}" = "$path" ]; then
+          uid=${FAKE_STAT_UID-1000}
+        fi
+        mode=$("$REAL_STAT" -c '%a' "$path") || exit 1
+        case "$format" in
+          '%u:%a') printf '%s:%s\n' "$uid" "$mode" ;;
+          *) exit 2 ;;
+        esac
+        """,
+    )
 
     for tool in ("awk", "mktemp", "mv", "rm", "sha256sum", "ssh-keygen"):
         target = shutil.which(tool)
@@ -281,6 +303,7 @@ def _new_harness(tmp_path: Path) -> BootstrapHarness:
             root / "usr/local/sbin/hubinet-package-scan-helper"
         ),
         "FAKE_SSHD_EFFECTIVE": DEFAULT_SSHD_EFFECTIVE,
+        "REAL_STAT": shutil.which("stat"),
         "SSHD_CALLS": str(tmp_path / "sshd-calls"),
         "_HUBINET_BOOTSTRAP_TESTING": "1",
         "_HUBINET_BOOTSTRAP_TEST_ROOT": str(root),
@@ -479,6 +502,65 @@ def test_fresh_install_provisions_exact_resources_and_one_enrollment(
     assert result.stdout.count("HUBINET1-") == 1
 
 
+def test_safe_existing_ssh_parent_metadata_is_unchanged(tmp_path: Path) -> None:
+    """M1: safe existing parent modes work and are not normalized."""
+    harness = _new_harness(tmp_path)
+    root_directory = harness.root / "root"
+    ssh_directory = root_directory / ".ssh"
+    root_directory.chmod(0o755)
+    ssh_directory.mkdir(mode=0o711)
+    before_modes = (
+        root_directory.stat().st_mode & 0o777,
+        ssh_directory.stat().st_mode & 0o777,
+    )
+
+    _result, value = harness.enroll()
+
+    parse_enrollment(value)
+    assert (
+        root_directory.stat().st_mode & 0o777,
+        ssh_directory.stat().st_mode & 0o777,
+    ) == before_modes
+
+
+@pytest.mark.parametrize(
+    ("relative_path", "mode", "fake_uid"),
+    [
+        ("root/.ssh", 0o707, None),
+        ("root", 0o770, None),
+        ("root/.ssh", 0o700, "1000"),
+    ],
+    ids=["unsafe_ssh_directory", "unsafe_root", "wrong_owner"],
+)
+def test_unsafe_ssh_parent_metadata_stops_before_mutation(
+    tmp_path: Path, relative_path: str, mode: int, fake_uid: str | None
+) -> None:
+    """M2-M4: unsafe parent ownership or modes fail before provisioning."""
+    harness = _new_harness(tmp_path)
+    ssh_directory = harness.root / "root/.ssh"
+    ssh_directory.mkdir(mode=0o700)
+    target = harness.root / relative_path
+    target.chmod(mode)
+    before_mode = target.stat().st_mode & 0o777
+    if fake_uid is not None:
+        harness.env["FAKE_STAT_UID_PATH"] = str(target)
+        harness.env["FAKE_STAT_UID"] = fake_uid
+    before = harness.state()
+
+    result = harness.run()
+
+    assert result.returncode != 0
+    assert "HUBINET1-" not in result.stdout
+    assert f"/{relative_path}" in result.stderr
+    assert "ownership or permissions" in result.stderr
+    assert "stopped before mutation" in result.stderr
+    assert "does not change ownership or permissions" in result.stderr
+    assert target.stat().st_mode & 0o777 == before_mode
+    assert harness.state() == before
+    assert harness.helper.exists() is False
+    assert harness.authorized_keys2.exists() is False
+
+
 def test_plain_enrolled_rerun_preserves_credentials(tmp_path: Path) -> None:
     """B2: plain repair never rotates or re-emits valid credentials."""
     harness = _new_harness(tmp_path)
@@ -653,6 +735,52 @@ def test_exact_managed_envelope_with_corrupt_key_requires_and_allows_reset(
     ]
 
 
+def test_owned_managed_file_with_unsafe_metadata_requires_and_allows_reset(
+    tmp_path: Path,
+) -> None:
+    """M5: unsafe metadata breaks an owned credential until explicit reset."""
+    harness = _new_harness(tmp_path)
+    harness.enroll()
+    managed_before = harness.authorized_keys2.read_bytes()
+    harness.authorized_keys2.chmod(0o606)
+    tokens_before = dict(harness.state()["tokens"])
+    harness.clear_calls()
+
+    plain_result = harness.run()
+
+    assert plain_result.returncode != 0
+    assert "HUBINET1-" not in plain_result.stdout
+    assert "missing or broken" in plain_result.stderr
+    assert "--reset" in plain_result.stderr
+    assert "Reconfigure → Re-enroll" in plain_result.stderr
+    assert harness.authorized_keys2.read_bytes() == managed_before
+    assert harness.authorized_keys2.stat().st_mode & 0o777 == 0o606
+    assert harness.state()["tokens"] == tokens_before
+    assert _credential_calls(harness.state()) == []
+
+    harness.clear_calls()
+    reset_result = harness.run("--reset")
+
+    assert reset_result.returncode == 0
+    values = re.findall(r"HUBINET1-[A-Za-z0-9_-]+", reset_result.stdout)
+    assert len(values) == 1
+    parse_enrollment(values[0])
+    managed = AUTHORIZED_LINE.fullmatch(harness.authorized_keys2.read_bytes())
+    assert managed is not None
+    assert subprocess.run(
+        ["ssh-keygen", "-l", "-f", "-"],
+        input=managed.group(1) + b"\n",
+        check=False,
+        capture_output=True,
+    ).returncode == 0
+    assert harness.authorized_keys2.stat().st_mode & 0o777 == 0o600
+    assert harness.state()["tokens"] != tokens_before
+    assert _credential_calls(harness.state()) == [
+        "user token remove hubinetnext@pve ha",
+        "user token add hubinetnext@pve ha --privsep 0 --output-format json",
+    ]
+
+
 @pytest.mark.parametrize(
     "foreign_case",
     [
@@ -671,6 +799,7 @@ def test_foreign_authorized_keys2_fails_before_any_mutation(
     harness = _new_harness(tmp_path)
     foreign = _foreign_contents(foreign_case)
     harness.authorized_keys2.parent.mkdir(parents=True)
+    harness.authorized_keys2.parent.chmod(0o700)
     harness.authorized_keys2.write_bytes(foreign)
     before = harness.state()
 
@@ -695,6 +824,8 @@ def test_reset_cannot_bypass_foreign_authorized_keys_guard(tmp_path: Path) -> No
     harness.enroll()
     foreign = _foreign_contents("managed_plus_foreign_hubinet_comment")
     harness.authorized_keys2.write_bytes(foreign)
+    harness.authorized_keys2.chmod(0o666)
+    mode_before = harness.authorized_keys2.stat().st_mode & 0o777
     helper_before = harness.helper.read_bytes()
     harness.clear_calls()
     before = harness.state()
@@ -707,6 +838,7 @@ def test_reset_cannot_bypass_foreign_authorized_keys_guard(tmp_path: Path) -> No
     assert "HUBINET1-" not in plain_result.stdout
     assert "HUBINET1-" not in reset_result.stdout
     assert harness.authorized_keys2.read_bytes() == foreign
+    assert harness.authorized_keys2.stat().st_mode & 0o777 == mode_before
     assert harness.helper.read_bytes() == helper_before
     after = harness.state()
     _assert_no_provisioning_mutation(before, after)
