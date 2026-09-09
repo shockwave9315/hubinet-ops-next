@@ -23,6 +23,7 @@ from custom_components.hubinet_ops.packages.models import (
     PackageScanStatus,
     PackageUpdateError,
     PackageUpdateOutcome,
+    PackageUpdateRecord,
     PackageUpdateStatus,
     PendingPackage,
 )
@@ -1247,6 +1248,43 @@ async def test_snapshot_create_failure_prevents_mutation_and_preserves_uncertain
     assert record.snapshot_name == "hubinet-preupd-20260908120000-ab12cd"
     assert transport.update_calls == 0
     delete.assert_not_awaited()
+
+
+async def test_pruned_interrupted_mutation_still_reports_retained_snapshot(
+    hass: HomeAssistant, mock_config_entry: MockConfigEntry
+) -> None:
+    """Target pruning discards state but still reports interrupted safety state."""
+    transport = UpdateTransport()
+    mutation_entered = asyncio.Event()
+
+    async def blocked_mutation(_node: str, _vmid: int) -> PackageMutationResult:
+        mutation_entered.set()
+        await asyncio.Event().wait()
+        raise AssertionError("unreachable")
+
+    transport.async_update = blocked_mutation  # type: ignore[method-assign]
+    complete = MagicMock()
+    manager, _proxmox = _update_manager(
+        hass, mock_config_entry, transport, complete_callback=complete
+    )
+    await _review_target(manager, "pve1", 200)
+    patches = _snapshot_patches()
+    with patches[0], patches[1], patches[2] as delete, patches[3]:
+        task = manager.async_start_update(
+            "pve1", 200, target_is_running=True, snapshot_permission=True
+        )
+        await mutation_entered.wait()
+        manager.async_prune(current_targets=set())
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+    assert manager.update_record("pve1", 200) == PackageUpdateRecord()
+    delete.assert_not_awaited()
+    complete.assert_called_once()
+    outcome = complete.call_args.args[2]
+    assert outcome.outcome is PackageUpdateOutcome.MUTATION_UNCERTAIN
+    assert outcome.snapshot_retained is True
+    assert outcome.snapshot_name == "hubinet-preupd-20260908120000-ab12cd"
 
 
 async def test_liveness_retries_once_then_succeeds(

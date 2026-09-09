@@ -1,7 +1,8 @@
 # Architecture
 
 This document defines the accepted architecture, including the implemented
-package-scan and package-review runtime. Product intent is defined in
+package-scan, package-review, and package-update runtime. Product intent is
+defined in
 [PRODUCT.md](PRODUCT.md), current work in [STATUS.md](STATUS.md), and fork
 provenance in [UPSTREAM.md](UPSTREAM.md).
 
@@ -68,7 +69,7 @@ Hubinet-Ops owns:
 - the technically required custom-integration adaptations recorded in
   [UPSTREAM.md](UPSTREAM.md);
 - the guided-enrollment bootstrap described below; and
-- the package-scan subsystem described below.
+- the package scan, review, and update subsystem described below.
 
 ## Guided fresh-install enrollment
 
@@ -218,7 +219,8 @@ Network endpoint and PVE resource identity are separate:
 - SSH endpoint: the existing configured Proxmox `CONF_HOST`;
 - expected PVE node: upstream coordinator node identity;
 - VMID: upstream coordinator LXC identity; and
-- current typed operation: `scan_packages`.
+- current typed operation: `scan_packages`, `plan_packages`, `update_packages`,
+  or the fixed liveness `ping`.
 
 Each request is conceptually
 `(endpoint, expected_node, vmid, operation)`. The SSH destination must not be
@@ -311,22 +313,25 @@ trust input is absent, and host-key mismatch is distinct from authentication
 failure. Password, keyboard-interactive, agent, PKCS#11, GSS, and host-based
 client authentication are disabled, and local SSH configuration is not
 loaded. Setup probe requests have a 30-second transport timeout; package scans
-retain their 300-second transport timeout.
+and execution-time plans retain their 300-second transport timeout. Mutation
+and liveness operations have separate bounded helper and transport timeouts,
+with each transport timeout longer than its corresponding helper deadline.
 
 The PVE host helper remains a root-owned forced-command boundary. It accepts no
 caller-supplied remote shell command text. It must:
 
-- accept only typed, validated operations; currently only `scan_packages`;
+- accept only typed, validated operations: `scan_packages`, `plan_packages`,
+  `update_packages`, and the fixed liveness `ping`;
 - validate VMID and expected operation;
 - use fixed `pct exec` command shapes;
-- perform no package mutation during scan;
+- perform no package mutation during scan or execution-time planning;
 - return structured, bounded evidence;
 - bound stdout and stderr; and
 - bound execution time.
 
-The helper accepts two operations: the read-only `probe`, which resolves only
-the PVE-native local node and never calls `pct`, and `scan_packages`. The helper
-has one global operation deadline. Individual guest commands may
+The helper also accepts the read-only `probe`, which resolves only the
+PVE-native local node and never calls `pct`. The helper has one global
+operation deadline per request. Individual guest commands may
 have smaller bounds, but sequential commands must share the remaining global
 time. The Home Assistant transport deadline must exceed the helper deadline so
 the helper normally terminates with a classified result first. A compatible
@@ -334,9 +339,11 @@ shape is approximately 300 seconds for transport, 240 seconds globally in the
 helper, and at most 120 seconds per command subject to remaining time; exact
 constants are implementation details.
 
-A simple, appropriately scoped host-side `flock` must prevent accidental
-overlapping package/apt scans. It is ordinary concurrency protection, not
-durable job ownership or a database-backed lock.
+A simple, appropriately scoped host-side non-blocking `flock` at the unchanged
+path `/run/lock/hubinet-ops-package-scan-{vmid}.lock` prevents overlapping
+`scan_packages`, `plan_packages`, and `update_packages` operations for one
+VMID. It is ordinary per-request concurrency protection, not a durable lease,
+job owner, or database-backed lock.
 
 The helper validates target facts as close as practical to `pct exec` and
 fails safely when the VMID is no longer an LXC, the guest is stopped or
@@ -407,26 +414,29 @@ Exact rows are exposed only through the package-review action described below.
 Package-specific entities are exposed only when the config entry contains all
 enrolled SSH trust and a `package_node`, and only for LXCs on that node.
 
-### Future extension boundary
+### Package flow boundary
 
-Clean responsibilities must allow this later path:
+The implemented package path is:
 
 ```text
 scan
     -> review
+    -> approve
     -> execution-time exact-plan verification
     -> explicit update
-    -> post-update health
+    -> package-manager sanity
+    -> generic LXC liveness
 ```
 
-Future update execution must verify that the executed plan exactly matches the
-reviewed plan. The only accepted preparation now is the boundary
+Update execution verifies that the execution-time simulated plan exactly
+matches the reviewed plan before a snapshot or mutation. The accepted boundary
+remains
 `upstream identity/state -> package manager -> typed package operations -> pure
 package evidence/parser`.
 
-Review, update, and health are not implemented by this decision. It adds no
-approval persistence, update jobs, snapshot orchestration, rollback, or health
-machinery.
+Post-update application health remains future work. The implemented update
+adds no approval persistence, durable update jobs, rollback, or application
+health machinery.
 
 ## Explicitly rejected or modified package-scan architecture
 
@@ -636,13 +646,16 @@ scan-completion object-identity protection used elsewhere in the subsystem.
 
 ### HA entity/state surfaces remain bounded
 
-Exact package rows and the scan token are never placed in sensor attributes;
-the token is obtainable only from `get_package_plan`, alongside the exact
-rows it returns. The package sensor may expose only bounded review metadata,
-`reviewed: bool`. There is no review entity, no review binary sensor, and no
-review button -- a button is explicitly rejected because it cannot carry the
-token previously returned with the viewed plan and would degrade to
-"review whatever is current now," which is not acceptable.
+Exact package rows and the scan token are never placed in sensor attributes.
+The token and rows remain obtainable from `get_package_plan`; the package
+sensor may expose only bounded review metadata, `reviewed: bool`. Package
+Update supersedes the earlier no-review-button decision with a native Review
+button that renders the current full plan in a persistent notification and
+stores only that rendered record's token as ephemeral `viewed_token[(node,
+vmid)]`. The separate Approve button calls the existing confirmation logic
+with exactly that stored token, so it never means "approve whatever is current
+now." A new scan invalidates `viewed_token`, and successful approval clears it.
+There is still no review entity, review binary sensor, or custom frontend.
 
 ### Exact rows are transient response data
 
@@ -664,27 +677,26 @@ confirm any new successful observation, because each new successful
 observation receives a fresh random token. No resource-identity machinery is
 required.
 
-### Future update handoff
+### Implemented update handoff
 
-Package review does not design package execution. The future update feature
-receives only the current package record when `reviewed` is `True`, plus
+Package update receives only the current package record when `reviewed` is
+`True`, plus
 `result.packages`, projected as the canonically ordered tuple `(name,
-architecture, installed_version, candidate_version)` per row. The future
-feature must independently obtain a fresh exact package plan and require
+architecture, installed_version, candidate_version)` per row. It independently
+obtains a fresh exact package plan and requires
 `fresh_plan == reviewed_plan`; if they differ, it stops and requires the
-operator to scan and review again. The scan token has no role in future
-execution equality -- its job ends once review is confirmed. This decision
-does not design `apt` update execution, ordering, retry, snapshot, rollback,
-or post-update health.
+operator to scan and review again. The scan token has no role in execution
+equality -- its job ends once review is confirmed.
 
 ### Inst/Conf symmetry and key lifecycle
 
-Inst/Conf symmetry (`C1`) is deferred until update design: review rows and
-equality fields are derived from `Inst`, `Conf` contributes no review
-equality field, and the current parser already rejects a `Conf` that
-configures something outside the `Inst` plan. This docs decision does not
-modify package-parser architecture. Private-key lifecycle (`C2`) is closed
-and is not an open package-review design concern.
+Inst/Conf symmetry (`C1`) was closed during Package Update design. Review rows
+and equality fields are derived from `Inst`; `Conf` contributes no review
+equality field; and the parser already rejects a `Conf` that configures
+something outside the `Inst` plan. No reverse "every Inst must have a Conf"
+validator is justified without a demonstrated real failure, so the existing
+asymmetric validation remains accepted. Private-key lifecycle (`C2`) is also
+closed and is not an open package-review design concern.
 
 ### Explicitly rejected package-review architecture
 
@@ -695,6 +707,149 @@ review database; SQLite; backend HTTP; `hostd`; a worker; a scheduler; a
 queue; a review TTL; a review timer; cryptographic plan attestation; token
 authority; a content-derived confirmation hash; a duplicate reviewed-plan
 copy; a generalized workflow/state machine; a custom frontend; a review
-button; a review entity; a custom WebSocket API; a second inventory; a
-custom target resolver; a cross-target transaction; package mutation;
-package-update architecture; or post-update health architecture.
+entity; a custom WebSocket API; a second inventory; a custom target resolver;
+a cross-target transaction; or post-update health architecture.
+
+## Package update architecture
+
+This section records the Package Update architecture explicitly accepted by
+the maintainer and implemented in this repository. It extends the existing
+package manager and transport boundaries; it does not add another Proxmox API
+layer, backend, durable workflow, or snapshot subsystem.
+
+### Operator flow and state
+
+Every update begins with explicit operator actions:
+
+```text
+Scan pending packages
+    -> Review package update
+    -> persistent notification with the full exact plan
+    -> Approve reviewed plan
+    -> Update packages
+    -> execution-time plan gate
+    -> native temporary snapshot
+    -> fixed APT mutation and dpkg sanity
+    -> native running status plus fixed /bin/true PONG
+    -> delete that exact temporary snapshot
+    -> truthful result notification
+```
+
+There are no scheduled or automatic updates. Review stores only the current
+scan token as ephemeral Home Assistant-local `viewed_token` state, and Approve
+passes exactly that token to `confirm_review()`. A new scan invalidates the
+viewed token, and successful approval clears it.
+
+Update lifecycle is a separate small ephemeral `PackageUpdateRecord` with
+`NEVER`, `RUNNING`, `SUCCESS`, and `FAILED` status plus a bounded outcome and
+orthogonal facts such as liveness, actual changed-package count, retained
+snapshot name, and cleanup failure. It is not part of `PackageScanRecord` and
+has no persistence, history, job ID, resume, or restart recovery. The Package
+Update sensor contains only bounded outcome attributes and remains readable
+when a still-discovered LXC is stopped. Package rows never appear in entity
+attributes.
+
+When Update is accepted, the manager synchronously revalidates the current
+successful, non-empty, reviewed record and target state, rejects an overlapping
+scan or update for that VMID, immediately replaces the scan record with
+`NEVER`, and publishes `RUNNING` update state before starting background work.
+One update may run at a time per config entry; scan slots remain independent,
+so an unrelated VMID scan need not wait behind a long update.
+
+### Execution-time plan gate and APT semantics
+
+The background operation calls `plan_packages`, which simulates against the
+APT package lists already present in the guest and does **not** run
+`apt-get update`. The canonical equality-bearing tuple is exactly `(name,
+architecture, installed_version, candidate_version)`. Origin, security,
+OS identity/version, reboot-required state, and not-upgraded count are
+informational and do not affect equality. If the fresh tuple differs from the
+reviewed tuple, the operation records `PLAN_CHANGED`, creates no snapshot,
+mutates nothing, and requires a normal Scan -> Review -> Approve cycle. The
+execution-time result is never promoted into a `PackageScanRecord`.
+
+Scan and execution simulation use the same relevant explicit hardened APT
+options, including `APT::Ignore-Hold=false`, so guest configuration cannot make
+the two paths permanently disagree about held packages. The mutation is one
+fixed bare `apt-get upgrade`, under `LC_ALL=C` and
+`DEBIAN_FRONTEND=noninteractive`, with the accepted options that prohibit new
+packages, removals, force-yes, downgrades, essential removal, held-package
+changes, and unauthenticated packages, and use dpkg `--force-confdef` plus
+`--force-confold`. Reviewed names and versions are never inserted into argv,
+and no caller-controlled shell command exists.
+
+Once the pre-mutation gate passes, later repository candidate drift is normal
+life. A successful upgrade that installs a newer candidate than Review showed
+is not a failure solely for that reason. There are no exact-version argv
+arguments, post-install candidate fences, repository locks, or dpkg pre-install
+hooks. The post-mutation inventory read is only package-manager sanity: it must
+parse cleanly and contain no unfinished dpkg state. It does not compare final
+installed versions with reviewed candidate versions. When both inventories are
+available, the result count reports identities whose observed installed-version
+row actually changed; that count is reporting, not another safety gate.
+
+### Native PVE snapshot lifecycle
+
+`packages/snapshots.py` is small stateless proxmoxer glue used only by this
+operation. It uses the native PVE API to list LXC snapshots, create one
+snapshot, read task status, delete the exact current snapshot, and list again.
+It contains no SSH, `pct`, or `pvesh` snapshot operation and is not a snapshot
+ownership, rollback, registry, or recovery framework.
+
+Temporary names use the recognizable `hubinet-preupd-` prefix and a bounded
+timestamp/random suffix. Validation follows PVE's current
+`pve-snapshot-name` schema: a pve-configid-style value no longer than 40
+characters, excluding reserved `current` and `vzdump`. Before creation, the
+native listing is filtered by prefix only to warn about a bounded number of
+old retained names. Those snapshots do not block the update and are never
+selected for deletion, cleaned up, or reconstructed into old attempts.
+
+Create and delete calls must return a valid UPID. The adapter polls
+`/nodes/{node}/tasks/{upid}/status` with a fixed interval and bounded poll
+count. `running` continues polling; terminal `OK` and PVE's terminal
+`WARNINGS: N` form are successful; error, malformed, unknown, or timeout
+evidence is never successful. After create success, an exact listing row must
+exist without transient `snapstate` before APT may run. After delete success,
+the exact name must be absent. Sleeps pace polling but never prove completion.
+
+If a usable complete snapshot cannot be confirmed, package mutation does not
+run. If the adapter cannot prove whether the attempted snapshot exists, it is
+reported as potentially retained and is not guessed at or automatically
+cleaned. Cleanup targets only the exact generated name held by the current
+background operation; it never selects newest, first, last, or a prefix match.
+
+### Mutation, liveness, and retention
+
+Only after the exact temporary snapshot is confirmed does `update_packages`
+run the fixed mutation and post-mutation dpkg sanity. Generic liveness then
+requires both native PVE LXC status `running` and the existing typed guest
+helper boundary returning PONG for fixed `/bin/true`, with one bounded retry.
+It checks no DNS, HTTP, port, network service, process, container runtime,
+database, log, or application-specific health. That remains the future
+Post-update Health feature.
+
+Mutation failure or timeout, uncertain transport outcome, dpkg sanity failure,
+failed liveness, or interruption retains the safety snapshot and reports its
+exact name when known. There is no automatic rollback or automatic safety
+snapshot deletion on these paths. If mutation, dpkg sanity, and liveness all
+succeed but exact snapshot deletion cannot be confirmed, the package update
+remains `SUCCESS`; cleanup failure and the retained exact name are reported as
+separate facts.
+
+Persistent notifications cover the full review plan, a changed-plan stop,
+successful update, failed or uncertain update, successful update with cleanup
+failure, helper-outdated guidance, and bounded warnings for old retained
+snapshots. Foreign package/helper/snapshot text is escaped or mapped to bounded
+translated prose rather than rendered as arbitrary UI content. The existing
+package-review entity actions remain supported for automations; the buttons are
+the normal operator workflow. Every press independently revalidates state, and
+the Update button additionally requires native `VM.Snapshot` permission.
+
+### Explicitly absent package-update architecture
+
+Package Update introduces no database, SQLite store, backend service, host
+daemon, durable job, journal, scheduler, worker, queue, startup recovery,
+incarnation/generation authority, reconciliation framework, snapshot ownership
+framework, rollback framework, automatic rollback, automatic snapshot cleanup,
+application-health framework, custom frontend, duplicate Proxmox coordinator,
+or duplicate API wrapper.

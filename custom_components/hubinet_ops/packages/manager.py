@@ -567,7 +567,13 @@ class PackageManager:
                 changed_package_count=changed_count,
                 error_message="package update was interrupted",
             )
-            self._finish_update(node, vmid, own_record, outcome)
+            if self._update_records.get((node, vmid)) is own_record:
+                self._finish_update(node, vmid, own_record, outcome)
+            else:
+                # Pruning removes target state before cancelling its task. The
+                # record must stay pruned, but a possibly retained safety
+                # snapshot still requires an operator-visible result.
+                self._notify_update_complete(node, vmid, outcome)
             raise
         except Exception:
             _LOGGER.exception("Unexpected package update failure for %s/%s", node, vmid)
@@ -628,6 +634,12 @@ class PackageManager:
             return
         self._update_tasks.pop((node, vmid), None)
         self._set_update_record(node, vmid, outcome)
+        self._notify_update_complete(node, vmid, outcome)
+
+    def _notify_update_complete(
+        self, node: str, vmid: int, outcome: PackageUpdateRecord
+    ) -> None:
+        """Publish one bounded terminal result without affecting its truth."""
         try:
             self._on_update_complete(node, vmid, outcome)
         except Exception:

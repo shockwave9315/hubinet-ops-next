@@ -8,8 +8,8 @@ Status date: 2026-09-09
   `fc034572d0216a04ed40a07154394908a594dfed`.
 - Baseline tag: `baseline-ha-2026.9.1`.
 - Merged runtime: a domain-isolated custom-integration fork of Home Assistant
-  Core `proxmoxve`, plus the package-scan and package-review subsystems
-  and guided fresh-install enrollment documented in
+  Core `proxmoxve`, plus the package scan, review, and update subsystem and
+  guided fresh-install enrollment documented in
   [ARCHITECTURE.md](ARCHITECTURE.md).
 
 ## Merged
@@ -25,7 +25,12 @@ Status date: 2026-09-09
   `PackageScanRecord`, exposed as the two response-only sensor-platform
   actions `hubinet_ops.get_package_plan` and
   `hubinet_ops.confirm_package_review`, restricted to the package sensor
-  via a native supported-feature bit.
+  via a native supported-feature bit, plus the native Review and Approve
+  operator buttons.
+- Package Update: execution-time exact-plan gating, one native retained safety
+  snapshot, one fixed hardened bare APT upgrade, post-mutation dpkg sanity,
+  generic LXC liveness, exact snapshot cleanup, bounded outcome sensor, and
+  persistent result notifications.
 - Guided fresh-install enrollment: one release-pinned PVE bootstrap command,
   one temporary enrollment paste, pre-entry API/SSH/helper/node validation,
   in-entry SSH trust, and local-node package entity scope.
@@ -44,6 +49,12 @@ Status date: 2026-09-09
   [ARCHITECTURE.md](ARCHITECTURE.md).
 - Package-review implementation: **IMPLEMENTED**.
 
+## Package Update
+
+- Package Update architecture: **ACCEPTED BY MAINTAINER** and documented in
+  [ARCHITECTURE.md](ARCHITECTURE.md).
+- Package Update: **IMPLEMENTED**.
+
 ## Guided enrollment
 
 - Guided enrollment architecture: **ACCEPTED BY MAINTAINER** and documented in
@@ -56,9 +67,9 @@ Status date: 2026-09-09
 
 ## Next
 
-Design package update against the accepted review handoff.
+Design the future Post-update Health feature when the maintainer accepts that
+work.
 
 ## Explicitly not started
 
-- Package update: **NOT DESIGNED / NOT STARTED**.
 - Post-update health: **NOT DESIGNED / NOT STARTED**.

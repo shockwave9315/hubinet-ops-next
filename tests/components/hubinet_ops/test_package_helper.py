@@ -261,6 +261,38 @@ def test_update_uses_one_fixed_bare_upgrade_without_plan_material() -> None:
     assert not any("apt-get update" in " ".join(call[0]) for call in runner.calls)
 
 
+def test_fixed_upgrade_policy_keeps_held_packages_and_forbids_unsafe_apt_modes() -> None:
+    """The audited bare upgrade shape explicitly overrides guest hold policy."""
+    assert helper.APT_MUTATION_COMMAND == (
+        "env",
+        "LC_ALL=C",
+        "DEBIAN_FRONTEND=noninteractive",
+        "apt-get",
+        "upgrade",
+        "-y",
+        "-o",
+        "APT::Get::Upgrade-Allow-New=false",
+        "-o",
+        "APT::Get::Remove=false",
+        "-o",
+        "APT::Get::Force-Yes=false",
+        "-o",
+        "APT::Get::allow-downgrades=false",
+        "-o",
+        "APT::Get::allow-remove-essential=false",
+        "-o",
+        "APT::Get::allow-change-held-packages=false",
+        "-o",
+        "APT::Get::AllowUnauthenticated=false",
+        "-o",
+        "APT::Ignore-Hold=false",
+        "-o",
+        "Dpkg::Options::=--force-confdef",
+        "-o",
+        "Dpkg::Options::=--force-confold",
+    )
+
+
 @pytest.mark.parametrize(
     "operation", ["scan_packages", "plan_packages", "update_packages"]
 )
@@ -352,6 +384,57 @@ def test_protocol_and_request_bound_are_unchanged() -> None:
     assert helper.MAX_REQUEST_BYTES == 1024
     for operation in ("scan_packages", "plan_packages", "update_packages"):
         assert len(json.dumps(_request(operation=operation)).encode()) <= 1024
+
+
+def test_package_update_source_keeps_snapshot_and_recovery_out_of_helper() -> None:
+    """Static guardrails preserve the accepted helper and native-PVE boundary."""
+    helper_source = HELPER_PATH.read_text()
+    package_source = "\n".join(
+        path.read_text()
+        for path in (
+            REPO_ROOT / "custom_components/hubinet_ops/packages/manager.py",
+            REPO_ROOT / "custom_components/hubinet_ops/packages/snapshots.py",
+            REPO_ROOT / "custom_components/hubinet_ops/packages/transport.py",
+        )
+    )
+    assert "snapshot" not in helper_source.casefold()
+    for forbidden in (
+        "pvesh",
+        "pct snapshot",
+        "pct listsnapshot",
+        "dpkg --configure -a",
+        "DPkg::Pre-Install-Pkgs",
+        "shell=True",
+    ):
+        assert forbidden not in helper_source
+        assert forbidden not in package_source
+    assert "rollback" not in package_source.casefold()
+    assert (
+        'path = f"{LOCK_DIRECTORY}/hubinet-ops-package-scan-{vmid}.lock"'
+        in helper_source
+    )
+
+
+def test_package_update_source_has_no_application_health_probes() -> None:
+    """The feature stops at native running state and fixed /bin/true PONG."""
+    source = "\n".join(
+        path.read_text().casefold()
+        for path in (
+            HELPER_PATH,
+            REPO_ROOT / "custom_components/hubinet_ops/packages/manager.py",
+            REPO_ROOT / "custom_components/hubinet_ops/packages/snapshots.py",
+            REPO_ROOT / "custom_components/hubinet_ops/packages/transport.py",
+        )
+    )
+    for forbidden in (
+        "curl",
+        "wget",
+        "systemctl",
+        "docker",
+        "mqtt",
+        "adguard",
+    ):
+        assert forbidden not in source
 
 
 @pytest.mark.parametrize(("returncode", "ok"), [(0, True), (1, False)])
