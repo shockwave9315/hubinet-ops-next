@@ -36,6 +36,7 @@ OPERATION_PROBE = "probe"
 OPERATION_SCAN_PACKAGES = "scan_packages"
 OPERATION_PLAN_PACKAGES = "plan_packages"
 OPERATION_UPDATE_PACKAGES = "update_packages"
+OPERATION_PING = "ping"
 
 _NODE_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9.-]{0,62}")
 _MAX_REQUEST_BYTES = 1024
@@ -44,6 +45,7 @@ _MAX_STDERR_BYTES = 64 * 1024
 _READ_CHUNK_BYTES = 64 * 1024
 TRANSPORT_TIMEOUT_SECONDS = 300.0
 UPDATE_TRANSPORT_TIMEOUT_SECONDS = 1860.0
+PING_TRANSPORT_TIMEOUT_SECONDS = 45.0
 PROBE_TIMEOUT_SECONDS = 30.0
 
 
@@ -262,6 +264,7 @@ class AsyncSSHPackageTransport:
             OPERATION_PLAN_PACKAGES,
             timeout=TRANSPORT_TIMEOUT_SECONDS,
             timeout_outcome=PackageUpdateOutcome.PLAN_FAILED,
+            connection_outcome=PackageUpdateOutcome.PLAN_FAILED,
         )
         evidence = _parse_update_response(
             payload, expected_node, vmid, OPERATION_PLAN_PACKAGES
@@ -304,6 +307,7 @@ class AsyncSSHPackageTransport:
             OPERATION_UPDATE_PACKAGES,
             timeout=UPDATE_TRANSPORT_TIMEOUT_SECONDS,
             timeout_outcome=PackageUpdateOutcome.MUTATION_TIMED_OUT,
+            connection_outcome=PackageUpdateOutcome.MUTATION_UNCERTAIN,
         )
         evidence = _parse_update_response(
             payload, expected_node, vmid, OPERATION_UPDATE_PACKAGES
@@ -336,6 +340,24 @@ class AsyncSSHPackageTransport:
             )
         return PackageMutationResult(before=before.installed, after=after.installed)
 
+    async def async_ping(self, expected_node: str, vmid: int) -> bool:
+        """Ask the validated running LXC to execute only ``/bin/true``."""
+        payload = await self._async_update_request(
+            expected_node,
+            vmid,
+            OPERATION_PING,
+            timeout=PING_TRANSPORT_TIMEOUT_SECONDS,
+            timeout_outcome=PackageUpdateOutcome.LIVENESS_FAILED,
+            connection_outcome=PackageUpdateOutcome.LIVENESS_FAILED,
+        )
+        evidence = _parse_update_response(payload, expected_node, vmid, OPERATION_PING)
+        if evidence.get("pong") is not True or set(evidence) != {"pong"}:
+            raise PackageUpdateError(
+                PackageUpdateOutcome.LIVENESS_FAILED,
+                "package helper returned malformed liveness evidence",
+            )
+        return True
+
     async def _async_update_request(
         self,
         expected_node: str,
@@ -344,6 +366,7 @@ class AsyncSSHPackageTransport:
         *,
         timeout: float,
         timeout_outcome: PackageUpdateOutcome,
+        connection_outcome: PackageUpdateOutcome,
     ) -> Any:
         """Send one typed update-path request and classify transport failures."""
         _validate_update_target(expected_node, vmid)
@@ -363,12 +386,7 @@ class AsyncSSHPackageTransport:
             PackageHelperUnavailableError,
             PackageHelperProtocolError,
         ) as err:
-            outcome = (
-                PackageUpdateOutcome.PLAN_FAILED
-                if operation == OPERATION_PLAN_PACKAGES
-                else PackageUpdateOutcome.MUTATION_UNCERTAIN
-            )
-            raise PackageUpdateError(outcome, str(err)) from err
+            raise PackageUpdateError(connection_outcome, str(err)) from err
 
     async def _async_request(
         self, request: Mapping[str, Any], *, timeout: float
@@ -606,6 +624,8 @@ def _parse_update_response(
             outcome = PackageUpdateOutcome.GUEST_UNAVAILABLE
         elif expected_operation == OPERATION_PLAN_PACKAGES:
             outcome = PackageUpdateOutcome.PLAN_FAILED
+        elif expected_operation == OPERATION_PING:
+            outcome = PackageUpdateOutcome.LIVENESS_FAILED
         elif classification == "timeout":
             outcome = PackageUpdateOutcome.MUTATION_TIMED_OUT
         else:
@@ -617,7 +637,11 @@ def _parse_update_response(
         outcome = (
             PackageUpdateOutcome.PLAN_FAILED
             if expected_operation == OPERATION_PLAN_PACKAGES
-            else PackageUpdateOutcome.MUTATION_UNCERTAIN
+            else (
+                PackageUpdateOutcome.LIVENESS_FAILED
+                if expected_operation == OPERATION_PING
+                else PackageUpdateOutcome.MUTATION_UNCERTAIN
+            )
         )
         raise PackageUpdateError(outcome, "package helper returned malformed evidence")
     return evidence

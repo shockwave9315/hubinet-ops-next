@@ -59,6 +59,7 @@ class FakeHelperRunner:
         mutation_returncode: int = 0,
         mutation_stderr: str = "",
         inventory_outputs: tuple[str, ...] | None = None,
+        ping_returncode: int = 0,
         reboot_returncode: int = 1,
     ) -> None:
         """Initialize fixed command outcomes."""
@@ -71,6 +72,7 @@ class FakeHelperRunner:
         self.mutation_stderr = mutation_stderr
         self.inventory_outputs = inventory_outputs or (TWO_INVENTORY,)
         self.inventory_reads = 0
+        self.ping_returncode = ping_returncode
         self.reboot_returncode = reboot_returncode
         self.calls: list[tuple[tuple[str, ...], float, int]] = []
 
@@ -110,6 +112,8 @@ class FakeHelperRunner:
             return helper.CommandResult(0, output.encode(), b"")
         if "/var/run/reboot-required" in rendered:
             return helper.CommandResult(self.reboot_returncode, b"", b"")
+        if argv[-1:] == ("/bin/true",):
+            return helper.CommandResult(self.ping_returncode, b"", b"")
         raise AssertionError(f"unexpected command: {argv!r}")
 
 
@@ -348,6 +352,27 @@ def test_protocol_and_request_bound_are_unchanged() -> None:
     assert helper.MAX_REQUEST_BYTES == 1024
     for operation in ("scan_packages", "plan_packages", "update_packages"):
         assert len(json.dumps(_request(operation=operation)).encode()) <= 1024
+
+
+@pytest.mark.parametrize(("returncode", "ok"), [(0, True), (1, False)])
+def test_ping_is_only_fixed_bin_true(returncode: int, ok: bool) -> None:
+    """Generic liveness is one typed fixed /bin/true operation."""
+    runner = FakeHelperRunner(ping_returncode=returncode)
+    response = helper.handle_request(
+        _request(operation="ping"),
+        runner=runner,
+        lock_factory=lambda _vmid: nullcontext(),
+    )
+    assert response["ok"] is ok
+    probes = [call for call in runner.calls if call[0][-1:] == ("/bin/true",)]
+    assert len(probes) == 1
+    assert probes[0][0] == ("pct", "exec", "200", "--", "/bin/true")
+    assert probes[0][1] == helper.PING_COMMAND_TIMEOUT_SECONDS
+    assert not any(
+        token in " ".join(call[0])
+        for token in ("curl", "systemctl", "docker", "ping", "dig")
+        for call in runner.calls
+    )
 
 
 @pytest.mark.parametrize(

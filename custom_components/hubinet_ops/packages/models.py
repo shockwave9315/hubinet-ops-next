@@ -47,6 +47,15 @@ class PackageUpdateOutcome(StrEnum):
     SUCCESS = "success"
 
 
+class PackageUpdateStatus(StrEnum):
+    """Latest in-memory package update attempt state."""
+
+    NEVER = "never"
+    RUNNING = "running"
+    SUCCESS = "success"
+    FAILED = "failed"
+
+
 @dataclass(slots=True)
 class PackageScanError(Exception):
     """A bounded package scan failure safe to expose to Home Assistant."""
@@ -100,6 +109,21 @@ class PackageMutationResult:
 
     before: dict[tuple[str, str], str]
     after: dict[tuple[str, str], str]
+
+
+@dataclass(frozen=True, slots=True)
+class PackageUpdateRecord:
+    """Small ephemeral outcome of the latest package update attempt."""
+
+    status: PackageUpdateStatus = PackageUpdateStatus.NEVER
+    last_attempt: datetime | None = None
+    outcome: PackageUpdateOutcome | None = None
+    snapshot_retained: bool = False
+    snapshot_cleanup_failed: bool = False
+    snapshot_name: str | None = None
+    liveness: bool | None = None
+    changed_package_count: int | None = None
+    error_message: str | None = None
 
 
 @dataclass(frozen=True, slots=True)

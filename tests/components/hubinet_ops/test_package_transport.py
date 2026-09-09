@@ -1008,6 +1008,24 @@ async def test_old_helper_operation_response_is_actionable_outdated_error(
     assert "bootstrap" in str(caught.value)
 
 
+async def test_ping_transport_requires_exact_pong_evidence(
+    hass: HomeAssistant, tmp_path: Path
+) -> None:
+    """The typed liveness response carries no arbitrary command output."""
+    transport, _connector, connection, *_ = await _transport(
+        hass, tmp_path, _operation_response("ping", {"pong": True})
+    )
+    assert await transport.async_ping("pve1", 200) is True
+    assert json.loads(connection.process_kwargs["input"])["operation"] == "ping"
+
+    malformed, *_ = await _transport(
+        hass, tmp_path, _operation_response("ping", {"pong": True, "extra": "x"})
+    )
+    with pytest.raises(PackageUpdateError) as caught:
+        await malformed.async_ping("pve1", 200)
+    assert caught.value.outcome is PackageUpdateOutcome.LIVENESS_FAILED
+
+
 def test_update_transport_timeout_exceeds_helper_deadline() -> None:
     """The helper can classify its own bounded update timeout before SSH does."""
     assert UPDATE_TRANSPORT_TIMEOUT_SECONDS > 1800

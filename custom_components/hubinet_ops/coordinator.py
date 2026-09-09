@@ -135,6 +135,7 @@ class ProxmoxCoordinator(DataUpdateCoordinator[dict[str, ProxmoxNodeData]]):
             config_entry,
             transport=package_transport,
             on_state_change=self.async_update_listeners,
+            proxmox_getter=lambda: self.proxmox,
         )
         self.package_node: str | None = config_entry.data.get(CONF_PACKAGE_NODE)
 

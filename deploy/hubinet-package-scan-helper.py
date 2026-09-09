@@ -23,6 +23,7 @@ OPERATION_PROBE = "probe"
 OPERATION_SCAN_PACKAGES = "scan_packages"
 OPERATION_PLAN_PACKAGES = "plan_packages"
 OPERATION_UPDATE_PACKAGES = "update_packages"
+OPERATION_PING = "ping"
 # Retained as a compatibility alias for existing helper tests/importers.
 OPERATION = OPERATION_SCAN_PACKAGES
 
@@ -32,6 +33,8 @@ OPERATION_TIMEOUT_SECONDS = 240.0
 COMMAND_TIMEOUT_SECONDS = 120.0
 UPDATE_OPERATION_TIMEOUT_SECONDS = 1800.0
 UPDATE_COMMAND_TIMEOUT_SECONDS = 1500.0
+PING_OPERATION_TIMEOUT_SECONDS = 30.0
+PING_COMMAND_TIMEOUT_SECONDS = 10.0
 LOCK_DIRECTORY = "/run/lock"
 PVE_LOCAL_NODE_LINK = "/etc/pve/local"
 PVE_LOCAL_NODE_PREFIX = "/etc/pve/nodes/"
@@ -320,6 +323,7 @@ def validate_request(payload: Any) -> tuple[str, str | None, int | None]:
         OPERATION_SCAN_PACKAGES,
         OPERATION_PLAN_PACKAGES,
         OPERATION_UPDATE_PACKAGES,
+        OPERATION_PING,
     }:
         raise RequestError("unknown host-control operation")
     if set(payload) != {"protocol_version", "operation", "target"}:
@@ -605,6 +609,25 @@ def _update_packages(
     return {"before_inventory": before, "after_inventory": after}
 
 
+def _ping(
+    expected_node: str, vmid: int, runner: Runner, deadline: OperationDeadline
+) -> dict[str, bool]:
+    """Ask one validated running LXC for a fixed trivial PONG."""
+    _validate_local_node(expected_node, runner, deadline)
+    _validate_target(vmid, runner, deadline)
+    result = _guest_command(
+        runner,
+        deadline,
+        vmid,
+        ("/bin/true",),
+        max_output=4096,
+        command_timeout=PING_COMMAND_TIMEOUT_SECONDS,
+    )
+    if result.returncode != 0:
+        raise ScanError("liveness_failed", "LXC did not answer the liveness probe")
+    return {"pong": True}
+
+
 def _scan(
     expected_node: str, vmid: int, runner: Runner, deadline: OperationDeadline
 ) -> dict[str, Any]:
@@ -697,11 +720,12 @@ def handle_request(
 ) -> dict[str, Any]:
     """Perform the fixed, read/refresh-only package scan command sequence."""
     operation, expected_node, vmid = validate_request(payload)
-    operation_timeout = (
-        UPDATE_OPERATION_TIMEOUT_SECONDS
-        if operation == OPERATION_UPDATE_PACKAGES
-        else OPERATION_TIMEOUT_SECONDS
-    )
+    if operation == OPERATION_UPDATE_PACKAGES:
+        operation_timeout = UPDATE_OPERATION_TIMEOUT_SECONDS
+    elif operation == OPERATION_PING:
+        operation_timeout = PING_OPERATION_TIMEOUT_SECONDS
+    else:
+        operation_timeout = OPERATION_TIMEOUT_SECONDS
     deadline = OperationDeadline(clock(), operation_timeout, clock)
     if operation == OPERATION_PROBE:
         try:
@@ -733,8 +757,10 @@ def handle_request(
                 evidence = _scan(expected_node, vmid, runner, deadline)
             elif operation == OPERATION_PLAN_PACKAGES:
                 evidence = _plan(expected_node, vmid, runner, deadline)
-            else:
+            elif operation == OPERATION_UPDATE_PACKAGES:
                 evidence = _update_packages(expected_node, vmid, runner, deadline)
+            else:
+                evidence = _ping(expected_node, vmid, runner, deadline)
     except ScanError as err:
         return {
             **response,
@@ -786,6 +812,7 @@ def main() -> int:
                     OPERATION_SCAN_PACKAGES,
                     OPERATION_PLAN_PACKAGES,
                     OPERATION_UPDATE_PACKAGES,
+                    OPERATION_PING,
                 }:
                     failure_operation = payload["operation"]
                 response = handle_request(payload)
