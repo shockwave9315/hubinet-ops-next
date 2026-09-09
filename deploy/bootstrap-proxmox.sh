@@ -85,6 +85,11 @@ main() {
     }
     END { exit(found ? 0 : 1) }
   ' || fail "effective sshd AuthorizedKeysFile does not include .ssh/authorized_keys2"
+  printf '%s\n' "$SSHD_EFFECTIVE" | awk '
+    $1 == "pubkeyauthentication" && $2 == "no" { incompatible = 1 }
+    $1 == "permitrootlogin" && $2 == "no" { incompatible = 1 }
+    END { exit(incompatible ? 1 : 0) }
+  ' || fail "root public-key SSH policy is incompatible; bootstrap stopped before mutation and Hubinet-Ops does not modify sshd_config"
 
   # Inspect all fixed resources before mutation. Foreign authorized_keys2
   # contents are an unconditional preflight failure for this release.
@@ -129,17 +134,17 @@ try:
 except (OSError, UnicodeError):
     print("foreign")
 else:
-    if len(lines) == 1 and pattern.fullmatch(lines[0]):
-        print("valid")
-    elif any(not line.endswith(" hubinet-ops") for line in lines):
-        print("foreign")
-    else:
+    if not lines:
         print("broken")
+    elif len(lines) == 1 and pattern.fullmatch(lines[0]):
+        print("valid")
+    else:
+        print("foreign")
 PY
     ) || fail "could not inspect authorized_keys2"
   fi
   if [ "$SSH_CREDENTIAL_STATE" = "foreign" ]; then
-    fail "guided enrollment stopped and authorized_keys2 was not modified: Hubinet-Ops requires exclusive use of /root/.ssh/authorized_keys2 for this release"
+    fail "Hubinet-Ops requires exclusive use of /root/.ssh/authorized_keys2 for this release and did not modify it. Inspect the file. Only if none of its keys are relied upon should you deliberately remove it and run bootstrap again"
   fi
   if [ -e "$HELPER_TARGET" ] || [ -L "$HELPER_TARGET" ]; then
     if [ ! -f "$HELPER_TARGET" ] || [ -L "$HELPER_TARGET" ]; then

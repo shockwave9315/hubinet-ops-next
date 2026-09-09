@@ -86,13 +86,27 @@ root ACL, the forced-command helper, and the restricted key in
 `Datastore.Audit`, `Sys.Audit`, `Sys.PowerMgmt`, `VM.Audit`, `VM.PowerMgmt`,
 and `VM.Snapshot`. The bootstrap verifies that effective sshd configuration
 already enables `.ssh/authorized_keys2`; it never edits sshd configuration or
-the other authorized-key files. For this release, `authorized_keys2` is an
-exclusive Hubinet-owned file: foreign contents stop bootstrap before any
-provisioning mutation and are never merged or rewritten. Bootstrap creates
-`/root/.ssh` with root ownership and mode `0700` only when it is absent; it
-does not change metadata on an existing directory. It enforces root ownership
-and mode `0600` whenever it creates or replaces its own `authorized_keys2`
-file.
+the other authorized-key files. It also stops before mutation when effective
+sshd policy disables public-key authentication or root login.
+
+The fixed `HubinetOpsNext` role, `hubinetnext@pve` user,
+`hubinetnext@pve!ha` token, and
+`/usr/local/sbin/hubinet-package-scan-helper` are namespaced product-owned
+resources and may be reconciled by their exact identities. In contrast,
+`/root/.ssh/authorized_keys2` is a shared system resource for which Hubinet
+requires exclusive use in this release. Bootstrap may write it only when it
+has no active key lines or when ownership is positively proven by exactly one
+full managed Hubinet line. Every other active state is foreign or ambiguous,
+stops bootstrap before provisioning mutation, and is never merged, removed,
+or rewritten—even with `--reset`. Comments and partial line matches are not
+ownership evidence.
+
+Bootstrap creates `/root/.ssh` with root ownership and mode `0700` only when
+it is absent; it does not change metadata on an existing directory. It
+enforces root ownership and mode `0600` whenever it creates or replaces its
+own `authorized_keys2` file. Plain repair also re-enables the product-owned
+PVE user and clears its expiry, so manually disabling that user is not a
+durable override across an explicit repair run.
 
 The bootstrap prints one bounded `HUBINET1-` base64url JSON enrollment value.
 It carries only the version, PVE token secret, compact Ed25519 private client

@@ -28,6 +28,14 @@ AUTHORIZED_LINE = re.compile(
     rb'^restrict,command="/usr/local/sbin/hubinet-package-scan-helper" '
     rb"ssh-ed25519 [A-Za-z0-9+/]+={0,3} hubinet-ops\n$"
 )
+FORCED_COMMAND = "/usr/local/sbin/hubinet-package-scan-helper"
+DEFAULT_SSHD_EFFECTIVE = "\n".join(
+    (
+        "pubkeyauthentication yes",
+        "permitrootlogin without-password",
+        "authorizedkeysfile .ssh/authorized_keys .ssh/authorized_keys2",
+    )
+)
 
 
 def _source() -> str:
@@ -247,7 +255,11 @@ def _new_harness(tmp_path: Path) -> BootstrapHarness:
     _write_executable(fake_bin / "pct", "#!/bin/sh\nexit 0\n")
     _write_executable(
         fake_bin / "sshd",
-        '#!/bin/sh\nprintf "%s\\n" "authorizedkeysfile .ssh/authorized_keys .ssh/authorized_keys2"\n',
+        r"""
+        #!/bin/sh
+        printf 'x' >> "$SSHD_CALLS"
+        printf '%s\n' "$FAKE_SSHD_EFFECTIVE"
+        """,
     )
     _write_executable(
         fake_bin / "readlink",
@@ -268,6 +280,8 @@ def _new_harness(tmp_path: Path) -> BootstrapHarness:
         "FAKE_HELPER_TARGET": str(
             root / "usr/local/sbin/hubinet-package-scan-helper"
         ),
+        "FAKE_SSHD_EFFECTIVE": DEFAULT_SSHD_EFFECTIVE,
+        "SSHD_CALLS": str(tmp_path / "sshd-calls"),
         "_HUBINET_BOOTSTRAP_TESTING": "1",
         "_HUBINET_BOOTSTRAP_TEST_ROOT": str(root),
     }
@@ -280,6 +294,62 @@ def _credential_calls(state: dict[str, object]) -> list[str]:
         for call in state["calls"]
         if call.startswith("user token add") or call.startswith("user token remove")
     ]
+
+
+def _managed_line() -> bytes:
+    """Return one exact managed authorized_keys2 line."""
+    public_key = (
+        asyncssh.generate_private_key("ssh-ed25519")
+        .export_public_key()
+        .decode()
+        .strip()
+    )
+    return f'restrict,command="{FORCED_COMMAND}" {public_key} hubinet-ops\n'.encode()
+
+
+def _foreign_contents(case: str) -> bytes:
+    """Return one foreign or ambiguous active authorized_keys2 state."""
+    foreign_key = (
+        asyncssh.generate_private_key("ssh-ed25519")
+        .export_public_key()
+        .decode()
+        .strip()
+    )
+    managed = _managed_line()
+    match case:
+        case "foreign_hubinet_comment":
+            return f"{foreign_key} hubinet-ops\n".encode()
+        case "foreign_options_hubinet_comment":
+            return f'from="10.0.0.5" {foreign_key} hubinet-ops\n'.encode()
+        case "malformed_hubinet_suffix":
+            return b"restrict ssh-ed25519 malformed hubinet-ops\n"
+        case "two_managed":
+            return managed + managed
+        case "managed_plus_foreign_hubinet_comment":
+            return managed + f"{foreign_key} hubinet-ops\n".encode()
+        case "foreign_unrelated_comment":
+            return f"{foreign_key} administrator@example\n".encode()
+        case _:  # pragma: no cover - test table is fixed
+            raise AssertionError(case)
+
+
+def _assert_no_provisioning_mutation(
+    before: dict[str, object], after: dict[str, object]
+) -> None:
+    """Assert fake PVE state differs only by read-only inspection calls."""
+    assert {key: value for key, value in after.items() if key != "calls"} == {
+        key: value for key, value in before.items() if key != "calls"
+    }
+    mutating = (
+        "role add",
+        "role modify",
+        "user add",
+        "user modify",
+        "user token add",
+        "user token remove",
+        "acl modify",
+    )
+    assert not any(call.startswith(mutating) for call in after["calls"])
 
 
 def test_bootstrap_has_valid_shell_syntax_and_bounded_options() -> None:
@@ -326,7 +396,62 @@ def test_bootstrap_owns_only_the_fixed_resource_contract() -> None:
         assert value in source
     assert "/root/.ssh/authorized_keys\"" not in source
     assert "/etc/pve/priv/authorized_keys" not in source
-    assert "sshd_config" not in source
+    assert "/etc/ssh/sshd_config" not in source
+    assert source.count("sshd -T") == 1
+
+
+@pytest.mark.parametrize(
+    "effective_policy",
+    [
+        "pubkeyauthentication no\npermitrootlogin yes",
+        "pubkeyauthentication yes\npermitrootlogin no",
+    ],
+    ids=["public_key_auth_disabled", "root_login_disabled"],
+)
+def test_incompatible_sshd_policy_stops_before_pve_mutation(
+    tmp_path: Path, effective_policy: str
+) -> None:
+    """S1/S2: definitively incompatible root public-key policy fails early."""
+    harness = _new_harness(tmp_path)
+    harness.env["FAKE_SSHD_EFFECTIVE"] = (
+        f"{effective_policy}\n"
+        "authorizedkeysfile .ssh/authorized_keys .ssh/authorized_keys2"
+    )
+    before = harness.state()
+
+    result = harness.run()
+
+    assert result.returncode != 0
+    assert harness.state() == before
+    assert harness.helper.exists() is False
+    assert harness.authorized_keys2.exists() is False
+    assert "root public-key SSH policy is incompatible" in result.stderr
+    assert "stopped before mutation" in result.stderr
+    assert "does not modify sshd_config" in result.stderr
+    assert Path(harness.env["SSHD_CALLS"]).read_text() == "x"
+
+
+@pytest.mark.parametrize(
+    "permit_root_login",
+    ["yes", "without-password", "forced-commands-only"],
+)
+def test_compatible_effective_sshd_root_policy_proceeds(
+    tmp_path: Path, permit_root_login: str
+) -> None:
+    """S3-S5: all effective modes compatible with the forced key proceed."""
+    harness = _new_harness(tmp_path)
+    harness.env["FAKE_SSHD_EFFECTIVE"] = "\n".join(
+        (
+            "pubkeyauthentication yes",
+            f"permitrootlogin {permit_root_login}",
+            "authorizedkeysfile .ssh/authorized_keys .ssh/authorized_keys2",
+        )
+    )
+
+    _result, value = harness.enroll()
+
+    parse_enrollment(value)
+    assert Path(harness.env["SSHD_CALLS"]).read_text() == "x"
 
 
 def test_fresh_install_provisions_exact_resources_and_one_enrollment(
@@ -436,8 +561,8 @@ def test_explicit_reset_rotates_both_credentials_and_emits_enrollment(
 
 @pytest.mark.parametrize(
     "broken_contents",
-    [None, b"restrict ssh-ed25519 malformed hubinet-ops\n"],
-    ids=["missing", "malformed"],
+    [None, b"", b"# no active keys\n\n# retained comment\n"],
+    ids=["missing", "empty", "comments_only"],
 )
 def test_broken_ssh_state_requires_reset_after_deterministic_repair(
     tmp_path: Path, broken_contents: bytes | None
@@ -469,11 +594,31 @@ def test_broken_ssh_state_requires_reset_after_deterministic_repair(
     assert "Reconfigure → Re-enroll" in result.stderr
     assert "HUBINET1-" not in result.stdout
 
+    reset_result = harness.run("--reset")
+    assert reset_result.returncode == 0
+    values = re.findall(r"HUBINET1-[A-Za-z0-9_-]+", reset_result.stdout)
+    assert len(values) == 1
+    parse_enrollment(values[0])
+    assert AUTHORIZED_LINE.fullmatch(harness.authorized_keys2.read_bytes())
 
-def test_foreign_authorized_keys2_fails_before_any_mutation(tmp_path: Path) -> None:
-    """B7: the release-exclusive file is never merged or rewritten."""
+
+@pytest.mark.parametrize(
+    "foreign_case",
+    [
+        "foreign_hubinet_comment",
+        "foreign_options_hubinet_comment",
+        "malformed_hubinet_suffix",
+        "two_managed",
+        "managed_plus_foreign_hubinet_comment",
+        "foreign_unrelated_comment",
+    ],
+)
+def test_foreign_authorized_keys2_fails_before_any_mutation(
+    tmp_path: Path, foreign_case: str
+) -> None:
+    """B7/B7b: every nonempty non-exact state is immutable and foreign."""
     harness = _new_harness(tmp_path)
-    foreign = b"ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAITest foreign@example\n"
+    foreign = _foreign_contents(foreign_case)
     harness.authorized_keys2.parent.mkdir(parents=True)
     harness.authorized_keys2.write_bytes(foreign)
     before = harness.state()
@@ -483,16 +628,39 @@ def test_foreign_authorized_keys2_fails_before_any_mutation(tmp_path: Path) -> N
     assert result.returncode != 0
     assert harness.authorized_keys2.read_bytes() == foreign
     after = harness.state()
-    assert {key: value for key, value in after.items() if key != "calls"} == {
-        key: value for key, value in before.items() if key != "calls"
-    }
-    assert after["calls"] == [
-        "role list --output-format json",
-        "user list --output-format json",
-        "acl list --output-format json",
-    ]
+    _assert_no_provisioning_mutation(before, after)
+    assert harness.helper.exists() is False
+    assert after["tokens"] == {}
+    assert "HUBINET1-" not in result.stdout
     assert "requires exclusive use" in result.stderr
-    assert "was not modified" in result.stderr
+    assert "did not modify it" in result.stderr
+    assert "Inspect the file" in result.stderr
+    assert "deliberately remove it" in result.stderr
+
+
+def test_reset_cannot_bypass_foreign_authorized_keys_guard(tmp_path: Path) -> None:
+    """B7c: neither plain repair nor --reset can overwrite ambiguous contents."""
+    harness = _new_harness(tmp_path)
+    harness.enroll()
+    foreign = _foreign_contents("managed_plus_foreign_hubinet_comment")
+    harness.authorized_keys2.write_bytes(foreign)
+    helper_before = harness.helper.read_bytes()
+    harness.clear_calls()
+    before = harness.state()
+
+    plain_result = harness.run()
+    reset_result = harness.run("--reset")
+
+    assert plain_result.returncode != 0
+    assert reset_result.returncode != 0
+    assert "HUBINET1-" not in plain_result.stdout
+    assert "HUBINET1-" not in reset_result.stdout
+    assert harness.authorized_keys2.read_bytes() == foreign
+    assert harness.helper.read_bytes() == helper_before
+    after = harness.state()
+    _assert_no_provisioning_mutation(before, after)
+    assert after["tokens"] == before["tokens"]
+    assert _credential_calls(after) == []
 
 
 def test_unrelated_acl_is_warned_and_never_removed(tmp_path: Path) -> None:
@@ -530,6 +698,34 @@ def test_token_creation_failure_emits_no_enrollment(tmp_path: Path) -> None:
     assert result.returncode != 0
     assert "API token creation failed" in result.stderr
     assert "HUBINET1-" not in result.stdout
+
+
+def test_failed_reset_token_add_recovers_on_plain_rerun(tmp_path: Path) -> None:
+    """B9b: the accepted reset partial state is recoverable without journaling."""
+    harness = _new_harness(tmp_path)
+    harness.enroll()
+    state = harness.state()
+    state["fail_token_add"] = True
+    harness.write_state(state)
+
+    failed = harness.run("--reset")
+
+    assert failed.returncode != 0
+    assert "HUBINET1-" not in failed.stdout
+    assert harness.state()["tokens"] == {}
+
+    state = harness.state()
+    state["fail_token_add"] = False
+    harness.write_state(state)
+    recovered, value = harness.enroll()
+
+    assert recovered.returncode == 0
+    assert recovered.stdout.count("HUBINET1-") == 1
+    enrollment = parse_enrollment(value)
+    assert enrollment.token_secret == harness.state()["tokens"][
+        "hubinetnext@pve!ha"
+    ]
+    assert AUTHORIZED_LINE.fullmatch(harness.authorized_keys2.read_bytes())
 
 
 def test_truncated_script_prefixes_never_invoke_provisioning(tmp_path: Path) -> None:

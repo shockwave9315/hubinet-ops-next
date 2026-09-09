@@ -45,6 +45,10 @@ Bootstrap refuses foreign contents rather than merging or rewriting them. It
 never modifies `/root/.ssh/authorized_keys`,
 `/etc/pve/priv/authorized_keys`, or `sshd_config`.
 
+If bootstrap refuses because `authorized_keys2` contains foreign or ambiguous
+active keys, it leaves the file unchanged. Inspect it manually; only remove it
+deliberately when none of those keys are relied upon, then rerun bootstrap.
+
 ## LXC package scan
 
 The package scan refreshes APT metadata, simulates an upgrade, and reads dpkg
