@@ -1,6 +1,6 @@
 # Status
 
-Status date: 2026-09-08
+Status date: 2026-09-09
 
 ## Current baseline
 
@@ -49,6 +49,10 @@ Status date: 2026-09-08
 - Guided enrollment architecture: **ACCEPTED BY MAINTAINER** and documented in
   [ARCHITECTURE.md](ARCHITECTURE.md).
 - Guided enrollment and the version-4 legacy trust migration: **IMPLEMENTED**.
+- Guided lifecycle repair after independent review: **IMPLEMENTED IN PR #8**.
+  Plain bootstrap reconciles deterministic resources without credential
+  rotation; `--reset` and guided re-enrollment atomically recover existing
+  entries; package trust failures degrade to native-only operation.
 
 ## Next
 

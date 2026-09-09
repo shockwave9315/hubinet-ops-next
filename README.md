@@ -26,6 +26,25 @@ The **Existing credentials (advanced)** path preserves the upstream-compatible
 manual Proxmox authentication flow. It does not provision package-control SSH
 trust.
 
+## Repair and re-enroll
+
+- Run the same displayed bootstrap command without options to repair the fixed
+  role, user, ACL, and release helper. Existing API and SSH credentials remain
+  unchanged, so Home Assistant normally needs no interaction.
+- For credential recovery, run the command with `--reset`, then choose
+  **Reconfigure > Re-enroll** in Home Assistant and paste the new
+  `HUBINET1-...` value. This replaces the old Hubinet API token and SSH client
+  key.
+
+Treat every enrollment value as sensitive credential material. Hubinet-Ops
+does not persist the raw blob, but it remains valid while its contained
+credentials remain valid; discard terminal and clipboard copies after setup.
+
+Hubinet-Ops exclusively owns `/root/.ssh/authorized_keys2` for this release.
+Bootstrap refuses foreign contents rather than merging or rewriting them. It
+never modifies `/root/.ssh/authorized_keys`,
+`/etc/pve/priv/authorized_keys`, or `sshd_config`.
+
 ## LXC package scan
 
 The package scan refreshes APT metadata, simulates an upgrade, and reads dpkg

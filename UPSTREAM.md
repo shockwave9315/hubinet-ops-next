@@ -34,10 +34,13 @@ The copied upstream tests change only module paths, domain values, snapshot
 platform values, and the fixture that enables loading a custom integration.
 Fork-owned package-scan tests are separate additions.
 
-Guided fresh-install enrollment is an intentional fork-owned config-flow
-divergence. The upstream-compatible manual credential, reauth, reconfigure,
-API validation, discovery, and entity behavior remain present. The guided path
-adds a fixed least-privilege PVE identity, release-pinned root bootstrap,
-in-memory SSH trust stored in config-entry data, authenticated helper probe,
-and package-node gating. Config-entry version 4 migrates only safe,
-unambiguous legacy file-based package trust and never removes the old files.
+Guided enrollment is an intentional fork-owned config-flow divergence. The
+upstream-compatible manual credential path and its advanced reauth and
+reconfigure behavior remain present. Guided entries instead use one enrollment
+pipeline for fresh setup, reauth, and atomic re-enrollment. The guided path adds
+a fixed least-privilege PVE identity, release-pinned root bootstrap, in-memory
+SSH trust stored in config-entry data, authenticated helper probe, and
+package-node gating. An advanced host change clears package trust bound to the
+old endpoint. Config-entry version 4 migrates only safe, unambiguous legacy
+file-based package trust, rejects files containing active OpenSSH marker lines,
+and never removes the old files.

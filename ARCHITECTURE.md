@@ -86,16 +86,32 @@ root ACL, the forced-command helper, and the restricted key in
 `Datastore.Audit`, `Sys.Audit`, `Sys.PowerMgmt`, `VM.Audit`, `VM.PowerMgmt`,
 and `VM.Snapshot`. The bootstrap verifies that effective sshd configuration
 already enables `.ssh/authorized_keys2`; it never edits sshd configuration or
-the other authorized-key files.
+the other authorized-key files. For this release, `authorized_keys2` is an
+exclusive Hubinet-owned file: foreign contents stop bootstrap before any
+provisioning mutation and are never merged or rewritten. Bootstrap creates
+`/root/.ssh` with root ownership and mode `0700` only when it is absent; it
+does not change metadata on an existing directory. It enforces root ownership
+and mode `0600` whenever it creates or replaces its own `authorized_keys2`
+file.
 
 The bootstrap prints one bounded `HUBINET1-` base64url JSON enrollment value.
 It carries only the version, PVE token secret, compact Ed25519 private client
-key, and local PVE Ed25519 SSH host public key. The value is temporary setup
-transport and is never persisted verbatim. A normal run stops without any
-mutation if the fixed token already exists, because PVE cannot reveal its
-secret again. Explicit `--reset` re-enrollment recreates only the fixed token
-and replaces only the Hubinet key in `authorized_keys2`; deterministic
-role/user/ACL/helper resources are otherwise reconciled to their fixed shape.
+key, and local PVE Ed25519 SSH host public key. The value is sensitive,
+temporary setup transport and is never persisted verbatim, but remains usable
+while the credentials it contains remain valid. Operators discard terminal
+and clipboard copies after enrollment.
+
+The bootstrap has three finite lifecycle results. A fresh run reconciles the
+fixed role, user, root ACL, and exact release helper, creates the two
+credentials, and emits enrollment. A plain repair run always reconciles those
+deterministic resources but never rotates valid credentials and emits no
+enrollment when they already exist. If its fixed token exists but the Hubinet
+key in `authorized_keys2` is missing or broken, deterministic repair may
+complete, but bootstrap reports incomplete credential state and directs the
+operator to `--reset` and Home Assistant re-enrollment. Explicit `--reset`
+reconciles deterministic resources, rotates only the Hubinet SSH client key
+and fixed API token, and emits new enrollment; those replacements invalidate
+the old Hubinet credentials.
 
 Before creating a config entry, Home Assistant strictly parses and imports the
 enrollment, validates the fixed API identity against the user-entered API
@@ -106,14 +122,24 @@ version is informational. The authenticated probe returns the local PVE node,
 which must be present in upstream API discovery. Only then is one entry created
 with the token secret, private key, host public key, and `package_node` in
 `entry.data`. There is no setup store, filesystem credential staging, custom
-inventory, durable enrollment state, or reload.
+inventory, or durable enrollment state. For an existing guided entry,
+Reconfigure offers guided re-enrollment beside the upstream-compatible
+advanced credential path. Guided reauth uses the same `--reset` enrollment
+pipeline. Endpoint, API auth, SSH trust, `package_node`, and discovered nodes
+are replaced atomically and the entry is reloaded only after every check
+succeeds. An advanced host change clears stale package SSH trust while leaving
+native Proxmox functionality available.
 
 Config-entry version 4 removes runtime use of `/config/.ssh/hubinet_ops` and
 `/config/.ssh/known_hosts`. Migration imports an existing file-based identity
 only when both files, the configured host key, and a single upstream node are
-unambiguous; it never deletes or modifies the old files. An unsafe or ambiguous
+unambiguous; any active OpenSSH marker line refuses the whole import, and the
+migration never deletes or modifies the old files. An unsafe or ambiguous
 legacy identity is left unimported, so native Proxmox operation continues while
-package controls remain unavailable until a fresh guided enrollment.
+package controls remain unavailable until Reconfigure → Re-enroll. Malformed
+package trust already stored in an entry likewise disables only package
+controls and cannot prevent the upstream-derived native integration from
+loading.
 
 ## Implemented package-scan architecture
 
@@ -270,7 +296,8 @@ the trust input. The transport itself fails before connecting when either
 trust input is absent, and host-key mismatch is distinct from authentication
 failure. Password, keyboard-interactive, agent, PKCS#11, GSS, and host-based
 client authentication are disabled, and local SSH configuration is not
-loaded.
+loaded. Setup probe requests have a 30-second transport timeout; package scans
+retain their 300-second transport timeout.
 
 The PVE host helper remains a root-owned forced-command boundary. It accepts no
 caller-supplied remote shell command text. It must:
