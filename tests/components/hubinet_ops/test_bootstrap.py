@@ -26,7 +26,7 @@ PRIVILEGES = (
 )
 AUTHORIZED_LINE = re.compile(
     rb'^restrict,command="/usr/local/sbin/hubinet-package-scan-helper" '
-    rb"ssh-ed25519 [A-Za-z0-9+/]+={0,3} hubinet-ops\n$"
+    rb"(ssh-ed25519 [A-Za-z0-9+/]+={0,3}) hubinet-ops\n$"
 )
 FORCED_COMMAND = "/usr/local/sbin/hubinet-package-scan-helper"
 DEFAULT_SSHD_EFFECTIVE = "\n".join(
@@ -600,6 +600,57 @@ def test_broken_ssh_state_requires_reset_after_deterministic_repair(
     assert len(values) == 1
     parse_enrollment(values[0])
     assert AUTHORIZED_LINE.fullmatch(harness.authorized_keys2.read_bytes())
+
+
+def test_exact_managed_envelope_with_corrupt_key_requires_and_allows_reset(
+    tmp_path: Path,
+) -> None:
+    """An owned but unusable key is broken, not valid or foreign."""
+    harness = _new_harness(tmp_path)
+    harness.enroll()
+    corrupt = (
+        b'restrict,command="/usr/local/sbin/hubinet-package-scan-helper" '
+        b"ssh-ed25519 AAAA hubinet-ops\n"
+    )
+    harness.authorized_keys2.write_bytes(corrupt)
+    state = harness.state()
+    old_tokens = dict(state["tokens"])
+    state["roles"][0]["privs"] = "Sys.Audit"
+    harness.write_state(state)
+    harness.clear_calls()
+
+    plain_result = harness.run()
+
+    assert plain_result.returncode != 0
+    assert "HUBINET1-" not in plain_result.stdout
+    assert "missing or broken" in plain_result.stderr
+    assert "--reset" in plain_result.stderr
+    assert "Reconfigure → Re-enroll" in plain_result.stderr
+    assert harness.authorized_keys2.read_bytes() == corrupt
+    assert harness.state()["tokens"] == old_tokens
+    assert harness.state()["roles"][0]["privs"] == PRIVILEGES
+    assert _credential_calls(harness.state()) == []
+
+    harness.clear_calls()
+    reset_result = harness.run("--reset")
+
+    assert reset_result.returncode == 0
+    values = re.findall(r"HUBINET1-[A-Za-z0-9_-]+", reset_result.stdout)
+    assert len(values) == 1
+    parse_enrollment(values[0])
+    managed = AUTHORIZED_LINE.fullmatch(harness.authorized_keys2.read_bytes())
+    assert managed is not None
+    assert subprocess.run(
+        ["ssh-keygen", "-l", "-f", "-"],
+        input=managed.group(1) + b"\n",
+        check=False,
+        capture_output=True,
+    ).returncode == 0
+    assert harness.state()["tokens"] != old_tokens
+    assert _credential_calls(harness.state()) == [
+        "user token remove hubinetnext@pve ha",
+        "user token add hubinetnext@pve ha --privsep 0 --output-format json",
+    ]
 
 
 @pytest.mark.parametrize(

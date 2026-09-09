@@ -118,11 +118,12 @@ print("1" if any(row.get("tokenid") == "ha" for row in rows) else "0")
     fi
     SSH_CREDENTIAL_STATE=$(python3 - "$AUTHORIZED_KEYS2" <<'PY'
 import re
+import subprocess
 import sys
 
 pattern = re.compile(
     r'^restrict,command="/usr/local/sbin/hubinet-package-scan-helper" '
-    r'ssh-ed25519 [A-Za-z0-9+/]+={0,3} hubinet-ops$'
+    r'(ssh-ed25519 [A-Za-z0-9+/]+={0,3}) hubinet-ops$'
 )
 try:
     with open(sys.argv[1], encoding="ascii") as handle:
@@ -136,8 +137,15 @@ except (OSError, UnicodeError):
 else:
     if not lines:
         print("broken")
-    elif len(lines) == 1 and pattern.fullmatch(lines[0]):
-        print("valid")
+    elif len(lines) == 1 and (match := pattern.fullmatch(lines[0])):
+        result = subprocess.run(
+            ["ssh-keygen", "-l", "-f", "-"],
+            input=f"{match.group(1)}\n".encode("ascii"),
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            check=False,
+        )
+        print("valid" if result.returncode == 0 else "broken")
     else:
         print("foreign")
 PY
