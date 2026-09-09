@@ -854,6 +854,7 @@ async def test_guided_reconfigure_reenroll_updates_every_field_atomically(
 ) -> None:
     """A validated enrollment replaces endpoint, auth, SSH, and node together."""
     entry = _guided_config_entry()
+    object.__setattr__(entry, "data", {**entry.data, "enrollment": "stale-raw-blob"})
     entry.add_to_hass(hass)
     old_data = dict(entry.data)
     result = await _start_guided_reconfigure(

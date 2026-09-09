@@ -138,6 +138,7 @@ _GUIDED_DATA_KEYS = (
     CONF_SSH_HOST_KEY,
     CONF_PACKAGE_NODE,
     CONF_NODES,
+    CONF_ENROLLMENT,
 )
 
 
@@ -535,7 +536,11 @@ class ProxmoxveConfigFlow(ConfigFlow, domain=DOMAIN):
             return None, errors
 
         final_data = {
-            **self._data,
+            **{
+                key: value
+                for key, value in self._data.items()
+                if key not in (CONF_PASSWORD, CONF_ENROLLMENT)
+            },
             CONF_TOKEN_SECRET: enrollment.token_secret,
             CONF_SSH_PRIVATE_KEY: enrollment.private_key,
             CONF_SSH_HOST_KEY: enrollment.host_key,
