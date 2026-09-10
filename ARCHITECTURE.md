@@ -71,6 +71,27 @@ Hubinet-Ops owns:
 - the guided-enrollment bootstrap described below; and
 - the package scan, review, and update subsystem described below.
 
+### Helper repair and explicit package cleanup boundary
+
+On 2026-09-10, before implementation, the maintainer accepted helper-upgrade
+UX and explicit unused-package cleanup for the next release. Protocol v1
+remains the wire compatibility authority; helper v4 is the shipped helper.
+Observed helper version is only operator-facing stale-helper evidence, never a
+global feature gate. Helper probing is one lifecycle-tracked, best-effort
+background observation and cannot delay or disable native Proxmox setup.
+
+Stale-helper repair uses the plain release-pinned bootstrap, without `--reset`,
+credential rotation, or re-enrollment. Cleanup evidence is separate,
+ephemeral, package-manager-owned state, never synthetic `PackageScanResult`
+state. Normal Scan may discover candidates; successful Package Update performs
+only a read-only cleanup observation with no hidden `apt-get update`.
+Autoremove is always explicit. A non-empty exact plan becomes actionable only
+after successful presentation and is revalidated by full package identity
+before mutation. Execution reuses the existing native PVE snapshot, dpkg
+sanity, liveness, and exact snapshot-cleanup path. This adds no CleanupManager,
+database, persistence, scheduler, recovery or workflow framework, automatic
+autoremove, or Post-update Health.
+
 ## Guided fresh-install enrollment
 
 The default config-flow path is a guided setup layered beside the preserved

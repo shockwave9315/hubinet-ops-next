@@ -1,6 +1,6 @@
 # Status
 
-Status date: 2026-09-09
+Status date: 2026-09-10
 
 ## Current baseline
 
@@ -65,6 +65,13 @@ Status date: 2026-09-09
   Plain bootstrap reconciles deterministic resources without credential
   rotation; `--reset` and guided re-enrollment atomically recover existing
   entries; package trust failures degrade to native-only operation.
+
+## Helper repair and package cleanup
+
+- Architecture: **ACCEPTED BY MAINTAINER on 2026-09-10**, before runtime
+  implementation; see the durable boundary in [ARCHITECTURE.md](ARCHITECTURE.md).
+- Implementation: **NOT STARTED**; implementation begins after the required
+  architecture checkpoint commit.
 
 ## Next
 
