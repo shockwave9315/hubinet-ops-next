@@ -1,0 +1,627 @@
+{
+  "config": {
+    "abort": {
+      "already_configured": "Urządzenie jest już skonfigurowane",
+      "reauth_successful": "Ponowne uwierzytelnienie zakończyło się pomyślnie",
+      "reconfigure_successful": "Ponowna konfiguracja zakończyła się pomyślnie"
+    },
+    "error": {
+      "api_error_no_details": "Wystąpił błąd podczas komunikacji z instancją Proxmox VE.",
+      "cannot_connect": "Nie można połączyć się z serwerem Proxmox VE",
+      "connect_timeout": "Upłynął limit czasu na nawiązanie połączenia",
+      "invalid_auth": "Nieprawidłowe uwierzytelnienie",
+      "enrollment_too_large": "Wartość rejestracyjna jest zbyt duża. Wklej tylko pojedynczą wartość HUBINET1 wyświetloną przez skrypt instalacyjny.",
+      "invalid_enrollment_base64": "Kodowanie wartości rejestracyjnej jest nieprawidłowe. Wklej pełną wartość HUBINET1 bez wprowadzania zmian.",
+      "invalid_enrollment_host_key": "Wartość rejestracyjna zawiera nieprawidłowy lub niejednoznaczny klucz hosta SSH PVE. Ponownie uruchom skrypt instalacyjny na hoście PVE.",
+      "invalid_enrollment_json": "Dane rejestracyjne są nieprawidłowe. Wklej pełną wartość HUBINET1 wyświetloną przez skrypt instalacyjny.",
+      "invalid_enrollment_prefix": "Prefiks lub wersja wartości rejestracyjnej nie są obsługiwane. Uruchom polecenie instalacyjne wyświetlone przez tę wersję Hubinet-Ops.",
+      "invalid_enrollment_private_key": "Wartość rejestracyjna zawiera nieprawidłowy klucz prywatny SSH. Ponownie uruchom skrypt instalacyjny, aby utworzyć nowe dane logowania.",
+      "invalid_enrollment_schema": "Pola wartości rejestracyjnej są nieprawidłowe. Użyj wyłącznie wartości wyświetlonej przez pokazane polecenie instalacyjne.",
+      "invalid_enrollment_token": "Wartość rejestracyjna zawiera nieprawidłowy sekret tokenu API. Ponownie uruchom skrypt instalacyjny, aby utworzyć nowe dane logowania.",
+      "ssh_auth_failed": "Uwierzytelnienie SSH nie powiodło się. Ponownie uruchom skrypt instalacyjny z opcją --reset i wklej nową wartość rejestracyjną.",
+      "ssh_cannot_connect": "Nie można połączyć się z SSH PVE na porcie 22. Sprawdź host i usługę SSH.",
+      "ssh_host_key_mismatch": "Klucz hosta SSH PVE nie jest zgodny z zarejestrowanym kluczem. Sprawdź host i ponownie uruchom na nim skrypt instalacyjny.",
+      "helper_missing_or_outdated": "Narzędzie pomocnicze PVE nie istnieje lub jest nieaktualne. Ponownie uruchom wyświetlone polecenie instalacyjne.",
+      "helper_protocol_mismatch": "Protokół narzędzia pomocniczego PVE jest niezgodny z tą wersją Hubinet-Ops. Ponownie uruchom wyświetlone polecenie instalacyjne.",
+      "package_node_not_found": "Lokalny węzeł PVE uwierzytelnionego hosta SSH nie został odnaleziony przez API Proxmox. Sprawdź, czy hosty API i SSH należą do tego samego klastra.",
+      "no_nodes_found": "Nie znaleziono aktywnych węzłów na serwerze Proxmox VE.",
+      "no_vmlxc_found": "Nie znaleziono kontenerów LXC ani maszyn wirtualnych na serwerze Proxmox VE.",
+      "ssl_error": "Weryfikacja SSL nie powiodła się. Sprawdź ustawienia SSL"
+    },
+    "step": {
+      "guided": {
+        "data": {
+          "host": "Host",
+          "port": "Port",
+          "verify_ssl": "Weryfikuj certyfikat SSL"
+        },
+        "data_description": {
+          "host": "Nazwa hosta lub adres IP hosta Proxmox VE",
+          "port": "Port API Proxmox VE (domyślnie: 8006)",
+          "verify_ssl": "Czy weryfikować certyfikat API Proxmox VE"
+        },
+        "description": "Podaj host Proxmox VE. Hubinet-Ops utworzy dedykowane dane logowania w następnym kroku.",
+        "title": "Konfiguracja z przewodnikiem"
+      },
+      "enrollment": {
+        "data": {
+          "enrollment": "Wartość rejestracyjna HUBINET"
+        },
+        "data_description": {
+          "enrollment": "Wklej pełną wartość HUBINET1 wyświetloną przez skrypt instalacyjny. Zawiera ona poufne dane logowania: Hubinet-Ops nie zapisuje surowej wartości, ale po rejestracji należy usunąć jej kopie z terminala i schowka."
+        },
+        "description": "Uruchom to polecenie jeden raz jako root na hoście Proxmox VE:\n\n```text\n{bootstrap_command}\n```\n\nNastępnie wklej poniżej wartość rejestracyjną. Przed zapisaniem Hubinet-Ops sprawdzi API, klucz hosta SSH, uwierzytelnienie SSH, protokół narzędzia pomocniczego i lokalny węzeł.\n\n**Nie wyświetlono wartości rejestracyjnej?**\n\nJeśli Hubinet-Ops był już skonfigurowany na tym hoście, powyższe polecenie zachowuje istniejące dane logowania i nie wyświetla nowej wartości rejestracyjnej. Aby utworzyć nowe dane rejestracyjne, uruchom:\n\n```text\n{reset_bootstrap_command}\n```",
+        "title": "Zarejestruj Hubinet-Ops"
+      },
+      "reauth_confirm": {
+        "data": {
+          "password": "Hasło",
+          "realm": "Domena uwierzytelniania",
+          "token_id": "Identyfikator tokenu",
+          "token_value": "Sekret"
+        },
+        "data_description": {
+          "password": "Hasło użytkownika",
+          "realm": "Podaj domenę uwierzytelniania",
+          "token_id": "Nazwa nadana tokenowi API",
+          "token_value": "Sekret wygenerowany dla tokenu API"
+        },
+        "description": "Połączenie z serwerem Proxmox VE wymaga ponownego uwierzytelnienia. Zaktualizuj dane logowania, aby kontynuować.",
+        "title": "Ponownie uwierzytelnij integrację Proxmox VE"
+      },
+      "reauth_enrollment": {
+        "data": {
+          "enrollment": "Wartość rejestracyjna HUBINET"
+        },
+        "data_description": {
+          "enrollment": "Wklej nową wartość HUBINET1. Pozostaje ona poufna, dopóki jej dane logowania są ważne; Hubinet-Ops nie zapisuje surowej wartości."
+        },
+        "description": "Uruchom to polecenie jako root na hoście Proxmox VE, aby zastąpić dane logowania Hubinet:\n\n```text\n{bootstrap_command}\n```\n\nNastępnie wklej nową wartość rejestracyjną. Opcja --reset unieważnia stare dane logowania Hubinet.",
+        "title": "Zarejestruj ponownie Hubinet-Ops"
+      },
+      "reconfigure": {
+        "menu_options": {
+          "reconfigure_guided": "Ponowna rejestracja (z przewodnikiem)",
+          "reconfigure_existing_credentials": "Istniejące dane logowania (zaawansowane)"
+        },
+        "data": {
+          "auth_method": "Metoda uwierzytelniania",
+          "host": "Host",
+          "port": "Port",
+          "token": "Użyj tokenu API",
+          "username": "Nazwa użytkownika",
+          "verify_ssl": "Weryfikuj certyfikat SSL"
+        },
+        "data_description": {
+          "auth_method": "Wybierz dostawcę uwierzytelniania serwera Proxmox VE",
+          "host": "Nazwa hosta lub adres IP serwera Proxmox VE",
+          "port": "Port serwera Proxmox VE (domyślnie: 8006)",
+          "token": "Włącz, aby użyć tokenu API, albo wyłącz, aby uwierzytelnić się hasłem",
+          "username": "Nazwa użytkownika serwera Proxmox VE",
+          "verify_ssl": "Czy weryfikować certyfikaty SSL. Wyłącz tylko w przypadku certyfikatu z podpisem własnym"
+        },
+        "description": "Wybierz ponowną rejestrację z przewodnikiem, aby zastąpić dane logowania zarządzane przez Hubinet, albo użyj ścieżki zaawansowanej dla istniejących danych logowania Proxmox.",
+        "title": "Skonfiguruj ponownie Hubinet-Ops"
+      },
+      "reconfigure_guided": {
+        "data": {
+          "host": "Host",
+          "port": "Port",
+          "verify_ssl": "Weryfikuj certyfikat SSL"
+        },
+        "data_description": {
+          "host": "Nazwa hosta lub adres IP hosta Proxmox VE",
+          "port": "Port API Proxmox VE (domyślnie: 8006)",
+          "verify_ssl": "Czy weryfikować certyfikat API Proxmox VE"
+        },
+        "description": "Potwierdź punkt końcowy, który otrzyma nowe dane logowania z przewodnika.",
+        "title": "Ponowna rejestracja z przewodnikiem"
+      },
+      "reconfigure_enrollment": {
+        "data": {
+          "enrollment": "Wartość rejestracyjna HUBINET"
+        },
+        "data_description": {
+          "enrollment": "Wklej nową wartość HUBINET1. Pozostaje ona poufna, dopóki jej dane logowania są ważne; Hubinet-Ops nie zapisuje surowej wartości."
+        },
+        "description": "Uruchom to polecenie jako root na hoście Proxmox VE, aby zastąpić dane logowania Hubinet:\n\n```text\n{bootstrap_command}\n```\n\nNastępnie wklej nową wartość rejestracyjną. Wszystkie dane punktu końcowego, API, SSH, narzędzia pomocniczego i węzła zostaną sprawdzone przed zmianą istniejącego wpisu.",
+        "title": "Zarejestruj ponownie Hubinet-Ops"
+      },
+      "reconfigure_existing_credentials": {
+        "data": {
+          "auth_method": "Metoda uwierzytelniania",
+          "host": "Host",
+          "port": "Port",
+          "token": "Użyj tokenu API",
+          "username": "Nazwa użytkownika",
+          "verify_ssl": "Weryfikuj certyfikat SSL"
+        },
+        "data_description": {
+          "auth_method": "Wybierz dostawcę uwierzytelniania serwera Proxmox VE",
+          "host": "Nazwa hosta lub adres IP serwera Proxmox VE",
+          "port": "Port serwera Proxmox VE (domyślnie: 8006)",
+          "token": "Włącz, aby użyć tokenu API, albo wyłącz, aby uwierzytelnić się hasłem",
+          "username": "Nazwa użytkownika serwera Proxmox VE",
+          "verify_ssl": "Czy weryfikować certyfikaty SSL. Wyłącz tylko w przypadku certyfikatu z podpisem własnym"
+        },
+        "description": "Użyj istniejących danych logowania Proxmox. Zmiana hosta usuwa zaufanie SSH operacji pakietowych do czasu ponownej rejestracji z przewodnikiem.",
+        "title": "Istniejące dane logowania (zaawansowane)"
+      },
+      "reconfigure_auth": {
+        "data": {
+          "password": "Hasło",
+          "realm": "Domena uwierzytelniania",
+          "token_id": "Identyfikator tokenu",
+          "token_value": "Sekret"
+        },
+        "data_description": {
+          "password": "Hasło użytkownika",
+          "realm": "Podaj domenę uwierzytelniania",
+          "token_id": "Nazwa nadana tokenowi API",
+          "token_value": "Sekret wygenerowany dla tokenu API"
+        },
+        "description": "Podaj dane logowania do Proxmox VE.",
+        "title": "Dane logowania Proxmox VE"
+      },
+      "existing_credentials": {
+        "data": {
+          "auth_method": "Metoda uwierzytelniania",
+          "host": "Host",
+          "port": "Port",
+          "token": "Użyj tokenu API",
+          "username": "Nazwa użytkownika",
+          "verify_ssl": "Weryfikuj certyfikat SSL"
+        },
+        "data_description": {
+          "auth_method": "Wybierz dostawcę uwierzytelniania serwera Proxmox VE",
+          "host": "Nazwa hosta lub adres IP serwera Proxmox VE",
+          "port": "Port serwera Proxmox VE (domyślnie: 8006)",
+          "token": "Włącz, aby użyć tokenu API, albo wyłącz, aby uwierzytelnić się hasłem",
+          "username": "Nazwa użytkownika serwera Proxmox VE",
+          "verify_ssl": "Czy weryfikować certyfikaty SSL. Wyłącz tylko w przypadku certyfikatu z podpisem własnym"
+        },
+        "description": "Podaj istniejące dane logowania Proxmox VE. Sterowanie pakietami wymaga materiału zaufania utworzonego podczas rejestracji z przewodnikiem.",
+        "title": "Istniejące dane logowania (zaawansowane)"
+      },
+      "user": {
+        "menu_options": {
+          "guided": "Konfiguracja z przewodnikiem (zalecana)",
+          "existing_credentials": "Istniejące dane logowania (zaawansowane)"
+        },
+        "description": "Wybierz konfigurację z przewodnikiem, aby w pełni zainstalować Hubinet-Ops, albo użyj istniejących danych logowania w celu uzyskania dostępu do Proxmox zgodnego z integracją bazową.",
+        "title": "Skonfiguruj Hubinet-Ops"
+      },
+      "user_auth": {
+        "data": {
+          "password": "Hasło",
+          "realm": "Domena uwierzytelniania",
+          "token_id": "Identyfikator tokenu",
+          "token_value": "Sekret"
+        },
+        "data_description": {
+          "password": "Hasło użytkownika",
+          "realm": "Podaj domenę uwierzytelniania",
+          "token_id": "Nazwa nadana tokenowi API",
+          "token_value": "Sekret wygenerowany dla tokenu API"
+        },
+        "description": "Podaj dane logowania, aby uwierzytelnić się w Proxmox VE.",
+        "title": "Dane logowania Proxmox VE"
+      }
+    }
+  },
+  "entity": {
+    "binary_sensor": {
+      "node_backup_status": {
+        "name": "Stan kopii zapasowej"
+      },
+      "status": {
+        "name": "Stan"
+      },
+      "storage_active": {
+        "name": "Aktywność magazynu",
+        "state": {
+          "off": "Nieaktywny",
+          "on": "Aktywny"
+        }
+      },
+      "storage_enabled": {
+        "name": "Dostępność magazynu",
+        "state": {
+          "off": "Wyłączony",
+          "on": "Włączony"
+        }
+      },
+      "storage_shared": {
+        "name": "Współdzielenie magazynu",
+        "state": {
+          "off": "Niewspółdzielony",
+          "on": "Współdzielony"
+        }
+      }
+    },
+    "button": {
+      "hibernate": {
+        "name": "Uśpij"
+      },
+      "pause": {
+        "name": "Wstrzymaj"
+      },
+      "package_scan": {
+        "name": "Skanuj oczekujące pakiety"
+      },
+      "package_review": {
+        "name": "Przejrzyj aktualizację pakietów"
+      },
+      "package_approve": {
+        "name": "Zatwierdź przejrzany plan"
+      },
+      "package_update": {
+        "name": "Aktualizuj pakiety"
+      },
+      "package_autoremove": {
+        "name": "Usuń nieużywane pakiety"
+      },
+      "reset": {
+        "name": "Resetuj"
+      },
+      "resume": {
+        "name": "Wznów"
+      },
+      "shutdown": {
+        "name": "Wyłącz"
+      },
+      "snapshot_create": {
+        "name": "Utwórz snapshot"
+      },
+      "start": {
+        "name": "Uruchom"
+      },
+      "start_all": {
+        "name": "Uruchom wszystkie"
+      },
+      "stop": {
+        "name": "Zatrzymaj"
+      },
+      "stop_all": {
+        "name": "Zatrzymaj wszystkie"
+      },
+      "suspend_all": {
+        "name": "Wstrzymaj wszystkie"
+      }
+    },
+    "sensor": {
+      "container_cpu": {
+        "name": "Użycie CPU"
+      },
+      "container_disk": {
+        "name": "Użycie dysku"
+      },
+      "container_max_cpu": {
+        "name": "Maks. CPU"
+      },
+      "container_max_disk": {
+        "name": "Maks. użycie dysku"
+      },
+      "container_max_memory": {
+        "name": "Maks. użycie pamięci"
+      },
+      "container_memory": {
+        "name": "Użycie pamięci"
+      },
+      "container_memory_percentage": {
+        "name": "Procent użycia pamięci"
+      },
+      "container_netin": {
+        "name": "Ruch przychodzący"
+      },
+      "container_netout": {
+        "name": "Ruch wychodzący"
+      },
+      "container_status": {
+        "name": "Stan",
+        "state": {
+          "running": "Uruchomiony",
+          "stopped": "Zatrzymany",
+          "suspended": "Wstrzymany"
+        }
+      },
+      "container_uptime": {
+        "name": "Czas działania"
+      },
+      "pending_packages": {
+        "name": "Oczekujące aktualizacje pakietów"
+      },
+      "unused_packages": {
+        "name": "Nieużywane pakiety"
+      },
+      "package_update_status": {
+        "name": "Aktualizacja pakietów",
+        "state": {
+          "never": "Nigdy nie uruchomiono",
+          "running": "W toku",
+          "success": "Powodzenie",
+          "failed": "Niepowodzenie"
+        }
+      },
+      "node_backup_duration": {
+        "name": "Czas trwania kopii zapasowej"
+      },
+      "node_backup_last_backup": {
+        "name": "Ostatnia kopia zapasowa"
+      },
+      "node_cpu": {
+        "name": "Użycie CPU"
+      },
+      "node_disk": {
+        "name": "Użycie dysku"
+      },
+      "node_max_cpu": {
+        "name": "Maks. CPU"
+      },
+      "node_max_disk": {
+        "name": "Maks. użycie dysku"
+      },
+      "node_max_memory": {
+        "name": "Maks. użycie pamięci"
+      },
+      "node_memory": {
+        "name": "Użycie pamięci"
+      },
+      "node_memory_percentage": {
+        "name": "Procent użycia pamięci"
+      },
+      "node_status": {
+        "name": "Stan",
+        "state": {
+          "offline": "Offline",
+          "online": "Online"
+        }
+      },
+      "node_uptime": {
+        "name": "Czas działania"
+      },
+      "storage_available": {
+        "name": "Dostępne miejsce"
+      },
+      "storage_total": {
+        "name": "Całkowite miejsce"
+      },
+      "storage_used": {
+        "name": "Użyte miejsce"
+      },
+      "storage_used_percentage": {
+        "name": "Procent użycia magazynu"
+      },
+      "vm_cpu": {
+        "name": "Użycie CPU"
+      },
+      "vm_disk": {
+        "name": "Użycie dysku"
+      },
+      "vm_max_cpu": {
+        "name": "Maks. CPU"
+      },
+      "vm_max_disk": {
+        "name": "Maks. użycie dysku"
+      },
+      "vm_max_memory": {
+        "name": "Maks. użycie pamięci"
+      },
+      "vm_memory": {
+        "name": "Użycie pamięci"
+      },
+      "vm_memory_percentage": {
+        "name": "Procent użycia pamięci"
+      },
+      "vm_netin": {
+        "name": "Ruch przychodzący"
+      },
+      "vm_netout": {
+        "name": "Ruch wychodzący"
+      },
+      "vm_status": {
+        "name": "Stan",
+        "state": {
+          "running": "Uruchomiona",
+          "stopped": "Zatrzymana",
+          "suspended": "Wstrzymana"
+        }
+      },
+      "vm_uptime": {
+        "name": "Czas działania"
+      }
+    }
+  },
+  "exceptions": {
+    "api_error_details": {
+      "message": "Wystąpił błąd podczas komunikacji z instancją Proxmox VE."
+    },
+    "cannot_connect": {
+      "message": "Wystąpił błąd podczas próby połączenia z instancją Proxmox VE."
+    },
+    "invalid_auth": {
+      "message": "Wystąpił błąd podczas próby uwierzytelnienia."
+    },
+    "no_nodes_found": {
+      "message": "Nie znaleziono aktywnych węzłów na serwerze Proxmox VE."
+    },
+    "no_vmlxc_found": {
+      "message": "Nie znaleziono kontenerów LXC ani maszyn wirtualnych na serwerze Proxmox VE."
+    },
+    "package_scan_failed": {
+      "message": "Skanowanie pakietów nie powiodło się: {reason}"
+    },
+    "package_review_failed": {
+      "message": "Przed przeglądem wymagany jest aktualny, niepusty i pomyślny skan pakietów."
+    },
+    "package_approval_failed": {
+      "message": "Wyświetlony plan pakietów nie jest już aktualny. Ponownie przejrzyj bieżący plan."
+    },
+    "package_update_failed": {
+      "message": "Nie można rozpocząć aktualizacji pakietów: {reason}"
+    },
+    "package_autoremove_failed": {
+      "message": "Nie można rozpocząć czyszczenia pakietów: {reason}"
+    },
+    "package_table_package": {
+      "message": "Pakiet"
+    },
+    "package_table_architecture": {
+      "message": "Architektura"
+    },
+    "package_table_installed_version": {
+      "message": "Zainstalowana wersja"
+    },
+    "package_table_candidate_version": {
+      "message": "Dostępna wersja"
+    },
+    "package_table_origin": {
+      "message": "Źródło"
+    },
+    "package_table_security": {
+      "message": "Bezpieczeństwo"
+    },
+    "package_table_yes": {
+      "message": "tak"
+    },
+    "package_table_no": {
+      "message": "nie"
+    },
+    "package_table_unknown": {
+      "message": "nieznane"
+    },
+    "package_review_notification_title": {
+      "message": "Przegląd aktualizacji pakietów"
+    },
+    "package_review_notification": {
+      "message": "Plan pakietów dla {node}/{vmid}:\n\n{plan}\n\nJeśli ten dokładny plan jest prawidłowy, naciśnij **Zatwierdź przejrzany plan**."
+    },
+    "package_retained_snapshot_warning_title": {
+      "message": "Istniejące snapshoty aktualizacji pakietów"
+    },
+    "package_retained_snapshot_warning": {
+      "message": "Znaleziono {count} zachowanych snapshotów aktualizacji pakietów Hubinet dla {node}/{vmid}. Wyświetlono {shown}: {names}. Nie wyświetlono kolejnych: {remaining}. Nie zostały zmienione, a bieżąca aktualizacja będzie kontynuowana z nowym tymczasowym snapshotem."
+    },
+    "package_update_notification_title": {
+      "message": "Wynik aktualizacji pakietów"
+    },
+    "package_update_plan_changed_notification": {
+      "message": "Plan pakietów dla {node}/{vmid} zmienił się przed modyfikacją. Nie wprowadzono zmian ani nie utworzono snapshota. Ponownie uruchom Skanuj, Przejrzyj i Zatwierdź."
+    },
+    "package_update_success_notification": {
+      "message": "Aktualizacja pakietów dla {node}/{vmid} zakończyła się pomyślnie. Faktycznie zmieniono {changed} zainstalowanych pakietów, potwierdzono działanie LXC i usunięto tymczasowy snapshot."
+    },
+    "package_update_cleanup_failed_notification": {
+      "message": "Aktualizacja pakietów dla {node}/{vmid} zakończyła się pomyślnie i potwierdzono działanie LXC. Faktycznie zmieniono {changed} zainstalowanych pakietów, ale nie udało się usunąć snapshota. Zachowany snapshot bezpieczeństwa: {snapshot}."
+    },
+    "package_update_helper_outdated_notification": {
+      "message": "Nie można uruchomić aktualizacji pakietów dla {node}/{vmid}, ponieważ wdrożone narzędzie pomocnicze jest nieaktualne. Ponownie uruchom bieżące polecenie instalacyjne lub naprawcze Hubinet-Ops, a następnie wykonaj Skanuj, Przejrzyj i Zatwierdź."
+    },
+    "package_update_failed_notification": {
+      "message": "Aktualizacja pakietów dla {node}/{vmid} nie zakończyła się prawidłowo: {reason}. {retained}"
+    },
+    "package_update_retained_snapshot_detail": {
+      "message": "Snapshot bezpieczeństwa został zachowany jako {snapshot}. Nie podjęto próby automatycznego wycofania zmian ani czyszczenia."
+    },
+    "package_update_uncertain_snapshot_detail": {
+      "message": "Snapshot bezpieczeństwa o nazwie {snapshot} może istnieć; Hubinet-Ops nie mógł tego potwierdzić. Nie podjęto próby automatycznego czyszczenia."
+    },
+    "package_update_no_retained_snapshot_detail": {
+      "message": "Nie potwierdzono zachowania snapshota bezpieczeństwa."
+    },
+    "package_update_reason_plan_failed": {
+      "message": "nie udało się ustalić planu pakietów w chwili wykonania"
+    },
+    "package_update_reason_snapshot_failed": {
+      "message": "nie udało się potwierdzić kompletnego natywnego snapshota bezpieczeństwa PVE"
+    },
+    "package_update_reason_busy": {
+      "message": "APT lub dpkg był zajęty"
+    },
+    "package_update_reason_mutation_failed": {
+      "message": "modyfikacja APT lub kontrola poprawności dpkg po aktualizacji nie powiodła się"
+    },
+    "package_update_reason_mutation_timed_out": {
+      "message": "upłynął limit czasu modyfikacji APT"
+    },
+    "package_update_reason_mutation_uncertain": {
+      "message": "wynik modyfikacji pakietów jest niepewny"
+    },
+    "package_update_reason_guest_unavailable": {
+      "message": "LXC był niedostępny lub przestał działać"
+    },
+    "package_update_reason_liveness_failed": {
+      "message": "LXC nie odpowiedział na ogólną kontrolę działania"
+    },
+    "package_cleanup_notification_title": {
+      "message": "Czyszczenie nieużywanych pakietów"
+    },
+    "package_cleanup_candidates_notification": {
+      "message": "APT uznaje, że {count} zainstalowanych pakietów na {node}/{vmid} można bezpiecznie automatycznie usunąć:\n\n{plan}\n\nNaciśnij **Usuń nieużywane pakiety**, aby jawnie zatwierdzić ten dokładny plan. Hubinet-Ops ponownie sprawdzi pełny plan przed modyfikacją."
+    },
+    "package_cleanup_empty_notification": {
+      "message": "Nie znaleziono nieużywanych pakietów na {node}/{vmid}."
+    },
+    "package_cleanup_unknown_notification": {
+      "message": "Nie udało się ustalić bieżącego stanu nieużywanych pakietów dla {node}/{vmid}. Uruchom Skanuj, aby spróbować ponownie."
+    },
+    "package_cleanup_result_notification_title": {
+      "message": "Wynik czyszczenia pakietów"
+    },
+    "package_cleanup_plan_changed_notification": {
+      "message": "Plan czyszczenia dla {node}/{vmid} zmienił się po wyświetleniu. Nie wprowadzono zmian ani nie utworzono snapshota. Ponownie uruchom Skanuj."
+    },
+    "package_cleanup_success_notification": {
+      "message": "Jawne czyszczenie pakietów dla {node}/{vmid} zakończyło się pomyślnie. Faktycznie zmieniono {changed} zainstalowanych pakietów, potwierdzono działanie LXC i usunięto tymczasowy snapshot."
+    },
+    "package_cleanup_snapshot_failed_notification": {
+      "message": "Jawne czyszczenie pakietów dla {node}/{vmid} zakończyło się pomyślnie i potwierdzono działanie LXC. Faktycznie zmieniono {changed} zainstalowanych pakietów, ale nie udało się usunąć snapshota. Zachowany snapshot bezpieczeństwa: {snapshot}."
+    },
+    "package_cleanup_helper_outdated_notification": {
+      "message": "Czyszczenie pakietów dla {node}/{vmid} jest niedostępne, ponieważ wdrożone narzędzie pomocnicze go nie obsługuje. Wykonaj instrukcję Naprawy Hubinet-Ops, a następnie ponownie naciśnij Skanuj."
+    },
+    "package_cleanup_failed_notification": {
+      "message": "Jawne czyszczenie pakietów dla {node}/{vmid} nie zakończyło się prawidłowo: {reason}. {retained}"
+    },
+    "permissions_error": {
+      "message": "Nie udało się pobrać uprawnień Proxmox VE. Sprawdź dane logowania i spróbuj ponownie."
+    },
+    "ssl_error": {
+      "message": "Wystąpił błąd SSL."
+    },
+    "timeout_connect": {
+      "message": "Upłynął limit czasu podczas próby połączenia z instancją Proxmox VE."
+    }
+  },
+  "issues": {
+    "helper_outdated": {
+      "title": "Narzędzie pomocnicze hosta Hubinet-Ops wymaga aktualizacji",
+      "description": "Zainstalowane narzędzie pomocnicze: {installed}\nWymagane narzędzie pomocnicze: {required}\n\nZaktualizuj narzędzie pomocnicze na hoście Proxmox VE:\n\n```text\n{bootstrap_command}\n```\n\nTo jest zwykła operacja naprawcza. Nie używaj opcji `--reset`. Istniejący token API i dane rejestracyjne SSH nie zostaną zmienione.\n\nPo pomyślnym wykonaniu polecenia naciśnij Skanuj lub przeładuj Hubinet-Ops."
+    }
+  },
+  "selector": {
+    "auth_method": {
+      "options": {
+        "other": "Użyj innej domeny (podanej w następnym kroku)",
+        "pam": "Użytkownik systemu Linux — standardowe uwierzytelnianie PAM",
+        "pve": "Użytkownik Proxmox — serwer uwierzytelniania Proxmox VE"
+      }
+    }
+  },
+  "services": {
+    "confirm_package_review": {
+      "name": "Potwierdź przegląd pakietów",
+      "description": "Oznacza dokładny plan pakietów zwrócony wcześniej przez Pobierz plan pakietów jako przejrzany, jeśli nadal jest bieżący. Token nie jest hasłem; potwierdza jedynie, że zatwierdzany plan jest nadal tym samym planem, który wyświetlono, a nie nowszym lub innym skanem.",
+      "fields": {
+        "token": {
+          "name": "Token",
+          "description": "Token zwrócony wraz z planem przez Pobierz plan pakietów. Jeśli od tego czasu zastąpił go nowy skan, potwierdzenie zostanie odrzucone bez zgłaszania błędu."
+        }
+      }
+    },
+    "get_package_plan": {
+      "name": "Pobierz plan pakietów",
+      "description": "Zwraca stan ostatniego skanu jednego LXC, a po pomyślnym skanie także dokładny plan oczekujących pakietów i token służący do potwierdzenia. Nigdy nie uruchamia skanu ani nie zmienia stanu przeglądu."
+    }
+  }
+}

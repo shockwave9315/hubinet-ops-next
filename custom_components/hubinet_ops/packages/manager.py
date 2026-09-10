@@ -83,6 +83,10 @@ def _noop_cleanup_invalidated(_node: str, _vmid: int) -> None:
     """Default cleanup-invalidation callback."""
 
 
+def _noop_review_invalidated(_node: str, _vmid: int) -> None:
+    """Default review-invalidation callback."""
+
+
 def package_plan_tuple(
     packages: Collection[PendingPackage],
 ) -> tuple[tuple[str, str, str, str], ...]:
@@ -220,6 +224,9 @@ class PackageManager:
         on_cleanup_invalidated: Callable[[str, int], None] = (
             _noop_cleanup_invalidated
         ),
+        on_review_invalidated: Callable[[str, int], None] = (
+            _noop_review_invalidated
+        ),
         on_helper_version: HelperVersionCallback = _noop_helper_version,
     ) -> None:
         """Initialize the package subsystem boundary."""
@@ -235,6 +242,7 @@ class PackageManager:
         self._on_cleanup_complete = on_cleanup_complete
         self._on_cleanup_observation = on_cleanup_observation
         self._on_cleanup_invalidated = on_cleanup_invalidated
+        self._on_review_invalidated = on_review_invalidated
         self._on_helper_version = on_helper_version
         self._records: dict[tuple[str, int], PackageScanRecord] = {}
         self._tasks: dict[tuple[str, int], asyncio.Task[None]] = {}
@@ -308,11 +316,13 @@ class PackageManager:
         if not stale:
             return
         for key in stale:
-            self._records.pop(key, None)
+            had_scan = self._records.pop(key, None) is not None
             self._update_records.pop(key, None)
             had_cleanup = self._cleanup_evidence.pop(key, None) is not None
             self._cleanup_records.pop(key, None)
-            self._viewed_tokens.pop(key, None)
+            had_viewed = self._viewed_tokens.pop(key, None) is not None
+            if had_scan or had_viewed:
+                self._dismiss_review(*key)
             if had_cleanup:
                 try:
                     self._on_cleanup_invalidated(*key)
@@ -331,6 +341,41 @@ class PackageManager:
             if cleanup_task is not None and not cleanup_task.done():
                 cleanup_task.cancel()
         self._on_state_change()
+
+    @callback
+    def async_invalidate_non_running(
+        self, running_targets: Collection[tuple[str, int]]
+    ) -> None:
+        """Discard current package evidence for known targets not running."""
+        stale = (
+            self._records.keys()
+            | self._tasks.keys()
+            | self._cleanup_evidence.keys()
+            | self._viewed_tokens.keys()
+        ) - set(running_targets)
+        if not stale:
+            return
+        changed = False
+        for key in stale:
+            had_scan = self._records.pop(key, None) is not None
+            had_viewed = self._viewed_tokens.pop(key, None) is not None
+            had_cleanup = self._cleanup_evidence.pop(key, None) is not None
+            task = self._tasks.pop(key, None)
+            if task is not None and not task.done():
+                task.cancel()
+            if had_scan or had_viewed:
+                self._dismiss_review(*key)
+            if had_cleanup:
+                try:
+                    self._on_cleanup_invalidated(*key)
+                except Exception:
+                    _LOGGER.exception(
+                        "Could not dismiss stale cleanup presentation for %s/%s",
+                        *key,
+                    )
+            changed |= had_scan or had_viewed or had_cleanup or task is not None
+        if changed:
+            self._on_state_change()
 
     @callback
     def async_start_scan(
@@ -374,6 +419,7 @@ class PackageManager:
 
         attempted_at = self._now()
         self._viewed_tokens.pop((node, vmid), None)
+        self._dismiss_review(node, vmid)
         self._invalidate_cleanup(node, vmid)
         own_record = PackageScanRecord(
             status=PackageScanStatus.RUNNING,
@@ -593,6 +639,7 @@ class PackageManager:
         reviewed_plan = package_plan_tuple(reviewed.result.packages)
         # Old package evidence is invalid from the instant Update is accepted.
         self._viewed_tokens.pop((node, vmid), None)
+        self._dismiss_review(node, vmid)
         self._invalidate_cleanup(node, vmid)
         self._set_record(node, vmid, PackageScanRecord())
         own_record = PackageUpdateRecord(
@@ -1177,6 +1224,15 @@ class PackageManager:
             )
         if removed:
             self._on_state_change()
+
+    def _dismiss_review(self, node: str, vmid: int) -> None:
+        """Dismiss a rendered review without affecting evidence invalidation."""
+        try:
+            self._on_review_invalidated(node, vmid)
+        except Exception:
+            _LOGGER.exception(
+                "Could not dismiss stale review presentation for %s/%s", node, vmid
+            )
 
     @callback
     def _publish_cleanup_observation(

@@ -10,7 +10,7 @@ from custom_components.hubinet_ops.const import (
 from homeassistant.components import persistent_notification
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import issue_registry as ir
-from homeassistant.helpers.translation import async_get_exception_message
+from homeassistant.helpers.translation import async_get_cached_translations
 
 from .models import (
     PackageScanRecord,
@@ -42,9 +42,24 @@ def escape_markdown_cell(value: object) -> str:
     return escape(text, quote=True).replace("|", "&#124;")
 
 
-def _translate(key: str, **placeholders: str) -> str:
-    """Return one already-loaded English integration exception string."""
-    return async_get_exception_message(DOMAIN, key, placeholders or None)
+def _translate(hass: HomeAssistant, key: str, **placeholders: str) -> str:
+    """Return one cached current-language string with safe English fallback."""
+    localize_key = f"component.{DOMAIN}.exceptions.{key}.message"
+    languages = (hass.config.language, "en")
+    for language in dict.fromkeys(languages):
+        message = async_get_cached_translations(
+            hass, language, "exceptions", DOMAIN
+        ).get(localize_key)
+        if message is None:
+            continue
+        message = message.rstrip(".")
+        if not placeholders:
+            return message
+        try:
+            return message.format(**placeholders)
+        except (IndexError, KeyError, ValueError):
+            continue
+    return key
 
 
 def _notification_id(kind: str, node: str, vmid: int) -> str:
@@ -63,16 +78,28 @@ def notify_review_plan(
     """Show the full exact current plan and explicit approval instruction."""
     assert record.result is not None
     rows = [
-        "| Package | Architecture | Installed | Candidate | Origin | Security |",
+        "| "
+        + " | ".join(
+            _translate(hass, key)
+            for key in (
+                "package_table_package",
+                "package_table_architecture",
+                "package_table_installed_version",
+                "package_table_candidate_version",
+                "package_table_origin",
+                "package_table_security",
+            )
+        )
+        + " |",
         "| --- | --- | --- | --- | --- | --- |",
     ]
     for package in record.result.packages:
         security = (
-            "yes"
+            _translate(hass, "package_table_yes")
             if package.security is True
-            else "no"
+            else _translate(hass, "package_table_no")
             if package.security is False
-            else "unknown"
+            else _translate(hass, "package_table_unknown")
         )
         rows.append(
             "| "
@@ -83,7 +110,9 @@ def notify_review_plan(
                     package.architecture,
                     package.installed_version,
                     package.candidate_version,
-                    package.origin if package.origin is not None else "unknown",
+                    package.origin
+                    if package.origin is not None
+                    else _translate(hass, "package_table_unknown"),
                     security,
                 )
             )
@@ -93,12 +122,13 @@ def notify_review_plan(
     persistent_notification.async_create(
         hass,
         _translate(
+            hass,
             "package_review_notification",
             node=escape_markdown_cell(node),
             vmid=str(vmid),
             plan=plan,
         ),
-        _translate("package_review_notification_title"),
+        _translate(hass, "package_review_notification_title"),
         _notification_id("package_review", node, vmid),
     )
 
@@ -116,6 +146,7 @@ def notify_retained_snapshots(
     persistent_notification.async_create(
         hass,
         _translate(
+            hass,
             "package_retained_snapshot_warning",
             node=escape_markdown_cell(node),
             vmid=str(vmid),
@@ -124,7 +155,7 @@ def notify_retained_snapshots(
             names=rendered_names,
             remaining=str(summary.total_count - len(summary.names)),
         ),
-        _translate("package_retained_snapshot_warning_title"),
+        _translate(hass, "package_retained_snapshot_warning_title"),
         _notification_id("retained_snapshots", node, vmid),
     )
 
@@ -159,25 +190,29 @@ def notify_update_complete(
         )
         if record.snapshot_uncertain and record.snapshot_name is not None:
             retained = _translate(
+                hass,
                 "package_update_uncertain_snapshot_detail",
                 snapshot=escape_markdown_cell(record.snapshot_name),
             )
         elif record.snapshot_retained and record.snapshot_name is not None:
             retained = _translate(
+                hass,
                 "package_update_retained_snapshot_detail",
                 snapshot=escape_markdown_cell(record.snapshot_name),
             )
         else:
-            retained = _translate("package_update_no_retained_snapshot_detail")
+            retained = _translate(
+                hass, "package_update_no_retained_snapshot_detail"
+            )
         placeholders = {
             **target,
-            "reason": _translate(reason_key),
+            "reason": _translate(hass, reason_key),
             "retained": retained,
         }
     persistent_notification.async_create(
         hass,
-        _translate(key, **placeholders),
-        _translate("package_update_notification_title"),
+        _translate(hass, key, **placeholders),
+        _translate(hass, "package_update_notification_title"),
         _notification_id("package_update", node, vmid),
     )
 
@@ -186,6 +221,13 @@ def dismiss_cleanup_candidates(hass: HomeAssistant, node: str, vmid: int) -> Non
     """Dismiss any exact cleanup plan which is no longer actionable."""
     persistent_notification.async_dismiss(
         hass, _notification_id("package_cleanup_candidates", node, vmid)
+    )
+
+
+def dismiss_review_plan(hass: HomeAssistant, node: str, vmid: int) -> None:
+    """Dismiss any exact review plan which is no longer actionable."""
+    persistent_notification.async_dismiss(
+        hass, _notification_id("package_review", node, vmid)
     )
 
 
@@ -212,7 +254,16 @@ def notify_cleanup_observation(
         placeholders = {"node": escape_markdown_cell(node), "vmid": str(vmid)}
     else:
         rows = [
-            "| Package | Architecture | Installed version |",
+            "| "
+            + " | ".join(
+                _translate(hass, key)
+                for key in (
+                    "package_table_package",
+                    "package_table_architecture",
+                    "package_table_installed_version",
+                )
+            )
+            + " |",
             "| --- | --- | --- |",
         ]
         rows.extend(
@@ -237,8 +288,8 @@ def notify_cleanup_observation(
         }
     persistent_notification.async_create(
         hass,
-        _translate(key, **placeholders),
-        _translate("package_cleanup_notification_title"),
+        _translate(hass, key, **placeholders),
+        _translate(hass, "package_cleanup_notification_title"),
         notification_id,
     )
 
@@ -275,25 +326,29 @@ def notify_cleanup_complete(
         )
         if record.snapshot_uncertain and record.snapshot_name is not None:
             retained = _translate(
+                hass,
                 "package_update_uncertain_snapshot_detail",
                 snapshot=escape_markdown_cell(record.snapshot_name),
             )
         elif record.snapshot_retained and record.snapshot_name is not None:
             retained = _translate(
+                hass,
                 "package_update_retained_snapshot_detail",
                 snapshot=escape_markdown_cell(record.snapshot_name),
             )
         else:
-            retained = _translate("package_update_no_retained_snapshot_detail")
+            retained = _translate(
+                hass, "package_update_no_retained_snapshot_detail"
+            )
         placeholders = {
             **target,
-            "reason": _translate(reason_key),
+            "reason": _translate(hass, reason_key),
             "retained": retained,
         }
     persistent_notification.async_create(
         hass,
-        _translate(key, **placeholders),
-        _translate("package_cleanup_result_notification_title"),
+        _translate(hass, key, **placeholders),
+        _translate(hass, "package_cleanup_result_notification_title"),
         _notification_id("package_cleanup_result", node, vmid),
     )
 

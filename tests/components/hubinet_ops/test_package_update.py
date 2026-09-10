@@ -143,6 +143,8 @@ async def test_new_scan_invalidates_viewed_token_and_stale_approval(
     await _press(hass, REVIEW)
     old_token = manager.viewed_token("pve1", 200)
     assert old_token is not None
+    review_notification_id = "hubinet_ops_package_review_pve1_200"
+    assert review_notification_id in pn._async_get_or_create_notifications(hass)  # noqa: SLF001
 
     transport.rearm(200)
 
@@ -157,6 +159,9 @@ async def test_new_scan_invalidates_viewed_token_and_stale_approval(
         await _press(hass, SCAN)
         assert manager.viewed_token("pve1", 200) is None
         assert manager.confirm_viewed_review("pve1", 200) is False
+        assert review_notification_id not in pn._async_get_or_create_notifications(  # noqa: SLF001
+            hass
+        )
         transport.release(200)
         await transport.completed(200).wait()
         await hass.async_block_till_done()
@@ -174,6 +179,8 @@ async def test_update_press_invalidates_scan_immediately_then_notifies_plan_chan
     await _setup_scanned(hass, mock_config_entry)
     await _press(hass, REVIEW)
     await _press(hass, APPROVE)
+    review_notification_id = "hubinet_ops_package_review_pve1_200"
+    assert review_notification_id in pn._async_get_or_create_notifications(hass)  # noqa: SLF001
 
     entered = asyncio.Event()
     release = asyncio.Event()
@@ -194,6 +201,9 @@ async def test_update_press_invalidates_scan_immediately_then_notifies_plan_chan
     ):
         await _press(hass, UPDATE)
         await entered.wait()
+        assert review_notification_id not in pn._async_get_or_create_notifications(  # noqa: SLF001
+            hass
+        )
         assert hass.states.get(SCAN_SENSOR).state == STATE_UNKNOWN
         assert hass.states.get(UPDATE_SENSOR).state == "running"
         for entity_id in (SCAN, REVIEW, APPROVE, UPDATE):

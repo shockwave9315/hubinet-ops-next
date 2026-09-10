@@ -186,6 +186,9 @@ async def _start_guided(hass: HomeAssistant) -> dict[str, Any]:
         "bootstrap_command"
     ]
     assert "/main/" not in result["description_placeholders"]["bootstrap_command"]
+    assert result["description_placeholders"]["reset_bootstrap_command"] == (
+        f'{result["description_placeholders"]["bootstrap_command"]} -s -- --reset'
+    )
     return result
 
 

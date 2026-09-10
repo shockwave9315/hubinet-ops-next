@@ -209,11 +209,13 @@ async def test_cleanup_entities_follow_snapshot_and_stopped_guest_policy(
     await hass.async_block_till_done()
     assert hass.states.get(UNUSED).state == STATE_UNAVAILABLE
     assert hass.states.get(AUTOREMOVE).state == STATE_UNAVAILABLE
+    # Accepted PR #11 architecture removes cleanup evidence on non-running
+    # observation instead of allowing it to reappear after restart.
     assert (
         mock_config_entry.runtime_data.package_manager.cleanup_evidence(
             "pve1", 200
         )
-        is not None
+        is None
     )
 
 

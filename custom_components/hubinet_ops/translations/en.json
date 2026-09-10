@@ -1,15 +1,15 @@
 {
   "config": {
     "abort": {
-      "already_configured": "[%key:common::config_flow::abort::already_configured_device%]",
-      "reauth_successful": "[%key:common::config_flow::abort::reauth_successful%]",
-      "reconfigure_successful": "[%key:common::config_flow::abort::reconfigure_successful%]"
+      "already_configured": "Device is already configured",
+      "reauth_successful": "Re-authentication was successful",
+      "reconfigure_successful": "Reconfiguration was successful"
     },
     "error": {
       "api_error_no_details": "An error occurred while communicating with the Proxmox VE instance.",
       "cannot_connect": "Cannot connect to Proxmox VE server",
-      "connect_timeout": "[%key:common::config_flow::error::timeout_connect%]",
-      "invalid_auth": "[%key:common::config_flow::error::invalid_auth%]",
+      "connect_timeout": "Timeout while establishing a connection",
+      "invalid_auth": "Invalid authentication",
       "enrollment_too_large": "The enrollment value is too large. Paste only the single HUBINET1 value printed by bootstrap.",
       "invalid_enrollment_base64": "The enrollment encoding is malformed. Paste the complete HUBINET1 value without changing it.",
       "invalid_enrollment_host_key": "The enrollment contains an invalid or ambiguous PVE SSH host key. Re-run bootstrap on the PVE host.",
@@ -31,9 +31,9 @@
     "step": {
       "guided": {
         "data": {
-          "host": "[%key:common::config_flow::data::host%]",
-          "port": "[%key:common::config_flow::data::port%]",
-          "verify_ssl": "[%key:common::config_flow::data::verify_ssl%]"
+          "host": "Host",
+          "port": "Port",
+          "verify_ssl": "Verify SSL certificate"
         },
         "data_description": {
           "host": "The hostname or IP address of the Proxmox VE host",
@@ -50,21 +50,21 @@
         "data_description": {
           "enrollment": "Paste the complete HUBINET1 value printed by bootstrap. It is sensitive credential material: Hubinet-Ops does not store the raw blob, but you should discard terminal and clipboard copies after enrollment."
         },
-        "description": "Run this command once as root on the Proxmox VE host:\n\n```text\n{bootstrap_command}\n```\n\nThen paste the enrollment value below. Hubinet-Ops validates the API, SSH host key, SSH authentication, helper protocol, and local node before saving.",
+        "description": "Run this command once as root on the Proxmox VE host:\n\n```text\n{bootstrap_command}\n```\n\nThen paste the enrollment value below. Hubinet-Ops validates the API, SSH host key, SSH authentication, helper protocol, and local node before saving.\n\n**No enrollment value printed?**\n\nIf Hubinet-Ops was already configured on this host, the command above keeps the existing credentials and does not print a new enrollment. To create new enrollment credentials, run:\n\n```text\n{reset_bootstrap_command}\n```",
         "title": "Enroll Hubinet-Ops"
       },
       "reauth_confirm": {
         "data": {
-          "password": "[%key:common::config_flow::data::password%]",
-          "realm": "[%key:component::hubinet_ops::config::step::user_auth::data::realm%]",
-          "token_id": "[%key:component::hubinet_ops::config::step::user_auth::data::token_id%]",
-          "token_value": "[%key:component::hubinet_ops::config::step::user_auth::data::token_value%]"
+          "password": "Password",
+          "realm": "Realm",
+          "token_id": "Token ID",
+          "token_value": "Secret"
         },
         "data_description": {
-          "password": "[%key:component::hubinet_ops::config::step::user_auth::data_description::password%]",
-          "realm": "[%key:component::hubinet_ops::config::step::user_auth::data_description::realm%]",
-          "token_id": "[%key:component::hubinet_ops::config::step::user_auth::data_description::token_id%]",
-          "token_value": "[%key:component::hubinet_ops::config::step::user_auth::data_description::token_value%]"
+          "password": "The password for the user",
+          "realm": "Specify your authentication realm",
+          "token_id": "The name given to the API token",
+          "token_value": "The secret generated for the API token"
         },
         "description": "The connection to the Proxmox VE server requires re-authentication. Please update your credentials to continue.",
         "title": "Re-authenticate Proxmox VE integration"
@@ -85,29 +85,29 @@
           "reconfigure_existing_credentials": "Existing credentials (advanced)"
         },
         "data": {
-          "auth_method": "[%key:component::hubinet_ops::config::step::existing_credentials::data::auth_method%]",
-          "host": "[%key:common::config_flow::data::host%]",
-          "port": "[%key:common::config_flow::data::port%]",
-          "token": "[%key:component::hubinet_ops::config::step::existing_credentials::data::token%]",
-          "username": "[%key:common::config_flow::data::username%]",
-          "verify_ssl": "[%key:common::config_flow::data::verify_ssl%]"
+          "auth_method": "Authentication method",
+          "host": "Host",
+          "port": "Port",
+          "token": "Use an API token",
+          "username": "Username",
+          "verify_ssl": "Verify SSL certificate"
         },
         "data_description": {
-          "auth_method": "[%key:component::hubinet_ops::config::step::existing_credentials::data_description::auth_method%]",
-          "host": "[%key:component::hubinet_ops::config::step::existing_credentials::data_description::host%]",
-          "port": "[%key:component::hubinet_ops::config::step::existing_credentials::data_description::port%]",
-          "token": "[%key:component::hubinet_ops::config::step::existing_credentials::data_description::token%]",
-          "username": "[%key:component::hubinet_ops::config::step::existing_credentials::data_description::username%]",
-          "verify_ssl": "[%key:component::hubinet_ops::config::step::existing_credentials::data_description::verify_ssl%]"
+          "auth_method": "Select authentication provider for your Proxmox VE server",
+          "host": "The hostname or IP address of your Proxmox VE server",
+          "port": "The port of your Proxmox VE server (default: 8006)",
+          "token": "Enable to use an API token or leave disabled to authenticate with a password",
+          "username": "The username for the Proxmox VE server",
+          "verify_ssl": "Whether to verify SSL certificates. Disable only if you have a self-signed certificate"
         },
         "description": "Choose guided re-enrollment to replace Hubinet-managed credentials, or use the advanced path for existing Proxmox credentials.",
         "title": "Reconfigure Hubinet-Ops"
       },
       "reconfigure_guided": {
         "data": {
-          "host": "[%key:common::config_flow::data::host%]",
-          "port": "[%key:common::config_flow::data::port%]",
-          "verify_ssl": "[%key:common::config_flow::data::verify_ssl%]"
+          "host": "Host",
+          "port": "Port",
+          "verify_ssl": "Verify SSL certificate"
         },
         "data_description": {
           "host": "The hostname or IP address of the Proxmox VE host",
@@ -129,48 +129,48 @@
       },
       "reconfigure_existing_credentials": {
         "data": {
-          "auth_method": "[%key:component::hubinet_ops::config::step::existing_credentials::data::auth_method%]",
-          "host": "[%key:common::config_flow::data::host%]",
-          "port": "[%key:common::config_flow::data::port%]",
-          "token": "[%key:component::hubinet_ops::config::step::existing_credentials::data::token%]",
-          "username": "[%key:common::config_flow::data::username%]",
-          "verify_ssl": "[%key:common::config_flow::data::verify_ssl%]"
+          "auth_method": "Authentication method",
+          "host": "Host",
+          "port": "Port",
+          "token": "Use an API token",
+          "username": "Username",
+          "verify_ssl": "Verify SSL certificate"
         },
         "data_description": {
-          "auth_method": "[%key:component::hubinet_ops::config::step::existing_credentials::data_description::auth_method%]",
-          "host": "[%key:component::hubinet_ops::config::step::existing_credentials::data_description::host%]",
-          "port": "[%key:component::hubinet_ops::config::step::existing_credentials::data_description::port%]",
-          "token": "[%key:component::hubinet_ops::config::step::existing_credentials::data_description::token%]",
-          "username": "[%key:component::hubinet_ops::config::step::existing_credentials::data_description::username%]",
-          "verify_ssl": "[%key:component::hubinet_ops::config::step::existing_credentials::data_description::verify_ssl%]"
+          "auth_method": "Select authentication provider for your Proxmox VE server",
+          "host": "The hostname or IP address of your Proxmox VE server",
+          "port": "The port of your Proxmox VE server (default: 8006)",
+          "token": "Enable to use an API token or leave disabled to authenticate with a password",
+          "username": "The username for the Proxmox VE server",
+          "verify_ssl": "Whether to verify SSL certificates. Disable only if you have a self-signed certificate"
         },
         "description": "Use existing Proxmox credentials. Changing the host clears package SSH trust until guided re-enrollment.",
         "title": "Existing credentials (advanced)"
       },
       "reconfigure_auth": {
         "data": {
-          "password": "[%key:common::config_flow::data::password%]",
-          "realm": "[%key:component::hubinet_ops::config::step::user_auth::data::realm%]",
-          "token_id": "[%key:component::hubinet_ops::config::step::user_auth::data::token_id%]",
-          "token_value": "[%key:component::hubinet_ops::config::step::user_auth::data::token_value%]"
+          "password": "Password",
+          "realm": "Realm",
+          "token_id": "Token ID",
+          "token_value": "Secret"
         },
         "data_description": {
-          "password": "[%key:component::hubinet_ops::config::step::user_auth::data_description::password%]",
-          "realm": "[%key:component::hubinet_ops::config::step::user_auth::data_description::realm%]",
-          "token_id": "[%key:component::hubinet_ops::config::step::user_auth::data_description::token_id%]",
-          "token_value": "[%key:component::hubinet_ops::config::step::user_auth::data_description::token_value%]"
+          "password": "The password for the user",
+          "realm": "Specify your authentication realm",
+          "token_id": "The name given to the API token",
+          "token_value": "The secret generated for the API token"
         },
-        "description": "[%key:component::hubinet_ops::config::step::user_auth::description%]",
-        "title": "[%key:component::hubinet_ops::config::step::user_auth::title%]"
+        "description": "Enter your credentials to authenticate with Proxmox VE.",
+        "title": "Proxmox VE credentials"
       },
       "existing_credentials": {
         "data": {
           "auth_method": "Authentication method",
-          "host": "[%key:common::config_flow::data::host%]",
-          "port": "[%key:common::config_flow::data::port%]",
+          "host": "Host",
+          "port": "Port",
           "token": "Use an API token",
-          "username": "[%key:common::config_flow::data::username%]",
-          "verify_ssl": "[%key:common::config_flow::data::verify_ssl%]"
+          "username": "Username",
+          "verify_ssl": "Verify SSL certificate"
         },
         "data_description": {
           "auth_method": "Select authentication provider for your Proxmox VE server",
@@ -193,7 +193,7 @@
       },
       "user_auth": {
         "data": {
-          "password": "[%key:common::config_flow::data::password%]",
+          "password": "Password",
           "realm": "Realm",
           "token_id": "Token ID",
           "token_value": "Secret"
@@ -264,7 +264,7 @@
       "reset": {
         "name": "Reset"
       },
-      "resume_all": {
+      "resume": {
         "name": "Resume"
       },
       "shutdown": {
@@ -462,6 +462,33 @@
     },
     "package_autoremove_failed": {
       "message": "Package cleanup could not start: {reason}"
+    },
+    "package_table_package": {
+      "message": "Package"
+    },
+    "package_table_architecture": {
+      "message": "Architecture"
+    },
+    "package_table_installed_version": {
+      "message": "Installed version"
+    },
+    "package_table_candidate_version": {
+      "message": "Candidate version"
+    },
+    "package_table_origin": {
+      "message": "Origin"
+    },
+    "package_table_security": {
+      "message": "Security"
+    },
+    "package_table_yes": {
+      "message": "yes"
+    },
+    "package_table_no": {
+      "message": "no"
+    },
+    "package_table_unknown": {
+      "message": "unknown"
     },
     "package_review_notification_title": {
       "message": "Review package update"
