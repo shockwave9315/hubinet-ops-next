@@ -2,6 +2,7 @@
 
 import asyncio
 from copy import deepcopy
+from dataclasses import replace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -19,6 +20,7 @@ from custom_components.hubinet_ops.const import (
 from custom_components.hubinet_ops.packages.manager import PackageManager
 from custom_components.hubinet_ops.packages.models import (
     PackageMutationResult,
+    PackageScanStatus,
     PackageUpdateError,
     PackageUpdateOutcome,
     PackageUpdateRecord,
@@ -40,6 +42,7 @@ from custom_components.hubinet_ops.packages.presentation import (
 )
 from custom_components.hubinet_ops.packages.snapshots import RetainedSnapshotSummary
 from custom_components.hubinet_ops.packages.transport import PackageHelperProbe
+from custom_components.hubinet_ops.sensor import PackageScanSensor
 from homeassistant.components import persistent_notification as pn
 from homeassistant.components.button import SERVICE_PRESS
 from homeassistant.config_entries import ConfigEntryState
@@ -98,6 +101,41 @@ async def _establish_actionable_package_presentations(
         await hass.async_block_till_done()
     await _press(hass, REVIEW)
     return mock_config_entry.runtime_data.package_manager
+
+
+async def _finish_package_task_during_real_platform_unload(
+    hass: HomeAssistant,
+    mock_config_entry: MockConfigEntry,
+    task: asyncio.Task[None],
+    release: asyncio.Event,
+    terminal_notification_id: str | None = None,
+) -> None:
+    """Finish package work from our entity hook while real platform unload waits."""
+    original_remove = PackageScanSensor.async_will_remove_from_hass
+    completed_in_remove = asyncio.Event()
+
+    async def finish_from_remove(entity: PackageScanSensor) -> None:
+        if entity.device_id == 200 and not completed_in_remove.is_set():
+            release.set()
+            await task
+            assert task.done()
+            notifications = pn._async_get_or_create_notifications(hass)  # noqa: SLF001
+            assert (
+                "hubinet_ops_package_cleanup_candidates_pve1_200" in notifications
+            )
+            if terminal_notification_id is not None:
+                assert terminal_notification_id in notifications
+            completed_in_remove.set()
+        await original_remove(entity)
+
+    with patch.object(
+        PackageScanSensor,
+        "async_will_remove_from_hass",
+        new=finish_from_remove,
+    ):
+        assert await hass.config_entries.async_unload(mock_config_entry.entry_id)
+
+    assert completed_in_remove.is_set()
 
 
 async def test_scan_presents_exact_cleanup_plan_before_enabling_autoremove(
@@ -383,6 +421,217 @@ async def test_successful_entry_lifecycle_dismisses_only_actionable_plans(
         assert mock_config_entry.state is ConfigEntryState.NOT_LOADED
     else:
         assert hass.config_entries.async_get_entry(mock_config_entry.entry_id) is None
+
+
+@pytest.mark.parametrize("operation", ["scan", "update", "autoremove"])
+async def test_inflight_package_work_cannot_publish_plan_during_real_unload(
+    hass: HomeAssistant,
+    mock_proxmox_client: MagicMock,
+    mock_config_entry: MockConfigEntry,
+    package_transport_material: None,
+    operation: str,
+) -> None:
+    """Every package task remains projected through its unload publication window."""
+    key = ("pve1", 200)
+    release = asyncio.Event()
+    terminal_notification_id: str | None = None
+
+    if operation == "scan":
+        entered = asyncio.Event()
+
+        async def gated_scan(_self, _node, _vmid):
+            entered.set()
+            await release.wait()
+            return RESULT
+
+        with (
+            patch(
+                "custom_components.hubinet_ops.packages.transport."
+                "AsyncSSHPackageTransport.async_scan",
+                new=gated_scan,
+            ),
+            patch(
+                "custom_components.hubinet_ops.packages.transport."
+                "AsyncSSHPackageTransport.async_plan_autoremove",
+                new=AsyncMock(
+                    return_value=ParsedAutoremoveSimulation(CANDIDATES, 0)
+                ),
+            ),
+        ):
+            await setup_integration(hass, mock_config_entry)
+            await _press(hass, SCAN)
+            await entered.wait()
+            manager = mock_config_entry.runtime_data.package_manager
+            task = manager._tasks[key]  # noqa: SLF001
+            assert manager.record(*key).status is PackageScanStatus.RUNNING
+            assert key in manager.actionable_presentation_targets()
+            await _finish_package_task_during_real_platform_unload(
+                hass, mock_config_entry, task, release
+            )
+    elif operation == "update":
+        manager = await _establish_actionable_package_presentations(
+            hass, mock_config_entry
+        )
+        await _press(hass, APPROVE)
+        entered = asyncio.Event()
+
+        async def gated_update_plan(_self, _node, _vmid):
+            entered.set()
+            await release.wait()
+            return ParsedAptSimulation(RESULT.packages, RESULT.not_upgraded_count)
+
+        mutation = PackageMutationResult(
+            before={(package.name, package.architecture): "1.0" for package in RESULT.packages},
+            after={(package.name, package.architecture): "1.1" for package in RESULT.packages},
+        )
+        with (
+            patch(
+                "custom_components.hubinet_ops.packages.transport."
+                "AsyncSSHPackageTransport.async_plan",
+                new=gated_update_plan,
+            ),
+            patch(
+                "custom_components.hubinet_ops.packages.transport."
+                "AsyncSSHPackageTransport.async_update",
+                new=AsyncMock(return_value=mutation),
+            ),
+            patch(
+                "custom_components.hubinet_ops.packages.transport."
+                "AsyncSSHPackageTransport.async_ping",
+                new=AsyncMock(return_value=True),
+            ),
+            patch(
+                "custom_components.hubinet_ops.packages.transport."
+                "AsyncSSHPackageTransport.async_plan_autoremove",
+                new=AsyncMock(
+                    return_value=ParsedAutoremoveSimulation(CANDIDATES, 0)
+                ),
+            ),
+            patch(
+                "custom_components.hubinet_ops.packages.manager.async_list_snapshots",
+                new=AsyncMock(return_value=[]),
+            ),
+            patch(
+                "custom_components.hubinet_ops.packages.manager.async_create_snapshot",
+                new=AsyncMock(),
+            ),
+            patch(
+                "custom_components.hubinet_ops.packages.manager.async_delete_snapshot",
+                new=AsyncMock(),
+            ),
+            patch(
+                "custom_components.hubinet_ops.packages.manager.generate_snapshot_name",
+                return_value="hubinet-preupd-20260910120000-ab12cd",
+            ),
+        ):
+            await _press(hass, UPDATE)
+            await entered.wait()
+            task = manager._update_tasks[key]  # noqa: SLF001
+            assert manager.record(*key).result is None
+            assert manager.cleanup_evidence(*key) is None
+            assert manager.update_record(*key).status is PackageUpdateStatus.RUNNING
+            assert key in manager.actionable_presentation_targets()
+            await _finish_package_task_during_real_platform_unload(
+                hass,
+                mock_config_entry,
+                task,
+                release,
+                "hubinet_ops_package_update_pve1_200",
+            )
+        terminal_notification_id = "hubinet_ops_package_update_pve1_200"
+    else:
+        empty_scan = replace(RESULT, packages=())
+        with (
+            patch(
+                "custom_components.hubinet_ops.packages.transport."
+                "AsyncSSHPackageTransport.async_scan",
+                new=AsyncMock(return_value=empty_scan),
+            ),
+            patch(
+                "custom_components.hubinet_ops.packages.transport."
+                "AsyncSSHPackageTransport.async_plan_autoremove",
+                new=AsyncMock(
+                    return_value=ParsedAutoremoveSimulation(CANDIDATES, 0)
+                ),
+            ),
+        ):
+            await setup_integration(hass, mock_config_entry)
+            await _press(hass, SCAN)
+            await hass.async_block_till_done()
+        manager = mock_config_entry.runtime_data.package_manager
+        assert manager.record(*key).result is empty_scan
+        assert manager.cleanup_evidence(*key) is not None
+        entered = asyncio.Event()
+        plan_calls = 0
+
+        async def gated_cleanup_plan(_self, _node, _vmid):
+            nonlocal plan_calls
+            plan_calls += 1
+            if plan_calls == 1:
+                entered.set()
+                await release.wait()
+            return ParsedAutoremoveSimulation(CANDIDATES, 0)
+
+        mutation = PackageMutationResult(
+            before={
+                (package.name, package.architecture): package.installed_version
+                for package in CANDIDATES
+            },
+            after={},
+        )
+        with (
+            patch(
+                "custom_components.hubinet_ops.packages.transport."
+                "AsyncSSHPackageTransport.async_plan_autoremove",
+                new=gated_cleanup_plan,
+            ),
+            patch(
+                "custom_components.hubinet_ops.packages.transport."
+                "AsyncSSHPackageTransport.async_autoremove",
+                new=AsyncMock(return_value=mutation),
+            ),
+            patch(
+                "custom_components.hubinet_ops.packages.transport."
+                "AsyncSSHPackageTransport.async_ping",
+                new=AsyncMock(return_value=True),
+            ),
+            patch(
+                "custom_components.hubinet_ops.packages.manager.async_list_snapshots",
+                new=AsyncMock(return_value=[]),
+            ),
+            patch(
+                "custom_components.hubinet_ops.packages.manager.async_create_snapshot",
+                new=AsyncMock(),
+            ),
+            patch(
+                "custom_components.hubinet_ops.packages.manager.async_delete_snapshot",
+                new=AsyncMock(),
+            ),
+            patch(
+                "custom_components.hubinet_ops.packages.manager.generate_snapshot_name",
+                return_value="hubinet-preclean-20260910120000-ab12cd",
+            ),
+        ):
+            await _press(hass, AUTOREMOVE)
+            await entered.wait()
+            task = manager._cleanup_tasks[key]  # noqa: SLF001
+            assert manager.cleanup_evidence(*key) is None
+            assert manager.cleanup_record(*key).status is PackageUpdateStatus.RUNNING
+            assert key in manager.actionable_presentation_targets()
+            await _finish_package_task_during_real_platform_unload(
+                hass,
+                mock_config_entry,
+                task,
+                release,
+                "hubinet_ops_package_cleanup_result_pve1_200",
+            )
+        terminal_notification_id = "hubinet_ops_package_cleanup_result_pve1_200"
+
+    notifications = pn._async_get_or_create_notifications(hass)  # noqa: SLF001
+    assert "hubinet_ops_package_review_pve1_200" not in notifications
+    assert "hubinet_ops_package_cleanup_candidates_pve1_200" not in notifications
+    if terminal_notification_id is not None:
+        assert terminal_notification_id in notifications
 
 
 async def test_failed_unload_preserves_actionable_package_presentations(

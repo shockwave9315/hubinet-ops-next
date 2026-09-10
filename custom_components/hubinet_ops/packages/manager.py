@@ -295,8 +295,14 @@ class PackageManager:
 
     @callback
     def actionable_presentation_targets(self) -> frozenset[tuple[str, int]]:
-        """Return targets whose current package evidence may have actionable UI."""
-        targets = set(self._viewed_tokens) | set(self._cleanup_evidence)
+        """Return targets with actionable UI or work that may publish it."""
+        targets = (
+            set(self._viewed_tokens)
+            | set(self._cleanup_evidence)
+            | set(self._tasks)
+            | set(self._update_tasks)
+            | set(self._cleanup_tasks)
+        )
         targets.update(
             key
             for key, record in self._records.items()
