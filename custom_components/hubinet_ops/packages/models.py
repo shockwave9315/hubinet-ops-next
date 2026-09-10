@@ -93,6 +93,23 @@ class PendingPackage:
 
 
 @dataclass(frozen=True, slots=True)
+class RemovablePackage:
+    """One exact installed package APT considers safe to autoremove."""
+
+    name: str
+    architecture: str
+    installed_version: str
+
+
+@dataclass(frozen=True, slots=True)
+class CleanupEvidence:
+    """One successful ephemeral observation of the exact cleanup plan."""
+
+    candidates: tuple[RemovablePackage, ...]
+    observed_at: datetime
+
+
+@dataclass(frozen=True, slots=True)
 class PackageScanResult:
     """Complete package scan result for one LXC guest."""
 
@@ -113,7 +130,7 @@ class PackageMutationResult:
 
 @dataclass(frozen=True, slots=True)
 class PackageUpdateRecord:
-    """Small ephemeral outcome of the latest package update attempt."""
+    """Small ephemeral outcome of the latest bounded package mutation attempt."""
 
     status: PackageUpdateStatus = PackageUpdateStatus.NEVER
     last_attempt: datetime | None = None

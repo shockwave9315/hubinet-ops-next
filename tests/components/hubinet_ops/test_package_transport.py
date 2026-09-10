@@ -541,6 +541,32 @@ async def test_incompatible_helper_protocol_fails_clearly(
     assert caught.value.failure is PackageScanFailure.PROTOCOL_MISMATCH
 
 
+async def test_foreign_protocol_cannot_poison_observed_helper_version(
+    hass: HomeAssistant, tmp_path: Path
+) -> None:
+    """Helper metadata from a foreign protocol envelope is not retained."""
+    transport, *_ = await _transport(
+        hass, tmp_path, _response(protocol_version=2, helper_version=5)
+    )
+    with pytest.raises(PackageScanError) as caught:
+        await transport.async_scan("pve1", 200)
+    assert caught.value.failure is PackageScanFailure.PROTOCOL_MISMATCH
+    assert transport.observed_helper_version is None
+
+
+async def test_bool_protocol_cannot_poison_observed_helper_version(
+    hass: HomeAssistant, tmp_path: Path
+) -> None:
+    """Boolean protocol metadata is rejected despite True comparing equal to 1."""
+    response = _response(helper_version=5)
+    response["protocol_version"] = True
+    transport, *_ = await _transport(hass, tmp_path, response)
+    with pytest.raises(PackageScanError) as caught:
+        await transport.async_scan("pve1", 200)
+    assert caught.value.failure is PackageScanFailure.PROTOCOL_MISMATCH
+    assert transport.observed_helper_version is None
+
+
 async def test_scan_accepts_newer_informational_helper_version(
     hass: HomeAssistant, tmp_path: Path
 ) -> None:
@@ -958,6 +984,99 @@ async def test_update_transport_parses_sane_before_and_after_inventory(
     assert json.loads(connection.process_kwargs["input"])["operation"] == (
         "update_packages"
     )
+
+
+async def test_cleanup_plan_and_mutation_transport_are_typed(
+    hass: HomeAssistant, tmp_path: Path
+) -> None:
+    """Cleanup uses separate typed evidence and never caller-provided argv."""
+    plan, _connector, plan_connection, *_ = await _transport(
+        hass,
+        tmp_path,
+        {
+            **_operation_response(
+                "plan_autoremove",
+                {
+                    "native_architecture": "amd64\n",
+                    "installed_inventory": "libslirp0\tamd64\t4.7\tinstalled\n",
+                    "autoremove_simulation": (
+                        "Remv libslirp0 [4.7]\n"
+                        "0 upgraded, 0 newly installed, 1 to remove and 2 not upgraded.\n"
+                    ),
+                },
+            ),
+            "helper_version": 4,
+        },
+    )
+    parsed = await plan.async_plan_autoremove("pve1", 200)
+    assert [
+        (item.name, item.architecture, item.installed_version)
+        for item in parsed.packages
+    ] == [("libslirp0", "amd64", "4.7")]
+    assert json.loads(plan_connection.process_kwargs["input"]) == {
+        "operation": "plan_autoremove",
+        "protocol_version": 1,
+        "target": {"node": "pve1", "vmid": 200},
+    }
+
+    mutation, _connector, mutation_connection, *_ = await _transport(
+        hass,
+        tmp_path,
+        {
+            **_operation_response(
+                "autoremove_packages",
+                {
+                    "before_inventory": "libslirp0\tamd64\t4.7\tinstalled\n",
+                    "after_inventory": "",
+                },
+            ),
+            "helper_version": 4,
+        },
+    )
+    result = await mutation.async_autoremove("pve1", 200)
+    assert result.before == {("libslirp0", "amd64"): "4.7"}
+    assert result.after == {}
+    assert json.loads(mutation_connection.process_kwargs["input"])["operation"] == (
+        "autoremove_packages"
+    )
+
+
+async def test_old_helper_version_is_observed_before_new_operation_mismatch(
+    hass: HomeAssistant, tmp_path: Path
+) -> None:
+    """A v3 unknown-operation reply still truthfully reports installed v3."""
+    response = {
+        "protocol_version": 1,
+        "helper_version": 3,
+        "operation": "scan_packages",
+        "target": {},
+        "ok": False,
+        "error": {"classification": "execution_failed", "message": "unknown"},
+    }
+    transport, *_ = await _transport(hass, tmp_path, response, returncode=1)
+    with pytest.raises(PackageUpdateError) as caught:
+        await transport.async_plan_autoremove("pve1", 200)
+    assert caught.value.outcome is PackageUpdateOutcome.HELPER_OUTDATED
+    assert transport.observed_helper_version == 3
+
+
+@pytest.mark.parametrize("classification", ["timeout", "simulation_failed"])
+async def test_read_only_cleanup_plan_failures_never_claim_mutation(
+    hass: HomeAssistant, tmp_path: Path, classification: str
+) -> None:
+    """A matching plan_autoremove failure remains a read-only PLAN_FAILED."""
+    response = {
+        "protocol_version": 1,
+        "helper_version": 4,
+        "operation": "plan_autoremove",
+        "target": {"node": "pve1", "vmid": 200},
+        "ok": False,
+        "error": {"classification": classification, "message": "failed"},
+    }
+    transport, *_ = await _transport(hass, tmp_path, response, returncode=1)
+    with pytest.raises(PackageUpdateError) as caught:
+        await transport.async_plan_autoremove("pve1", 200)
+    assert caught.value.outcome is PackageUpdateOutcome.PLAN_FAILED
 
 
 @pytest.mark.parametrize(

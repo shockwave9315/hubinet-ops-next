@@ -1,6 +1,6 @@
 # Status
 
-Status date: 2026-09-09
+Status date: 2026-09-10
 
 ## Current baseline
 
@@ -65,6 +65,21 @@ Status date: 2026-09-09
   Plain bootstrap reconciles deterministic resources without credential
   rotation; `--reset` and guided re-enrollment atomically recover existing
   entries; package trust failures degrade to native-only operation.
+
+## Helper repair and package cleanup
+
+- Architecture: **ACCEPTED BY MAINTAINER on 2026-09-10**, before runtime
+  implementation; see the durable boundary in [ARCHITECTURE.md](ARCHITECTURE.md).
+- Helper-upgrade UX: **IMPLEMENTED**. A non-blocking one-shot observation
+  reports helper v3 as stale through Repairs with the plain release-pinned
+  bootstrap command, while native PVE and supported helper operations continue.
+- Explicit package cleanup: **IMPLEMENTED**. Scan and successful Update may
+  observe exact unused-package evidence; Autoremove requires successful exact
+  presentation, explicit button action, a fresh equal plan, and the existing
+  native snapshot/dpkg/liveness safety path.
+- Release target: integration `2026.9.1.5`, helper v4, protocol v1.
+- Post-audit bounded correction pass: **COMPLETE**.
+- Validation: **473 tests and 195 snapshots passed**; repository Ruff passed.
 
 ## Next
 

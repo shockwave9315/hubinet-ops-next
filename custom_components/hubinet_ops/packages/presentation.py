@@ -2,9 +2,14 @@
 
 from html import escape
 
-from custom_components.hubinet_ops.const import DOMAIN
+from custom_components.hubinet_ops.const import (
+    BOOTSTRAP_COMMAND,
+    DOMAIN,
+    EXPECTED_HELPER_VERSION,
+)
 from homeassistant.components import persistent_notification
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers import issue_registry as ir
 from homeassistant.helpers.translation import async_get_exception_message
 
 from .models import (
@@ -12,6 +17,7 @@ from .models import (
     PackageUpdateOutcome,
     PackageUpdateRecord,
     PackageUpdateStatus,
+    RemovablePackage,
 )
 from .snapshots import RetainedSnapshotSummary
 
@@ -44,6 +50,11 @@ def _translate(key: str, **placeholders: str) -> str:
 def _notification_id(kind: str, node: str, vmid: int) -> str:
     """Return a stable per-target notification ID."""
     return f"hubinet_ops_{kind}_{node}_{vmid}"
+
+
+def _helper_issue_id(entry_id: str) -> str:
+    """Return the stable stale-helper Repairs issue ID for one config entry."""
+    return f"helper_outdated_{entry_id}"
 
 
 def notify_review_plan(
@@ -169,3 +180,148 @@ def notify_update_complete(
         _translate("package_update_notification_title"),
         _notification_id("package_update", node, vmid),
     )
+
+
+def dismiss_cleanup_candidates(hass: HomeAssistant, node: str, vmid: int) -> None:
+    """Dismiss any exact cleanup plan which is no longer actionable."""
+    persistent_notification.async_dismiss(
+        hass, _notification_id("package_cleanup_candidates", node, vmid)
+    )
+
+
+def notify_cleanup_observation(
+    hass: HomeAssistant,
+    node: str,
+    vmid: int,
+    candidates: tuple[RemovablePackage, ...] | None,
+    source: str,
+) -> None:
+    """Present exact cleanup state independently from package-update truth."""
+    notification_id = _notification_id("package_cleanup_candidates", node, vmid)
+    if candidates is None:
+        if source == "scan":
+            persistent_notification.async_dismiss(hass, notification_id)
+            return
+        key = "package_cleanup_unknown_notification"
+        placeholders = {"node": escape_markdown_cell(node), "vmid": str(vmid)}
+    elif not candidates:
+        if source == "scan":
+            persistent_notification.async_dismiss(hass, notification_id)
+            return
+        key = "package_cleanup_empty_notification"
+        placeholders = {"node": escape_markdown_cell(node), "vmid": str(vmid)}
+    else:
+        rows = [
+            "| Package | Architecture | Installed version |",
+            "| --- | --- | --- |",
+        ]
+        rows.extend(
+            "| "
+            + " | ".join(
+                escape_markdown_cell(value)
+                for value in (
+                    package.name,
+                    package.architecture,
+                    package.installed_version,
+                )
+            )
+            + " |"
+            for package in candidates
+        )
+        key = "package_cleanup_candidates_notification"
+        placeholders = {
+            "node": escape_markdown_cell(node),
+            "vmid": str(vmid),
+            "count": str(len(candidates)),
+            "plan": "\n".join(rows),
+        }
+    persistent_notification.async_create(
+        hass,
+        _translate(key, **placeholders),
+        _translate("package_cleanup_notification_title"),
+        notification_id,
+    )
+
+
+def notify_cleanup_complete(
+    hass: HomeAssistant, node: str, vmid: int, record: PackageUpdateRecord
+) -> None:
+    """Report the bounded mutation outcome separately from cleanup observation."""
+    target = {"node": escape_markdown_cell(node), "vmid": str(vmid)}
+    if record.status is PackageUpdateStatus.SUCCESS:
+        if record.snapshot_cleanup_failed and record.snapshot_name is not None:
+            key = "package_cleanup_snapshot_failed_notification"
+            placeholders = {
+                **target,
+                "changed": str(record.changed_package_count or 0),
+                "snapshot": escape_markdown_cell(record.snapshot_name),
+            }
+        else:
+            key = "package_cleanup_success_notification"
+            placeholders = {
+                **target,
+                "changed": str(record.changed_package_count or 0),
+            }
+    elif record.outcome is PackageUpdateOutcome.PLAN_CHANGED:
+        key = "package_cleanup_plan_changed_notification"
+        placeholders = target
+    elif record.outcome is PackageUpdateOutcome.HELPER_OUTDATED:
+        key = "package_cleanup_helper_outdated_notification"
+        placeholders = target
+    else:
+        key = "package_cleanup_failed_notification"
+        reason_key = _REASON_KEYS.get(
+            record.outcome, "package_update_reason_mutation_uncertain"
+        )
+        if record.snapshot_uncertain and record.snapshot_name is not None:
+            retained = _translate(
+                "package_update_uncertain_snapshot_detail",
+                snapshot=escape_markdown_cell(record.snapshot_name),
+            )
+        elif record.snapshot_retained and record.snapshot_name is not None:
+            retained = _translate(
+                "package_update_retained_snapshot_detail",
+                snapshot=escape_markdown_cell(record.snapshot_name),
+            )
+        else:
+            retained = _translate("package_update_no_retained_snapshot_detail")
+        placeholders = {
+            **target,
+            "reason": _translate(reason_key),
+            "retained": retained,
+        }
+    persistent_notification.async_create(
+        hass,
+        _translate(key, **placeholders),
+        _translate("package_cleanup_result_notification_title"),
+        _notification_id("package_cleanup_result", node, vmid),
+    )
+
+
+def update_helper_issue(
+    hass: HomeAssistant, entry_id: str, installed_version: int
+) -> None:
+    """Create or clear the one operator-facing stale-helper Repairs issue."""
+    issue_id = _helper_issue_id(entry_id)
+    if installed_version >= EXPECTED_HELPER_VERSION:
+        ir.async_delete_issue(hass, DOMAIN, issue_id)
+        return
+    ir.async_create_issue(
+        hass,
+        DOMAIN,
+        issue_id,
+        is_fixable=False,
+        issue_domain=DOMAIN,
+        severity=ir.IssueSeverity.WARNING,
+        translation_key="helper_outdated",
+        translation_placeholders={
+            "installed": str(installed_version),
+            "required": str(EXPECTED_HELPER_VERSION),
+            "bootstrap_command": BOOTSTRAP_COMMAND,
+        },
+    )
+
+
+def clear_helper_issue(hass: HomeAssistant, entry_id: str) -> None:
+    """Clear the stale-helper Repairs issue for one unloaded config entry."""
+    ir.async_delete_issue(hass, DOMAIN, _helper_issue_id(entry_id))

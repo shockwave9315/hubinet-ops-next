@@ -40,7 +40,14 @@ from .const import (
     NODE_ONLINE,
 )
 from .packages.manager import PackageManager
-from .packages.presentation import notify_retained_snapshots, notify_update_complete
+from .packages.presentation import (
+    dismiss_cleanup_candidates,
+    notify_cleanup_complete,
+    notify_cleanup_observation,
+    notify_retained_snapshots,
+    notify_update_complete,
+    update_helper_issue,
+)
 from .packages.transport import AsyncSSHPackageTransport
 
 type ProxmoxConfigEntry = ConfigEntry[ProxmoxCoordinator]
@@ -142,6 +149,20 @@ class ProxmoxCoordinator(DataUpdateCoordinator[dict[str, ProxmoxNodeData]]):
             ),
             on_update_complete=lambda node, vmid, record: notify_update_complete(
                 hass, node, vmid, record
+            ),
+            on_cleanup_complete=lambda node, vmid, record: notify_cleanup_complete(
+                hass, node, vmid, record
+            ),
+            on_cleanup_observation=lambda node, vmid, candidates, source: (
+                notify_cleanup_observation(
+                    hass, node, vmid, candidates, source
+                )
+            ),
+            on_cleanup_invalidated=lambda node, vmid: dismiss_cleanup_candidates(
+                hass, node, vmid
+            ),
+            on_helper_version=lambda version: update_helper_issue(
+                hass, config_entry.entry_id, version
             ),
         )
         self.package_node: str | None = config_entry.data.get(CONF_PACKAGE_NODE)

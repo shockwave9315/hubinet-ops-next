@@ -9,6 +9,7 @@ from custom_components.hubinet_ops.packages.models import (
 from custom_components.hubinet_ops.packages.parser import (
     PackageScanParseError,
     parse_apt_simulation,
+    parse_autoremove_simulation,
     parse_installed_inventory,
     parse_native_architecture,
     parse_os_release,
@@ -23,6 +24,11 @@ Conf apt (2.6.2 Debian:12/oldstable [amd64])
 2 upgraded, 0 newly installed, 0 to remove and 41 not upgraded.
 """
 TWO_INVENTORY = "openssl\tamd64\t3.0.11-1\tinstalled\napt\tamd64\t2.6.1\tinstalled\n"
+AUTOREMOVE_INVENTORY = (
+    "native\tamd64\t1.0\tinstalled\n"
+    "foreign\ti386\t2.0\tinstalled\n"
+    "common\tall\t3.0\tinstalled\n"
+)
 
 
 @pytest.mark.parametrize(
@@ -221,3 +227,107 @@ def test_native_architecture_requires_one_real_dpkg_architecture(text: str) -> N
     """Native architecture parsing rejects ambiguous and malformed evidence."""
     with pytest.raises(PackageScanParseError):
         parse_native_architecture(text)
+
+
+@pytest.mark.parametrize(
+    ("simulation", "expected"),
+    [
+        (
+            "0 upgraded, 0 newly installed, 0 to remove and 19 not upgraded.\n",
+            [],
+        ),
+        (
+            "Remv native [1.0]\n"
+            "0 upgraded, 0 newly installed, 1 to remove and 0 not upgraded.\n",
+            [("native", "amd64", "1.0")],
+        ),
+        (
+            "Remv foreign:i386 [2.0]\n"
+            "Remv common [3.0]\n"
+            "0 upgraded, 0 newly installed, 2 to remove and 7 not upgraded.\n",
+            [("common", "all", "3.0"), ("foreign", "i386", "2.0")],
+        ),
+    ],
+)
+def test_parse_exact_autoremove_actions(
+    simulation: str, expected: list[tuple[str, str, str]]
+) -> None:
+    """Only exact Remv identities plus the exact summary authorize cleanup."""
+    parsed = parse_autoremove_simulation(
+        simulation,
+        native_architecture="amd64\n",
+        installed_inventory=AUTOREMOVE_INVENTORY,
+    )
+    assert [
+        (package.name, package.architecture, package.installed_version)
+        for package in parsed.packages
+    ] == expected
+
+
+@pytest.mark.parametrize(
+    "simulation",
+    [
+        "Purg native [1.0]\n"
+        "0 upgraded, 0 newly installed, 1 to remove and 0 not upgraded.\n",
+        "Inst native [1.0] (2.0 [amd64])\n"
+        "0 upgraded, 0 newly installed, 0 to remove and 0 not upgraded.\n",
+        "Conf native (1.0 [amd64])\n"
+        "0 upgraded, 0 newly installed, 0 to remove and 0 not upgraded.\n",
+        "Remv native\n"
+        "0 upgraded, 0 newly installed, 1 to remove and 0 not upgraded.\n",
+        "Remv missing [1.0]\n"
+        "0 upgraded, 0 newly installed, 1 to remove and 0 not upgraded.\n",
+        "Remv native [9.9]\n"
+        "0 upgraded, 0 newly installed, 1 to remove and 0 not upgraded.\n",
+        "Remv native [1.0]\nRemv native [1.0]\n"
+        "0 upgraded, 0 newly installed, 2 to remove and 0 not upgraded.\n",
+        "Remv foreign:BAD [2.0]\n"
+        "0 upgraded, 0 newly installed, 1 to remove and 0 not upgraded.\n",
+        "Remv native [1.0]\n",
+        "Remv native [1.0]\n"
+        "0 upgraded, 0 newly installed, 0 to remove and 0 not upgraded.\n",
+        "Remv native [1.0]\n"
+        "1 upgraded, 0 newly installed, 1 to remove and 0 not upgraded.\n",
+        "Remv native [1.0]\n"
+        "0 upgraded, 1 newly installed, 1 to remove and 0 not upgraded.\n",
+    ],
+)
+def test_autoremove_parser_rejects_ambiguous_or_unsafe_evidence(
+    simulation: str,
+) -> None:
+    """Forbidden actions, contradictions, and malformed plans fail closed."""
+    with pytest.raises(PackageScanParseError):
+        parse_autoremove_simulation(
+            simulation,
+            native_architecture="amd64",
+            installed_inventory=AUTOREMOVE_INVENTORY,
+        )
+
+
+def test_autoremove_parser_rejects_unfinished_dpkg_evidence() -> None:
+    """Unfinished dpkg state remains a semantic hard failure."""
+    with pytest.raises(PackageScanParseError) as caught:
+        parse_autoremove_simulation(
+            "0 upgraded, 0 newly installed, 0 to remove and 0 not upgraded.\n",
+            native_architecture="amd64",
+            installed_inventory="native\tamd64\t1.0\tunpacked\n",
+        )
+    assert caught.value.failure is PackageScanFailure.DPKG_UNFINISHED
+
+
+def test_autoremove_parser_accepts_large_exact_plan() -> None:
+    """Legitimate plans are not truncated before becoming actionable."""
+    count = 1000
+    inventory = "".join(
+        f"pkg{index}\tamd64\t1.{index}\tinstalled\n" for index in range(count)
+    )
+    simulation = "".join(
+        f"Remv pkg{index} [1.{index}]\n" for index in range(count)
+    ) + f"0 upgraded, 0 newly installed, {count} to remove and 3 not upgraded.\n"
+    assert len(
+        parse_autoremove_simulation(
+            simulation,
+            native_architecture="amd64",
+            installed_inventory=inventory,
+        ).packages
+    ) == count

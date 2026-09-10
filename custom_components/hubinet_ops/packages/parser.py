@@ -5,7 +5,12 @@ from dataclasses import dataclass
 import re
 import shlex
 
-from .models import PackageScanError, PackageScanFailure, PendingPackage
+from .models import (
+    PackageScanError,
+    PackageScanFailure,
+    PendingPackage,
+    RemovablePackage,
+)
 
 _INST_RE = re.compile(
     r"^Inst (?P<name>\S+) \[(?P<installed>[^\]\s]+)\] "
@@ -14,6 +19,10 @@ _INST_RE = re.compile(
 )
 _CONF_RE = re.compile(
     r"^Conf (?P<name>\S+) \((?P<candidate>\S+) (?P<relstr>[^)]*)\)"
+    r"(?: \[[^\[\]\r\n]*\])*$"
+)
+_REMV_RE = re.compile(
+    r"^Remv (?P<name>\S+) \[(?P<installed>[^\]\s]+)\]"
     r"(?: \[[^\[\]\r\n]*\])*$"
 )
 _RELSTR_RE = re.compile(r"(?:(?P<origin>.*?) )?\[(?P<architecture>[^\[\]]*)\]")
@@ -76,6 +85,14 @@ class ParsedAptSimulation:
     """Exact pending rows plus APT's separate kept-back count."""
 
     packages: tuple[PendingPackage, ...]
+    not_upgraded_count: int
+
+
+@dataclass(frozen=True, slots=True)
+class ParsedAutoremoveSimulation:
+    """Exact package identities from one cleanup-only APT simulation."""
+
+    packages: tuple[RemovablePackage, ...]
     not_upgraded_count: int
 
 
@@ -393,6 +410,104 @@ def parse_apt_simulation(  # noqa: C901
             )
 
     return ParsedAptSimulation(
+        packages=tuple(
+            sorted(packages, key=lambda package: (package.name, package.architecture))
+        ),
+        not_upgraded_count=not_upgraded,
+    )
+
+
+def parse_autoremove_simulation(
+    text: str, *, native_architecture: str, installed_inventory: str
+) -> ParsedAutoremoveSimulation:
+    """Parse only APT's machine-oriented ``Remv`` simulation records."""
+    if not isinstance(text, str) or len(text.encode()) > 8 * 1024 * 1024:
+        raise PackageScanParseError(
+            "APT autoremove simulation output is missing or oversized"
+        )
+    native = parse_native_architecture(native_architecture)
+    inventory_state = parse_installed_inventory(installed_inventory)
+    if inventory_state.unfinished:
+        raise PackageScanParseError(
+            "dpkg reports unfinished package state",
+            PackageScanFailure.DPKG_UNFINISHED,
+        )
+
+    packages: list[RemovablePackage] = []
+    identities: set[tuple[str, str]] = set()
+    summary: tuple[int, int, int, int] | None = None
+    for raw_line in text.splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        if line.startswith(("Purg ", "Inst ", "Conf ")):
+            raise PackageScanParseError(
+                "APT autoremove simulation contains a forbidden action"
+            )
+        if line.startswith("Remv "):
+            match = _REMV_RE.fullmatch(line)
+            if match is None:
+                raise PackageScanParseError(
+                    "APT autoremove simulation contains an unparseable removal"
+                )
+            name, qualified_architecture = _split_qualified_name(match.group("name"))
+            architecture = _resolve_installed_architecture(
+                name,
+                qualified_architecture,
+                native,
+                inventory_state.installed,
+            )
+            identity = (name, architecture)
+            if identity in identities:
+                raise PackageScanParseError(
+                    "APT autoremove simulation contains a duplicate removal"
+                )
+            identities.add(identity)
+            installed_version = match.group("installed")
+            if inventory_state.installed[identity] != installed_version:
+                raise PackageScanParseError(
+                    "APT removal version contradicts the installed inventory",
+                    PackageScanFailure.GUEST_CHANGED_DURING_SCAN,
+                )
+            packages.append(
+                RemovablePackage(
+                    name=name,
+                    architecture=architecture,
+                    installed_version=installed_version,
+                )
+            )
+            continue
+        if _BAD_COUNT_RE.fullmatch(line):
+            raise PackageScanParseError(
+                "APT reports unfinished dpkg state",
+                PackageScanFailure.DPKG_UNFINISHED,
+            )
+        if match := _SUMMARY_RE.fullmatch(line):
+            if summary is not None:
+                raise PackageScanParseError(
+                    "APT autoremove simulation contains duplicate summaries"
+                )
+            summary = (
+                int(match.group("upgraded")),
+                int(match.group("new")),
+                int(match.group("removed")),
+                int(match.group("held")),
+            )
+
+    if summary is None:
+        raise PackageScanParseError(
+            "APT autoremove simulation has no exact plan summary"
+        )
+    upgraded, newly_installed, removed, not_upgraded = summary
+    if upgraded or newly_installed:
+        raise PackageScanParseError(
+            "APT autoremove simulation is not a removal-only plan"
+        )
+    if removed != len(packages):
+        raise PackageScanParseError(
+            "APT autoremove summary does not match its removals"
+        )
+    return ParsedAutoremoveSimulation(
         packages=tuple(
             sorted(packages, key=lambda package: (package.name, package.architecture))
         ),

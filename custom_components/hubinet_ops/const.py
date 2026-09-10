@@ -44,7 +44,16 @@ PACKAGE_SCAN_KNOWN_HOSTS = ".ssh/known_hosts"
 
 GUIDED_USERNAME = "hubinetnext@pve"
 GUIDED_TOKEN_ID = "ha"
-INTEGRATION_VERSION = "2026.9.1.4"
+INTEGRATION_VERSION = "2026.9.1.5"
+# Operator-facing full-functionality expectation only; protocol remains the
+# wire compatibility authority and supported old-helper operations stay usable.
+EXPECTED_HELPER_VERSION = 4
+BOOTSTRAP_COMMAND = (
+    "curl -fsSL "
+    "https://raw.githubusercontent.com/shockwave9315/hubinet-ops-next/"
+    f"{INTEGRATION_VERSION}/deploy/bootstrap-proxmox.sh | bash"
+)
+RESET_BOOTSTRAP_COMMAND = f"{BOOTSTRAP_COMMAND} -s -- --reset"
 
 
 class ProxmoxPermission(StrEnum):

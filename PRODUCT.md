@@ -37,8 +37,10 @@ The current intended product scope is:
 
 1. pending package scan for supported LXC guests;
 2. package review;
-3. explicit LXC package update; and
-4. post-update health.
+3. explicit LXC package update;
+4. explicit operator-controlled cleanup of current APT autoremove
+   candidates; and
+5. post-update health.
 
 These are product intentions, not claims that the features or their
 architecture are accepted or implemented. See [STATUS.md](STATUS.md) for the
@@ -48,6 +50,9 @@ current state and [ARCHITECTURE.md](ARCHITECTURE.md) for accepted design.
 
 - Package updates are never automatic.
 - An update requires explicit operator action.
+- Package cleanup is never automatic and requires explicit operator action.
+- A non-empty cleanup plan must be shown to the operator and re-verified before
+  cleanup mutation.
 - The operator must be able to see and review the plan before an update.
 - The executed package plan must match the reviewed plan.
 - If the plan changes, the previous review must not authorize the new plan.

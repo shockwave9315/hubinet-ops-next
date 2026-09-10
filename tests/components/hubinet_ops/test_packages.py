@@ -27,7 +27,10 @@ from custom_components.hubinet_ops.packages.models import (
     PackageUpdateStatus,
     PendingPackage,
 )
-from custom_components.hubinet_ops.packages.parser import ParsedAptSimulation
+from custom_components.hubinet_ops.packages.parser import (
+    ParsedAptSimulation,
+    ParsedAutoremoveSimulation,
+)
 from custom_components.hubinet_ops.packages.snapshots import (
     RetainedSnapshotSummary,
     SnapshotError,
@@ -55,6 +58,7 @@ class GateTransport:
     """Controllable package transport which records active concurrency."""
 
     configured = True
+    observed_helper_version = None
 
     def __init__(self) -> None:
         """Initialize empty concurrency and lifecycle controls."""
@@ -104,6 +108,12 @@ class GateTransport:
         finally:
             self.active -= 1
             self.completed(vmid).set()
+
+    async def async_plan_autoremove(
+        self, expected_node: str, vmid: int
+    ) -> ParsedAutoremoveSimulation:
+        """Return a successful empty cleanup observation."""
+        return ParsedAutoremoveSimulation(packages=(), not_upgraded_count=0)
 
 
 def _manager(
@@ -227,7 +237,7 @@ async def test_manager_records_running_completion_and_failure(
     assert failure.result is None
     assert failure.failure is PackageScanFailure.METADATA_REFRESH_FAILED
     assert failure.error_message == "x" * 500
-    assert listener.call_count == 4
+    assert listener.call_count == 5
 
 
 async def test_review_fresh_success_gets_a_token_and_is_unreviewed(

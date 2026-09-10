@@ -35,6 +35,7 @@ from .const import (
     AUTH_METHODS,
     AUTH_OTHER,
     AUTH_PVE,
+    BOOTSTRAP_COMMAND,
     CONF_AUTH_METHOD,
     CONF_CONTAINERS,
     CONF_NODE,
@@ -53,8 +54,8 @@ from .const import (
     DOMAIN,
     GUIDED_TOKEN_ID,
     GUIDED_USERNAME,
-    INTEGRATION_VERSION,
     NODE_ONLINE,
+    RESET_BOOTSTRAP_COMMAND,
 )
 from .enrollment import EnrollmentError, parse_enrollment
 from .packages.transport import (
@@ -117,13 +118,6 @@ ENROLLMENT_SCHEMA = vol.Schema(
         )
     }
 )
-BOOTSTRAP_COMMAND = (
-    "curl -fsSL "
-    "https://raw.githubusercontent.com/shockwave9315/hubinet-ops-next/"
-    f"{INTEGRATION_VERSION}/deploy/bootstrap-proxmox.sh | bash"
-)
-RESET_BOOTSTRAP_COMMAND = f"{BOOTSTRAP_COMMAND} -s -- --reset"
-
 _GUIDED_DATA_KEYS = (
     CONF_AUTH_METHOD,
     CONF_REALM,
