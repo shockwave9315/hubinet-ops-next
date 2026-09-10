@@ -328,6 +328,52 @@ async def test_update_invalidates_old_cleanup_then_observes_without_changing_suc
     assert manager.cleanup_evidence("pve1", 200) is None
 
 
+async def test_update_success_publishes_new_actionable_cleanup_only_after_display(
+    hass: HomeAssistant, mock_config_entry: MockConfigEntry
+) -> None:
+    """Post-update cleanup evidence is independent and presentation-gated."""
+    old = _candidates(2)
+    current = _candidates(7)
+    presentation = MagicMock()
+    transport = CleanupTransport([_parsed(old), _parsed(current)])
+    manager, _ = _manager(
+        hass, mock_config_entry, transport, presentation=presentation
+    )
+    await _scan(manager)
+    await _review(manager)
+    patches = _snapshot_patches()
+    with patches[0], patches[1], patches[2], patches[3]:
+        await manager.async_start_update(
+            "pve1", 200, target_is_running=True, snapshot_permission=True
+        )
+    assert manager.update_record("pve1", 200).status is PackageUpdateStatus.SUCCESS
+    assert manager.cleanup_evidence("pve1", 200).candidates == current
+    presentation.assert_called_with("pve1", 200, current, "update")
+
+
+async def test_post_update_presentation_failure_does_not_rewrite_update_success(
+    hass: HomeAssistant, mock_config_entry: MockConfigEntry
+) -> None:
+    """A failed exact-list presentation leaves cleanup unknown and Update true."""
+    old = _candidates(2)
+    current = _candidates(7)
+    presentation = MagicMock()
+    transport = CleanupTransport([_parsed(old), _parsed(current)])
+    manager, _ = _manager(
+        hass, mock_config_entry, transport, presentation=presentation
+    )
+    await _scan(manager)
+    await _review(manager)
+    presentation.side_effect = RuntimeError("renderer failed")
+    patches = _snapshot_patches()
+    with patches[0], patches[1], patches[2], patches[3]:
+        await manager.async_start_update(
+            "pve1", 200, target_is_running=True, snapshot_permission=True
+        )
+    assert manager.update_record("pve1", 200).status is PackageUpdateStatus.SUCCESS
+    assert manager.cleanup_evidence("pve1", 200) is None
+
+
 @pytest.mark.parametrize(
     "fresh",
     [_candidates(6), _candidates(8), _candidates(7, version="2.0")],
@@ -378,6 +424,30 @@ async def test_exact_cleanup_plan_reuses_safety_path_and_observes_zero(
     create.assert_awaited_once()
     delete.assert_awaited_once()
     complete.assert_called_once_with("pve1", 200, record)
+
+
+async def test_successful_cleanup_republishes_exact_remaining_candidates(
+    hass: HomeAssistant, mock_config_entry: MockConfigEntry
+) -> None:
+    """A fresh non-empty remainder is displayed before becoming actionable again."""
+    shown = _candidates(7)
+    remaining = _candidates(2)
+    presentation = MagicMock()
+    transport = CleanupTransport(
+        [_parsed(shown), _parsed(shown), _parsed(remaining)]
+    )
+    manager, _ = _manager(
+        hass, mock_config_entry, transport, presentation=presentation
+    )
+    await _scan(manager)
+    patches = _snapshot_patches()
+    with patches[0], patches[1], patches[2], patches[3]:
+        await manager.async_start_autoremove(
+            "pve1", 200, target_is_running=True, snapshot_permission=True
+        )
+    assert manager.cleanup_record("pve1", 200).status is PackageUpdateStatus.SUCCESS
+    assert manager.cleanup_evidence("pve1", 200).candidates == remaining
+    presentation.assert_called_with("pve1", 200, remaining, "autoremove")
 
 
 async def test_snapshot_uncertainty_never_allows_autoremove(
@@ -461,6 +531,28 @@ async def test_snapshot_delete_failure_keeps_confirmed_mutation_success(
     assert record.snapshot_cleanup_failed is True
     assert record.snapshot_retained is True
     assert record.snapshot_name == "hubinet-preupd-20260910120000-ab12cd"
+
+
+async def test_cleanup_liveness_failure_retains_snapshot_and_unknown_state(
+    hass: HomeAssistant, mock_config_entry: MockConfigEntry
+) -> None:
+    """A confirmed mutation without PONG is failure with retained safety state."""
+    shown = _candidates(7)
+    transport = CleanupTransport([_parsed(shown), _parsed(shown)])
+    transport.ping_results = deque([False, False])
+    manager, _ = _manager(hass, mock_config_entry, transport)
+    await _scan(manager)
+    patches = _snapshot_patches()
+    with patches[0], patches[1], patches[2] as delete, patches[3]:
+        await manager.async_start_autoremove(
+            "pve1", 200, target_is_running=True, snapshot_permission=True
+        )
+    record = manager.cleanup_record("pve1", 200)
+    assert record.outcome is PackageUpdateOutcome.LIVENESS_FAILED
+    assert record.snapshot_retained is True
+    assert record.liveness is False
+    assert manager.cleanup_evidence("pve1", 200) is None
+    delete.assert_not_awaited()
 
 
 async def test_post_cleanup_observation_failure_preserves_mutation_success(

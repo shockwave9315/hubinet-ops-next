@@ -128,6 +128,7 @@ async def test_update_button_requires_native_snapshot_permission(
     assert hass.states.get(REVIEW) is not None
     assert hass.states.get(APPROVE) is not None
     assert hass.states.get(UPDATE) is None
+    assert hass.states.get("button.ct_nginx_autoremove_unused_packages") is None
 
 
 async def test_new_scan_invalidates_viewed_token_and_stale_approval(
