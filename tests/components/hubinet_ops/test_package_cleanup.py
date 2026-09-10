@@ -12,6 +12,8 @@ from tests.common import MockConfigEntry  # noqa: TID251
 from custom_components.hubinet_ops.packages.manager import PackageManager
 from custom_components.hubinet_ops.packages.models import (
     PackageMutationResult,
+    PackageScanError,
+    PackageScanFailure,
     PackageScanResult,
     PackageScanStatus,
     PackageUpdateError,
@@ -609,6 +611,79 @@ async def test_cleanup_press_invalidates_synchronously_and_double_press_fails(
         assert caught.value.outcome is PackageUpdateOutcome.PACKAGE_MANAGER_BUSY
         plan_release.set()
         await task
+
+
+async def test_update_rejected_while_cleanup_is_running(
+    hass: HomeAssistant, mock_config_entry: MockConfigEntry
+) -> None:
+    """The manager rejects Update while cleanup owns this VMID."""
+    shown = _candidates(7)
+    transport = CleanupTransport([_parsed(shown), _parsed(shown), _parsed(())])
+    manager, _ = _manager(hass, mock_config_entry, transport)
+    await _scan(manager)
+    await _review(manager)
+    original_plan = transport.async_plan_autoremove
+    plan_entered = asyncio.Event()
+    plan_release = asyncio.Event()
+
+    async def gated_plan(node: str, vmid: int) -> ParsedAutoremoveSimulation:
+        plan_entered.set()
+        await plan_release.wait()
+        return await original_plan(node, vmid)
+
+    transport.async_plan_autoremove = gated_plan  # type: ignore[method-assign]
+    patches = _snapshot_patches()
+    with patches[0], patches[1], patches[2], patches[3]:
+        cleanup_task = manager.async_start_autoremove(
+            "pve1", 200, target_is_running=True, snapshot_permission=True
+        )
+        await plan_entered.wait()
+        with pytest.raises(PackageUpdateError) as caught:
+            manager.async_start_update(
+                "pve1", 200, target_is_running=True, snapshot_permission=True
+            )
+        assert caught.value.outcome is PackageUpdateOutcome.PACKAGE_MANAGER_BUSY
+        assert manager.update_record("pve1", 200) == PackageUpdateRecord()
+        assert (
+            manager.cleanup_record("pve1", 200).status
+            is PackageUpdateStatus.RUNNING
+        )
+        assert transport.update_calls == 0
+        plan_release.set()
+        await cleanup_task
+
+
+async def test_scan_reports_cleanup_busy_truthfully(
+    hass: HomeAssistant, mock_config_entry: MockConfigEntry
+) -> None:
+    """A running cleanup is not mislabeled as a running package update."""
+    shown = _candidates(7)
+    transport = CleanupTransport([_parsed(shown), _parsed(shown), _parsed(())])
+    manager, _ = _manager(hass, mock_config_entry, transport)
+    await _scan(manager)
+    original_plan = transport.async_plan_autoremove
+    plan_entered = asyncio.Event()
+    plan_release = asyncio.Event()
+
+    async def gated_plan(node: str, vmid: int) -> ParsedAutoremoveSimulation:
+        plan_entered.set()
+        await plan_release.wait()
+        return await original_plan(node, vmid)
+
+    transport.async_plan_autoremove = gated_plan  # type: ignore[method-assign]
+    patches = _snapshot_patches()
+    with patches[0], patches[1], patches[2], patches[3]:
+        cleanup_task = manager.async_start_autoremove(
+            "pve1", 200, target_is_running=True, snapshot_permission=True
+        )
+        await plan_entered.wait()
+        with pytest.raises(PackageScanError) as caught:
+            manager.async_start_scan("pve1", 200, target_is_running=True)
+        assert caught.value.failure is PackageScanFailure.PACKAGE_MANAGER_BUSY
+        assert "cleanup" in str(caught.value)
+        assert "update" not in str(caught.value)
+        plan_release.set()
+        await cleanup_task
 
 
 async def test_prune_removes_cleanup_state_and_stale_task_cannot_resurrect(

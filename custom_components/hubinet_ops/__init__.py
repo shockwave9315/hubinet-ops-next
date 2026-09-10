@@ -25,6 +25,7 @@ from .const import (
     PACKAGE_SCAN_PRIVATE_KEY,
 )
 from .coordinator import ProxmoxConfigEntry, ProxmoxCoordinator, node_device_info
+from .packages.presentation import clear_helper_issue
 
 PLATFORMS = [
     Platform.BINARY_SENSOR,
@@ -189,4 +190,7 @@ async def async_migrate_entry(hass: HomeAssistant, entry: ProxmoxConfigEntry) ->
 
 async def async_unload_entry(hass: HomeAssistant, entry: ProxmoxConfigEntry) -> bool:
     """Unload a config entry."""
-    return await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
+    unload_ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
+    if unload_ok:
+        clear_helper_issue(hass, entry.entry_id)
+    return unload_ok

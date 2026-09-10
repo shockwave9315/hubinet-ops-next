@@ -554,6 +554,8 @@ class AsyncSSHPackageTransport:
             ) from err
         if (
             isinstance(payload, Mapping)
+            and type(payload.get("protocol_version")) is int
+            and payload["protocol_version"] == PROTOCOL_VERSION
             and type(payload.get("helper_version")) is int
             and payload["helper_version"] >= 1
         ):

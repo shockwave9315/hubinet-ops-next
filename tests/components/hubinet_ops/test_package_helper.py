@@ -15,6 +15,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from custom_components.hubinet_ops.const import EXPECTED_HELPER_VERSION
 from custom_components.hubinet_ops.packages.transport import TRANSPORT_TIMEOUT_SECONDS
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -42,6 +43,11 @@ def _load_helper() -> ModuleType:
 
 
 helper = _load_helper()
+
+
+def test_expected_helper_version_matches_shipped_helper() -> None:
+    """Release stale-helper UX matches the helper actually shipped."""
+    assert EXPECTED_HELPER_VERSION == helper.HELPER_VERSION
 
 
 def test_transport_deadline_exceeds_helper_operation_deadline() -> None:

@@ -358,9 +358,6 @@ class PackageManager:
         if any(
             target_vmid == vmid and record.status is PackageUpdateStatus.RUNNING
             for (_node, target_vmid), record in self._update_records.items()
-        ) or any(
-            target_vmid == vmid and record.status is PackageUpdateStatus.RUNNING
-            for (_node, target_vmid), record in self._cleanup_records.items()
         ):
             raise PackageScanError(
                 PackageScanFailure.PACKAGE_MANAGER_BUSY,
@@ -571,11 +568,12 @@ class PackageManager:
             for (_node, target_vmid), record in self._records.items()
         ) or any(
             target_vmid == vmid and record.status is PackageUpdateStatus.RUNNING
-            for (_node, target_vmid), record in self._update_records.items()
+            for records in (self._update_records, self._cleanup_records)
+            for (_node, target_vmid), record in records.items()
         ):
             raise PackageUpdateError(
                 PackageUpdateOutcome.PACKAGE_MANAGER_BUSY,
-                "a package scan or update is already running for this LXC VMID",
+                "a package scan, update, or cleanup is already running for this LXC VMID",
             )
 
         reviewed = self._records.get((node, vmid))

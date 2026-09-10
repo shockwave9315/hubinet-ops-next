@@ -541,6 +541,32 @@ async def test_incompatible_helper_protocol_fails_clearly(
     assert caught.value.failure is PackageScanFailure.PROTOCOL_MISMATCH
 
 
+async def test_foreign_protocol_cannot_poison_observed_helper_version(
+    hass: HomeAssistant, tmp_path: Path
+) -> None:
+    """Helper metadata from a foreign protocol envelope is not retained."""
+    transport, *_ = await _transport(
+        hass, tmp_path, _response(protocol_version=2, helper_version=5)
+    )
+    with pytest.raises(PackageScanError) as caught:
+        await transport.async_scan("pve1", 200)
+    assert caught.value.failure is PackageScanFailure.PROTOCOL_MISMATCH
+    assert transport.observed_helper_version is None
+
+
+async def test_bool_protocol_cannot_poison_observed_helper_version(
+    hass: HomeAssistant, tmp_path: Path
+) -> None:
+    """Boolean protocol metadata is rejected despite True comparing equal to 1."""
+    response = _response(helper_version=5)
+    response["protocol_version"] = True
+    transport, *_ = await _transport(hass, tmp_path, response)
+    with pytest.raises(PackageScanError) as caught:
+        await transport.async_scan("pve1", 200)
+    assert caught.value.failure is PackageScanFailure.PROTOCOL_MISMATCH
+    assert transport.observed_helper_version is None
+
+
 async def test_scan_accepts_newer_informational_helper_version(
     hass: HomeAssistant, tmp_path: Path
 ) -> None:

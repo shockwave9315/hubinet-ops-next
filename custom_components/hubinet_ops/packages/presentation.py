@@ -52,6 +52,11 @@ def _notification_id(kind: str, node: str, vmid: int) -> str:
     return f"hubinet_ops_{kind}_{node}_{vmid}"
 
 
+def _helper_issue_id(entry_id: str) -> str:
+    """Return the stable stale-helper Repairs issue ID for one config entry."""
+    return f"helper_outdated_{entry_id}"
+
+
 def notify_review_plan(
     hass: HomeAssistant, node: str, vmid: int, record: PackageScanRecord
 ) -> None:
@@ -297,7 +302,7 @@ def update_helper_issue(
     hass: HomeAssistant, entry_id: str, installed_version: int
 ) -> None:
     """Create or clear the one operator-facing stale-helper Repairs issue."""
-    issue_id = f"helper_outdated_{entry_id}"
+    issue_id = _helper_issue_id(entry_id)
     if installed_version >= EXPECTED_HELPER_VERSION:
         ir.async_delete_issue(hass, DOMAIN, issue_id)
         return
@@ -315,3 +320,8 @@ def update_helper_issue(
             "bootstrap_command": BOOTSTRAP_COMMAND,
         },
     )
+
+
+def clear_helper_issue(hass: HomeAssistant, entry_id: str) -> None:
+    """Clear the stale-helper Repairs issue for one unloaded config entry."""
+    ir.async_delete_issue(hass, DOMAIN, _helper_issue_id(entry_id))
