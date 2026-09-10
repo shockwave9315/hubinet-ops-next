@@ -77,6 +77,28 @@ modified `ARCHITECTURE.md` itself, because a design appears in a pull request,
 or because a review recommended it. An agent may propose architecture. An
 agent may not accept architecture on behalf of the maintainer.
 
+#### Pre-implementation acceptance checkpoint
+
+When architecture is proposed during the current task, the coding agent must
+follow this sequence:
+
+1. The maintainer explicitly accepts the design.
+2. Record the accepted design and decision in `ARCHITECTURE.md`.
+3. Mark the architecture accepted in `STATUS.md` and mark implementation as
+   either `NOT STARTED` or `IN PROGRESS`.
+4. Create a documentation checkpoint commit.
+5. Begin runtime implementation only after that checkpoint.
+6. After implementation, update the documentation again to describe the final
+   post-merge state.
+
+The checkpoint may live on the same feature branch and in the same pull
+request; a separate documentation-only pull request is not required. Project
+memory synchronization must not be deferred until handoff. The checkpoint
+records the maintainer's decision; it does not allow an agent to accept
+architecture, and review findings or recommendations remain insufficient for
+acceptance. Implementation must stay within the exact scope the maintainer
+approved.
+
 ## Prohibited architecture
 
 Do not reintroduce any of the following without explicit architecture
@@ -133,6 +155,10 @@ is merged. In the same pull request:
 
 Ordinary implementation that does not change architecture does not require an
 architecture-document edit.
+
+Architecture-bearing work therefore has two required synchronization points:
+the pre-implementation acceptance checkpoint and the final pre-handoff
+consistency check. The final check does not replace the earlier checkpoint.
 
 Before handing work off, verify that the implementation, tests, and docs agree
 with the accepted architecture and current status. State any unresolved scope,

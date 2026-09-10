@@ -25,7 +25,13 @@ from .const import DOMAIN, VM_CONTAINER_RUNNING, ProxmoxPermission
 from .coordinator import ProxmoxConfigEntry, ProxmoxCoordinator, ProxmoxNodeData
 from .entity import ProxmoxContainerEntity, ProxmoxNodeEntity, ProxmoxVMEntity
 from .helpers import is_granted
-from .packages.models import PackageScanError
+from .packages.models import (
+    PackageScanError,
+    PackageScanStatus,
+    PackageUpdateError,
+    PackageUpdateStatus,
+)
+from .packages.presentation import notify_review_plan
 
 PARALLEL_UPDATES = 1
 
@@ -231,6 +237,21 @@ PACKAGE_SCAN_BUTTON = ButtonEntityDescription(
     translation_key="package_scan",
     entity_category=EntityCategory.CONFIG,
 )
+PACKAGE_REVIEW_BUTTON = ButtonEntityDescription(
+    key="package_review",
+    translation_key="package_review",
+    entity_category=EntityCategory.CONFIG,
+)
+PACKAGE_APPROVE_BUTTON = ButtonEntityDescription(
+    key="package_approve",
+    translation_key="package_approve",
+    entity_category=EntityCategory.CONFIG,
+)
+PACKAGE_UPDATE_BUTTON = ButtonEntityDescription(
+    key="package_update",
+    translation_key="package_update",
+    entity_category=EntityCategory.CONFIG,
+)
 
 
 async def async_setup_entry(
@@ -289,11 +310,25 @@ async def async_setup_entry(
             )
         ]
         if coordinator.package_manager.configured:
-            entities.extend(
-                PackageScanButtonEntity(coordinator, container, node_data)
-                for node_data, container in containers
-                if node_data.node["node"] == coordinator.package_node
-            )
+            for node_data, container in containers:
+                if node_data.node["node"] != coordinator.package_node:
+                    continue
+                entities.extend(
+                    (
+                        PackageScanButtonEntity(coordinator, container, node_data),
+                        PackageReviewButtonEntity(coordinator, container, node_data),
+                        PackageApproveButtonEntity(coordinator, container, node_data),
+                    )
+                )
+                if is_granted(
+                    coordinator.permissions,
+                    p_type="vms",
+                    p_id=container["vmid"],
+                    permission=ProxmoxPermission.SNAPSHOT,
+                ):
+                    entities.append(
+                        PackageUpdateButtonEntity(coordinator, container, node_data)
+                    )
         async_add_entities(entities)
 
     coordinator.new_nodes_callbacks.append(_async_add_new_nodes)
@@ -456,7 +491,182 @@ class PackageScanButtonEntity(ProxmoxContainerEntity, ProxmoxBaseButton):
     @override
     def available(self) -> bool:
         """Return whether current upstream state says this LXC can be scanned."""
+        scan = self.coordinator.package_manager.record(
+            self._node_name, self.device_id
+        )
+        update = self.coordinator.package_manager.update_record(
+            self._node_name, self.device_id
+        )
         return (
             super().available
             and self.container_data.get("status") == VM_CONTAINER_RUNNING
+            and scan.status is not PackageScanStatus.RUNNING
+            and update.status is not PackageUpdateStatus.RUNNING
+        )
+
+
+class PackageReviewButtonEntity(ProxmoxContainerEntity, ButtonEntity):
+    """Render the exact current package plan for operator review."""
+
+    def __init__(
+        self,
+        coordinator: ProxmoxCoordinator,
+        container_data: dict[str, Any],
+        node_data: ProxmoxNodeData,
+    ) -> None:
+        """Initialize the package review button."""
+        super().__init__(coordinator, PACKAGE_REVIEW_BUTTON, container_data, node_data)
+
+    @override
+    async def async_press(self) -> None:
+        """Show the full current plan, then remember exactly its scan token."""
+        record = self.coordinator.package_manager.record(
+            self._node_name, self.device_id
+        )
+        if (
+            record.status is not PackageScanStatus.SUCCESS
+            or record.result is None
+            or not record.result.packages
+            or record.token is None
+        ):
+            raise HomeAssistantError(
+                translation_domain=DOMAIN,
+                translation_key="package_review_failed",
+            )
+        notify_review_plan(
+            self.hass, self._node_name, self.device_id, record
+        )
+        if not self.coordinator.package_manager.mark_viewed(
+            self._node_name, self.device_id, record.token
+        ):
+            raise HomeAssistantError(
+                translation_domain=DOMAIN,
+                translation_key="package_review_failed",
+            )
+
+    @property
+    @override
+    def available(self) -> bool:
+        """Return whether a successful non-empty plan can currently be viewed."""
+        record = self.coordinator.package_manager.record(
+            self._node_name, self.device_id
+        )
+        update = self.coordinator.package_manager.update_record(
+            self._node_name, self.device_id
+        )
+        return (
+            super().available
+            and self.container_data.get("status") == VM_CONTAINER_RUNNING
+            and update.status is not PackageUpdateStatus.RUNNING
+            and record.status is PackageScanStatus.SUCCESS
+            and record.result is not None
+            and bool(record.result.packages)
+        )
+
+
+class PackageApproveButtonEntity(ProxmoxContainerEntity, ButtonEntity):
+    """Approve exactly the plan token most recently rendered by Review."""
+
+    def __init__(
+        self,
+        coordinator: ProxmoxCoordinator,
+        container_data: dict[str, Any],
+        node_data: ProxmoxNodeData,
+    ) -> None:
+        """Initialize the package approval button."""
+        super().__init__(coordinator, PACKAGE_APPROVE_BUTTON, container_data, node_data)
+
+    @override
+    async def async_press(self) -> None:
+        """Confirm exactly the ephemeral viewed token through existing logic."""
+        if not self.coordinator.package_manager.confirm_viewed_review(
+            self._node_name, self.device_id
+        ):
+            raise HomeAssistantError(
+                translation_domain=DOMAIN,
+                translation_key="package_approval_failed",
+            )
+
+    @property
+    @override
+    def available(self) -> bool:
+        """Return whether the exact current plan was viewed but not approved."""
+        manager = self.coordinator.package_manager
+        record = manager.record(self._node_name, self.device_id)
+        update = manager.update_record(self._node_name, self.device_id)
+        return (
+            super().available
+            and self.container_data.get("status") == VM_CONTAINER_RUNNING
+            and update.status is not PackageUpdateStatus.RUNNING
+            and record.status is PackageScanStatus.SUCCESS
+            and record.result is not None
+            and bool(record.result.packages)
+            and not record.reviewed
+            and record.token is not None
+            and manager.viewed_token(self._node_name, self.device_id) == record.token
+        )
+
+
+class PackageUpdateButtonEntity(ProxmoxContainerEntity, ButtonEntity):
+    """Start one explicitly approved native-snapshot-protected package update."""
+
+    def __init__(
+        self,
+        coordinator: ProxmoxCoordinator,
+        container_data: dict[str, Any],
+        node_data: ProxmoxNodeData,
+    ) -> None:
+        """Initialize the package update button."""
+        super().__init__(coordinator, PACKAGE_UPDATE_BUTTON, container_data, node_data)
+
+    @override
+    async def async_press(self) -> None:
+        """Start a background update after independently revalidating state."""
+        node_data = self.coordinator.data.get(self._node_name)
+        container = (
+            node_data.containers.get(self.device_id) if node_data is not None else None
+        )
+        try:
+            self.coordinator.package_manager.async_start_update(
+                self._node_name,
+                self.device_id,
+                target_is_running=(
+                    container is not None
+                    and container.get("status") == VM_CONTAINER_RUNNING
+                ),
+                snapshot_permission=is_granted(
+                    self.coordinator.permissions,
+                    p_type="vms",
+                    p_id=self.device_id,
+                    permission=ProxmoxPermission.SNAPSHOT,
+                ),
+            )
+        except PackageUpdateError as err:
+            raise HomeAssistantError(
+                translation_domain=DOMAIN,
+                translation_key="package_update_failed",
+                translation_placeholders={"reason": str(err)},
+            ) from err
+
+    @property
+    @override
+    def available(self) -> bool:
+        """Return whether one current non-empty plan is approved for update."""
+        manager = self.coordinator.package_manager
+        record = manager.record(self._node_name, self.device_id)
+        update = manager.update_record(self._node_name, self.device_id)
+        return (
+            super().available
+            and self.container_data.get("status") == VM_CONTAINER_RUNNING
+            and update.status is not PackageUpdateStatus.RUNNING
+            and record.status is PackageScanStatus.SUCCESS
+            and record.result is not None
+            and bool(record.result.packages)
+            and record.reviewed
+            and is_granted(
+                self.coordinator.permissions,
+                p_type="vms",
+                p_id=self.device_id,
+                permission=ProxmoxPermission.SNAPSHOT,
+            )
         )

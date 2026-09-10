@@ -249,6 +249,15 @@
       "package_scan": {
         "name": "Scan pending packages"
       },
+      "package_review": {
+        "name": "Review package update"
+      },
+      "package_approve": {
+        "name": "Approve reviewed plan"
+      },
+      "package_update": {
+        "name": "Update packages"
+      },
       "reset": {
         "name": "Reset"
       },
@@ -318,6 +327,15 @@
       },
       "pending_packages": {
         "name": "Pending package updates"
+      },
+      "package_update_status": {
+        "name": "Package update",
+        "state": {
+          "never": "Never run",
+          "running": "Running",
+          "success": "Success",
+          "failed": "Failed"
+        }
       },
       "node_backup_duration": {
         "name": "Backup duration"
@@ -426,6 +444,78 @@
     },
     "package_scan_failed": {
       "message": "Package scan failed: {reason}"
+    },
+    "package_review_failed": {
+      "message": "A current non-empty successful package scan is required before review."
+    },
+    "package_approval_failed": {
+      "message": "The viewed package plan is no longer current. Review the current plan again."
+    },
+    "package_update_failed": {
+      "message": "Package update could not start: {reason}"
+    },
+    "package_review_notification_title": {
+      "message": "Review package update"
+    },
+    "package_review_notification": {
+      "message": "Package plan for {node}/{vmid}:\n\n{plan}\n\nIf this exact plan is acceptable, press **Approve reviewed plan**."
+    },
+    "package_retained_snapshot_warning_title": {
+      "message": "Existing package-update snapshots"
+    },
+    "package_retained_snapshot_warning": {
+      "message": "Found {count} retained Hubinet package-update snapshot(s) for {node}/{vmid}. Showing {shown}: {names}. {remaining} more are not shown. They were not changed, and the current update will continue with a new temporary snapshot."
+    },
+    "package_update_notification_title": {
+      "message": "Package update result"
+    },
+    "package_update_plan_changed_notification": {
+      "message": "The package plan for {node}/{vmid} changed before mutation. Nothing was changed and no snapshot was created. Run Scan, Review, and Approve again."
+    },
+    "package_update_success_notification": {
+      "message": "Package update for {node}/{vmid} succeeded. {changed} installed package row(s) actually changed, LXC liveness was confirmed, and the temporary snapshot was removed."
+    },
+    "package_update_cleanup_failed_notification": {
+      "message": "Package update for {node}/{vmid} succeeded and LXC liveness was confirmed. {changed} installed package row(s) actually changed, but snapshot cleanup failed. Retained safety snapshot: {snapshot}."
+    },
+    "package_update_helper_outdated_notification": {
+      "message": "Package update for {node}/{vmid} could not run because the deployed helper is outdated. Re-run the current Hubinet-Ops bootstrap or enrollment repair command, then Scan, Review, and Approve again."
+    },
+    "package_update_failed_notification": {
+      "message": "Package update for {node}/{vmid} did not complete cleanly: {reason}. {retained}"
+    },
+    "package_update_retained_snapshot_detail": {
+      "message": "The safety snapshot was retained as {snapshot}. No automatic rollback or cleanup was attempted."
+    },
+    "package_update_uncertain_snapshot_detail": {
+      "message": "A safety snapshot named {snapshot} may exist; Hubinet-Ops could not confirm it. No automatic cleanup was attempted."
+    },
+    "package_update_no_retained_snapshot_detail": {
+      "message": "No retained safety snapshot was confirmed."
+    },
+    "package_update_reason_plan_failed": {
+      "message": "the execution-time package plan could not be established"
+    },
+    "package_update_reason_snapshot_failed": {
+      "message": "a complete native PVE safety snapshot could not be confirmed"
+    },
+    "package_update_reason_busy": {
+      "message": "APT or dpkg was busy"
+    },
+    "package_update_reason_mutation_failed": {
+      "message": "APT mutation or post-update dpkg sanity failed"
+    },
+    "package_update_reason_mutation_timed_out": {
+      "message": "APT mutation timed out"
+    },
+    "package_update_reason_mutation_uncertain": {
+      "message": "the package mutation result is uncertain"
+    },
+    "package_update_reason_guest_unavailable": {
+      "message": "the LXC was unavailable or no longer running"
+    },
+    "package_update_reason_liveness_failed": {
+      "message": "the LXC did not answer the generic liveness probe"
     },
     "permissions_error": {
       "message": "Failed to retrieve Proxmox VE permissions. Please check your credentials and try again."

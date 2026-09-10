@@ -4,22 +4,33 @@ import asyncio
 from collections.abc import Iterator
 from contextlib import suppress
 from copy import deepcopy
+from dataclasses import replace
 from datetime import UTC, datetime
 import json
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from tests.common import MockConfigEntry  # noqa: TID251
 
 from custom_components.hubinet_ops.packages.manager import PackageManager
 from custom_components.hubinet_ops.packages.models import (
+    PackageMutationResult,
     PackageScanError,
     PackageScanFailure,
     PackageScanRecord,
     PackageScanResult,
     PackageScanStatus,
+    PackageUpdateError,
+    PackageUpdateOutcome,
+    PackageUpdateRecord,
+    PackageUpdateStatus,
     PendingPackage,
+)
+from custom_components.hubinet_ops.packages.parser import ParsedAptSimulation
+from custom_components.hubinet_ops.packages.snapshots import (
+    RetainedSnapshotSummary,
+    SnapshotError,
 )
 from homeassistant.components.button import SERVICE_PRESS
 from homeassistant.const import ATTR_ENTITY_ID, STATE_UNAVAILABLE, Platform
@@ -938,3 +949,565 @@ async def test_stopped_lxc_preserves_reviewed_state_and_resumes_without_rescan(
     assert sensor_state.state == "2"
     assert sensor_state.attributes["reviewed"] is True
     assert transport.calls == [("pve1", 200)]
+
+
+class UpdateTransport:
+    """Controllable transport for package-update orchestration tests."""
+
+    configured = True
+
+    def __init__(self) -> None:
+        """Initialize successful defaults and optional plan blocking."""
+        self.plan = ParsedAptSimulation(RESULT.packages, RESULT.not_upgraded_count)
+        self.mutation: PackageMutationResult | PackageUpdateError = (
+            PackageMutationResult(
+                before={
+                    ("openssl", "amd64"): "1.0",
+                    ("example", "amd64"): "1.0",
+                },
+                after={
+                    ("openssl", "amd64"): "1.2",
+                    ("example", "amd64"): "1.1",
+                },
+            )
+        )
+        self.plan_entered = asyncio.Event()
+        self.plan_release = asyncio.Event()
+        self.plan_release.set()
+        self.update_calls = 0
+        self.ping_results: list[bool | PackageUpdateError] = [True]
+
+    async def async_scan(self, expected_node: str, vmid: int) -> PackageScanResult:
+        """Return a successful reviewable scan."""
+        return RESULT
+
+    async def async_plan(self, expected_node: str, vmid: int) -> ParsedAptSimulation:
+        """Return the configured execution-time plan after an optional gate."""
+        self.plan_entered.set()
+        await self.plan_release.wait()
+        return self.plan
+
+    async def async_update(
+        self, expected_node: str, vmid: int
+    ) -> PackageMutationResult:
+        """Return or raise the configured mutation outcome."""
+        self.update_calls += 1
+        if isinstance(self.mutation, PackageUpdateError):
+            raise self.mutation
+        return self.mutation
+
+    async def async_ping(self, expected_node: str, vmid: int) -> bool:
+        """Return or raise the next fixed-command PONG outcome."""
+        result = self.ping_results.pop(0)
+        if isinstance(result, PackageUpdateError):
+            raise result
+        return result
+
+
+async def _review_target(manager: PackageManager, node: str, vmid: int) -> None:
+    """Create and confirm one successful scan through public manager methods."""
+    task = manager.async_start_scan(node, vmid, target_is_running=True)
+    await task
+    token = manager.record(node, vmid).token
+    assert token is not None
+    assert manager.confirm_review(node, vmid, token) is True
+
+
+def _update_manager(
+    hass: HomeAssistant,
+    mock_config_entry: MockConfigEntry,
+    transport: UpdateTransport,
+    *,
+    proxmox: MagicMock | None = None,
+    sleep: AsyncMock | None = None,
+    retained_callback: MagicMock | None = None,
+    complete_callback: MagicMock | None = None,
+) -> tuple[PackageManager, MagicMock]:
+    """Build an update-capable manager and native PVE status double."""
+    proxmox = proxmox or MagicMock()
+    proxmox.nodes.return_value.lxc.return_value.status.current.get.return_value = {
+        "status": "running"
+    }
+    return (
+        PackageManager(
+            hass,
+            mock_config_entry,
+            transport=transport,
+            on_state_change=MagicMock(),
+            now=lambda: ATTEMPTED_AT,
+            proxmox_getter=lambda: proxmox,
+            sleep=sleep or AsyncMock(),
+            on_retained_snapshots=retained_callback or MagicMock(),
+            on_update_complete=complete_callback or MagicMock(),
+        ),
+        proxmox,
+    )
+
+
+def _snapshot_patches(*, old_rows: object = ()):
+    """Patch native lifecycle at the manager boundary for orchestration tests."""
+    return (
+        patch(
+            "custom_components.hubinet_ops.packages.manager.async_list_snapshots",
+            new=AsyncMock(return_value=old_rows),
+        ),
+        patch(
+            "custom_components.hubinet_ops.packages.manager.async_create_snapshot",
+            new=AsyncMock(),
+        ),
+        patch(
+            "custom_components.hubinet_ops.packages.manager.async_delete_snapshot",
+            new=AsyncMock(),
+        ),
+        patch(
+            "custom_components.hubinet_ops.packages.manager.generate_snapshot_name",
+            return_value="hubinet-preupd-20260908120000-ab12cd",
+        ),
+    )
+
+
+@pytest.mark.parametrize(
+    "packages",
+    [
+        RESULT.packages
+        + (PendingPackage("gained", "amd64", "1", "2", None, None),),
+        RESULT.packages[:1],
+        (
+            PendingPackage(
+                "openssl", "amd64", "1.0", "1.2", "Debian-Security", True
+            ),
+            RESULT.packages[1],
+        ),
+        (
+            PendingPackage(
+                "openssl", "arm64", "1.0", "1.1", "Debian-Security", True
+            ),
+            RESULT.packages[1],
+        ),
+    ],
+    ids=["gained", "disappeared", "candidate_changed", "architecture_changed"],
+)
+async def test_update_plan_changes_stop_before_snapshot_or_mutation(
+    hass: HomeAssistant,
+    mock_config_entry: MockConfigEntry,
+    packages: tuple[PendingPackage, ...],
+) -> None:
+    """Every equality-bearing plan change requires a normal review cycle."""
+    transport = UpdateTransport()
+    transport.plan = ParsedAptSimulation(packages, 0)
+    manager, _proxmox = _update_manager(hass, mock_config_entry, transport)
+    await _review_target(manager, "pve1", 200)
+
+    list_patch, create_patch, delete_patch, name_patch = _snapshot_patches()
+    with list_patch as list_snapshots, create_patch as create, delete_patch, name_patch:
+        task = manager.async_start_update(
+            "pve1", 200, target_is_running=True, snapshot_permission=True
+        )
+        assert manager.record("pve1", 200) == PackageScanRecord()
+        await task
+
+    record = manager.update_record("pve1", 200)
+    assert record.status is PackageUpdateStatus.FAILED
+    assert record.outcome is PackageUpdateOutcome.PLAN_CHANGED
+    assert record.snapshot_retained is False
+    assert transport.update_calls == 0
+    list_snapshots.assert_not_awaited()
+    create.assert_not_awaited()
+
+
+async def test_metadata_only_plan_differences_do_not_fail_gate(
+    hass: HomeAssistant, mock_config_entry: MockConfigEntry
+) -> None:
+    """Origin/security remain informational and do not bear on equality."""
+    transport = UpdateTransport()
+    transport.plan = ParsedAptSimulation(
+        tuple(replace(package, origin="changed", security=None) for package in RESULT.packages),
+        99,
+    )
+    manager, _proxmox = _update_manager(hass, mock_config_entry, transport)
+    await _review_target(manager, "pve1", 200)
+    patches = _snapshot_patches()
+    with patches[0], patches[1], patches[2], patches[3]:
+        await manager.async_start_update(
+            "pve1", 200, target_is_running=True, snapshot_permission=True
+        )
+    assert manager.update_record("pve1", 200).status is PackageUpdateStatus.SUCCESS
+    assert transport.update_calls == 1
+
+
+async def test_success_reports_actual_inventory_changes_and_deletes_current_snapshot(
+    hass: HomeAssistant, mock_config_entry: MockConfigEntry
+) -> None:
+    """Success counts observed version changes and cleans only current safety state."""
+    transport = UpdateTransport()
+    complete = MagicMock()
+    retained = MagicMock()
+    manager, _proxmox = _update_manager(
+        hass,
+        mock_config_entry,
+        transport,
+        retained_callback=retained,
+        complete_callback=complete,
+    )
+    await _review_target(manager, "pve1", 200)
+    old = "hubinet-preupd-20260907120000-cd34ef"
+    patches = _snapshot_patches(old_rows=[{"name": old}, {"name": "manual"}])
+    with patches[0], patches[1] as create, patches[2] as delete, patches[3]:
+        await manager.async_start_update(
+            "pve1", 200, target_is_running=True, snapshot_permission=True
+        )
+    record = manager.update_record("pve1", 200)
+    assert record.status is PackageUpdateStatus.SUCCESS
+    assert record.outcome is PackageUpdateOutcome.SUCCESS
+    assert record.changed_package_count == 2
+    assert record.liveness is True
+    assert record.snapshot_retained is False
+    retained.assert_called_once_with(
+        "pve1", 200, RetainedSnapshotSummary(total_count=1, names=(old,))
+    )
+    create.assert_awaited_once()
+    delete.assert_awaited_once()
+    assert delete.await_args.args[3] == "hubinet-preupd-20260908120000-ab12cd"
+    complete.assert_called_once_with("pve1", 200, record)
+
+
+async def test_newer_post_gate_version_is_not_a_failure(
+    hass: HomeAssistant, mock_config_entry: MockConfigEntry
+) -> None:
+    """After a passing gate, installed 1.2 is not rejected against reviewed 1.1."""
+    transport = UpdateTransport()
+    transport.mutation = PackageMutationResult(
+        before={("openssl", "amd64"): "1.0"},
+        after={("openssl", "amd64"): "1.2"},
+    )
+    manager, _proxmox = _update_manager(hass, mock_config_entry, transport)
+    await _review_target(manager, "pve1", 200)
+    patches = _snapshot_patches()
+    with patches[0], patches[1], patches[2], patches[3]:
+        await manager.async_start_update(
+            "pve1", 200, target_is_running=True, snapshot_permission=True
+        )
+    record = manager.update_record("pve1", 200)
+    assert record.status is PackageUpdateStatus.SUCCESS
+    assert record.changed_package_count == 1
+
+
+@pytest.mark.parametrize(
+    "failure",
+    [
+        PackageUpdateError(
+            PackageUpdateOutcome.PACKAGE_MANAGER_BUSY, "APT or dpkg is busy"
+        ),
+        PackageUpdateError(PackageUpdateOutcome.MUTATION_FAILED, "APT returned 100"),
+        PackageUpdateError(PackageUpdateOutcome.MUTATION_TIMED_OUT, "timed out"),
+        PackageUpdateError(PackageUpdateOutcome.MUTATION_UNCERTAIN, "uncertain"),
+    ],
+)
+async def test_mutation_failures_retain_confirmed_snapshot(
+    hass: HomeAssistant,
+    mock_config_entry: MockConfigEntry,
+    failure: PackageUpdateError,
+) -> None:
+    """No failed, timed-out, busy, or uncertain mutation deletes safety state."""
+    transport = UpdateTransport()
+    transport.mutation = failure
+    manager, _proxmox = _update_manager(hass, mock_config_entry, transport)
+    await _review_target(manager, "pve1", 200)
+    patches = _snapshot_patches()
+    with patches[0], patches[1], patches[2] as delete, patches[3]:
+        await manager.async_start_update(
+            "pve1", 200, target_is_running=True, snapshot_permission=True
+        )
+    record = manager.update_record("pve1", 200)
+    assert record.status is PackageUpdateStatus.FAILED
+    assert record.outcome is failure.outcome
+    assert record.snapshot_retained is True
+    assert record.snapshot_uncertain is False
+    assert record.snapshot_name == "hubinet-preupd-20260908120000-ab12cd"
+    delete.assert_not_awaited()
+
+
+async def test_snapshot_create_failure_prevents_mutation_and_preserves_uncertainty(
+    hass: HomeAssistant, mock_config_entry: MockConfigEntry
+) -> None:
+    """An unconfirmed native safety snapshot never permits apt mutation."""
+    transport = UpdateTransport()
+    manager, _proxmox = _update_manager(hass, mock_config_entry, transport)
+    await _review_target(manager, "pve1", 200)
+    patches = _snapshot_patches()
+    with (
+        patches[0],
+        patch(
+            "custom_components.hubinet_ops.packages.manager.async_create_snapshot",
+            new=AsyncMock(side_effect=SnapshotError("create uncertain", True)),
+        ),
+        patches[2] as delete,
+        patches[3],
+    ):
+        await manager.async_start_update(
+            "pve1", 200, target_is_running=True, snapshot_permission=True
+        )
+    record = manager.update_record("pve1", 200)
+    assert record.status is PackageUpdateStatus.FAILED
+    assert record.outcome is PackageUpdateOutcome.SNAPSHOT_FAILED
+    assert record.snapshot_retained is False
+    assert record.snapshot_uncertain is True
+    assert record.snapshot_name == "hubinet-preupd-20260908120000-ab12cd"
+    assert transport.update_calls == 0
+    delete.assert_not_awaited()
+
+
+async def test_cancellation_before_snapshot_post_claims_no_snapshot(
+    hass: HomeAssistant, mock_config_entry: MockConfigEntry
+) -> None:
+    """Cancellation before the native POST reports neither retained nor uncertain."""
+    transport = UpdateTransport()
+    manager, _proxmox = _update_manager(hass, mock_config_entry, transport)
+    await _review_target(manager, "pve1", 200)
+    before_submit = asyncio.Event()
+
+    async def blocked_before_submit(*_args, **_kwargs) -> None:
+        before_submit.set()
+        await asyncio.Event().wait()
+
+    patches = _snapshot_patches()
+    with (
+        patches[0],
+        patch(
+            "custom_components.hubinet_ops.packages.manager.async_create_snapshot",
+            new=blocked_before_submit,
+        ),
+        patches[2] as delete,
+        patches[3],
+    ):
+        task = manager.async_start_update(
+            "pve1", 200, target_is_running=True, snapshot_permission=True
+        )
+        await before_submit.wait()
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+    record = manager.update_record("pve1", 200)
+    assert record.outcome is PackageUpdateOutcome.SNAPSHOT_FAILED
+    assert record.snapshot_retained is False
+    assert record.snapshot_uncertain is False
+    assert record.snapshot_name is None
+    assert transport.update_calls == 0
+    delete.assert_not_awaited()
+
+
+async def test_cancellation_after_snapshot_submission_is_uncertain(
+    hass: HomeAssistant, mock_config_entry: MockConfigEntry
+) -> None:
+    """Cancellation after entering native POST but before readiness is uncertain."""
+    transport = UpdateTransport()
+    manager, _proxmox = _update_manager(hass, mock_config_entry, transport)
+    await _review_target(manager, "pve1", 200)
+    after_submit = asyncio.Event()
+
+    async def blocked_after_submit(*_args, **kwargs) -> None:
+        kwargs["on_submit"]()
+        after_submit.set()
+        await asyncio.Event().wait()
+
+    patches = _snapshot_patches()
+    with (
+        patches[0],
+        patch(
+            "custom_components.hubinet_ops.packages.manager.async_create_snapshot",
+            new=blocked_after_submit,
+        ),
+        patches[2] as delete,
+        patches[3],
+    ):
+        task = manager.async_start_update(
+            "pve1", 200, target_is_running=True, snapshot_permission=True
+        )
+        await after_submit.wait()
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+    record = manager.update_record("pve1", 200)
+    assert record.outcome is PackageUpdateOutcome.SNAPSHOT_FAILED
+    assert record.snapshot_retained is False
+    assert record.snapshot_uncertain is True
+    assert record.snapshot_name == "hubinet-preupd-20260908120000-ab12cd"
+    assert transport.update_calls == 0
+    delete.assert_not_awaited()
+
+
+async def test_pruned_interrupted_mutation_still_reports_retained_snapshot(
+    hass: HomeAssistant, mock_config_entry: MockConfigEntry
+) -> None:
+    """Target pruning discards state but still reports interrupted safety state."""
+    transport = UpdateTransport()
+    mutation_entered = asyncio.Event()
+
+    async def blocked_mutation(_node: str, _vmid: int) -> PackageMutationResult:
+        mutation_entered.set()
+        await asyncio.Event().wait()
+        raise AssertionError("unreachable")
+
+    transport.async_update = blocked_mutation  # type: ignore[method-assign]
+    complete = MagicMock()
+    manager, _proxmox = _update_manager(
+        hass, mock_config_entry, transport, complete_callback=complete
+    )
+    await _review_target(manager, "pve1", 200)
+    patches = _snapshot_patches()
+    with patches[0], patches[1], patches[2] as delete, patches[3]:
+        task = manager.async_start_update(
+            "pve1", 200, target_is_running=True, snapshot_permission=True
+        )
+        await mutation_entered.wait()
+        manager.async_prune(current_targets=set())
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+    assert manager.update_record("pve1", 200) == PackageUpdateRecord()
+    delete.assert_not_awaited()
+    complete.assert_called_once()
+    outcome = complete.call_args.args[2]
+    assert outcome.outcome is PackageUpdateOutcome.MUTATION_UNCERTAIN
+    assert outcome.snapshot_retained is True
+    assert outcome.snapshot_uncertain is False
+    assert outcome.snapshot_name == "hubinet-preupd-20260908120000-ab12cd"
+
+
+async def test_liveness_retries_once_then_succeeds(
+    hass: HomeAssistant, mock_config_entry: MockConfigEntry
+) -> None:
+    """Native running plus transient /bin/true failure can still produce PONG."""
+    transport = UpdateTransport()
+    transport.ping_results = [
+        PackageUpdateError(PackageUpdateOutcome.LIVENESS_FAILED, "transient"),
+        True,
+    ]
+    sleep = AsyncMock()
+    manager, _proxmox = _update_manager(
+        hass, mock_config_entry, transport, sleep=sleep
+    )
+    await _review_target(manager, "pve1", 200)
+    patches = _snapshot_patches()
+    with patches[0], patches[1], patches[2], patches[3]:
+        await manager.async_start_update(
+            "pve1", 200, target_is_running=True, snapshot_permission=True
+        )
+    assert manager.update_record("pve1", 200).liveness is True
+    sleep.assert_awaited_once_with(3.0)
+
+
+@pytest.mark.parametrize("native_running", [True, False])
+async def test_repeated_liveness_failure_or_stopped_native_status_retains_snapshot(
+    hass: HomeAssistant,
+    mock_config_entry: MockConfigEntry,
+    native_running: bool,
+) -> None:
+    """No PONG or a stopped native LXC leaves the exact safety snapshot."""
+    transport = UpdateTransport()
+    transport.ping_results = [False, False]
+    manager, proxmox = _update_manager(hass, mock_config_entry, transport)
+    if not native_running:
+        proxmox.nodes.return_value.lxc.return_value.status.current.get.return_value = {
+            "status": "stopped"
+        }
+    await _review_target(manager, "pve1", 200)
+    patches = _snapshot_patches()
+    with patches[0], patches[1], patches[2] as delete, patches[3]:
+        await manager.async_start_update(
+            "pve1", 200, target_is_running=True, snapshot_permission=True
+        )
+    record = manager.update_record("pve1", 200)
+    assert record.status is PackageUpdateStatus.FAILED
+    assert record.outcome is (
+        PackageUpdateOutcome.LIVENESS_FAILED
+        if native_running
+        else PackageUpdateOutcome.GUEST_UNAVAILABLE
+    )
+    assert record.liveness is False
+    assert record.snapshot_retained is True
+    delete.assert_not_awaited()
+
+
+async def test_cleanup_failure_preserves_success_and_reports_retained_name(
+    hass: HomeAssistant, mock_config_entry: MockConfigEntry
+) -> None:
+    """Cleanup failure is orthogonal to successful mutation and liveness."""
+    transport = UpdateTransport()
+    manager, _proxmox = _update_manager(hass, mock_config_entry, transport)
+    await _review_target(manager, "pve1", 200)
+    patches = _snapshot_patches()
+    with (
+        patches[0],
+        patches[1],
+        patch(
+            "custom_components.hubinet_ops.packages.manager.async_delete_snapshot",
+            new=AsyncMock(side_effect=SnapshotError("delete failed", True)),
+        ),
+        patches[3],
+    ):
+        await manager.async_start_update(
+            "pve1", 200, target_is_running=True, snapshot_permission=True
+        )
+    record = manager.update_record("pve1", 200)
+    assert record.status is PackageUpdateStatus.SUCCESS
+    assert record.outcome is PackageUpdateOutcome.SUCCESS
+    assert record.liveness is True
+    assert record.snapshot_cleanup_failed is True
+    assert record.snapshot_retained is True
+    assert record.snapshot_name == "hubinet-preupd-20260908120000-ab12cd"
+
+
+async def test_scan_update_same_vmid_exclusion_and_unrelated_scan_progress(
+    hass: HomeAssistant, mock_config_entry: MockConfigEntry
+) -> None:
+    """Scan/update exclude by VMID while unrelated scan slots remain separate."""
+    transport = UpdateTransport()
+    manager, _proxmox = _update_manager(hass, mock_config_entry, transport)
+    await _review_target(manager, "pve1", 200)
+    transport.plan_release.clear()
+    patches = _snapshot_patches()
+    with patches[0], patches[1], patches[2], patches[3]:
+        update_task = manager.async_start_update(
+            "pve1", 200, target_is_running=True, snapshot_permission=True
+        )
+        await transport.plan_entered.wait()
+        with pytest.raises(PackageUpdateError) as duplicate:
+            manager.async_start_update(
+                "pve1", 200, target_is_running=True, snapshot_permission=True
+            )
+        assert duplicate.value.outcome is PackageUpdateOutcome.PACKAGE_MANAGER_BUSY
+        with pytest.raises(PackageScanError) as same_scan:
+            manager.async_start_scan("pve1", 200, target_is_running=True)
+        assert same_scan.value.failure is PackageScanFailure.PACKAGE_MANAGER_BUSY
+
+        unrelated = manager.async_start_scan("pve1", 201, target_is_running=True)
+        await unrelated
+        assert manager.record("pve1", 201).status is PackageScanStatus.SUCCESS
+        transport.plan_release.set()
+        await update_task
+
+
+async def test_update_while_same_vmid_scan_running_is_rejected(
+    hass: HomeAssistant, mock_config_entry: MockConfigEntry
+) -> None:
+    """An in-flight scan wins synchronous exclusion over stale review state."""
+    transport = GateTransport()
+    manager = PackageManager(
+        hass,
+        mock_config_entry,
+        transport=transport,
+        on_state_change=MagicMock(),
+        proxmox_getter=MagicMock(),
+    )
+    scan = manager.async_start_scan("pve1", 200, target_is_running=True)
+    await transport.entered(200).wait()
+    with pytest.raises(PackageUpdateError) as caught:
+        manager.async_start_update(
+            "pve1", 200, target_is_running=True, snapshot_permission=True
+        )
+    assert caught.value.outcome is PackageUpdateOutcome.PACKAGE_MANAGER_BUSY
+    transport.release(200)
+    await scan

@@ -13,16 +13,19 @@ import pytest
 from custom_components.hubinet_ops.packages.models import (
     PackageScanError,
     PackageScanFailure,
+    PackageUpdateError,
+    PackageUpdateOutcome,
 )
 from custom_components.hubinet_ops.packages.transport import (
+    PROBE_TIMEOUT_SECONDS,
+    TRANSPORT_TIMEOUT_SECONDS,
+    UPDATE_TRANSPORT_TIMEOUT_SECONDS,
     AsyncSSHPackageTransport,
     PackageHelperProtocolError,
     PackageHelperUnavailableError,
     PackageTransportAuthenticationError,
     PackageTransportConnectionError,
     PackageTransportHostKeyError,
-    PROBE_TIMEOUT_SECONDS,
-    TRANSPORT_TIMEOUT_SECONDS,
 )
 from homeassistant.core import HomeAssistant
 
@@ -891,3 +894,138 @@ async def test_stderr_diagnostics_never_corrupt_the_json_response(
     )
     result = await transport.async_scan("pve1", 200)
     assert result.not_upgraded_count == 7
+
+
+def _operation_response(operation: str, evidence: dict[str, object]) -> dict[str, object]:
+    """Build one successful typed package-operation response."""
+    return {
+        "protocol_version": 1,
+        "helper_version": 3,
+        "operation": operation,
+        "target": {"node": "pve1", "vmid": 200},
+        "ok": True,
+        "evidence": evidence,
+    }
+
+
+async def test_plan_transport_returns_parsed_simulation_without_scan_fields(
+    hass: HomeAssistant, tmp_path: Path
+) -> None:
+    """Execution-time planning returns the smallest truthful parser type."""
+    simulation = (
+        "Inst openssl [1.0] (1.1 Debian-Security:12/stable-security [amd64])\n"
+        "1 upgraded, 0 newly installed, 0 to remove and 4 not upgraded.\n"
+    )
+    transport, _connector, connection, *_ = await _transport(
+        hass,
+        tmp_path,
+        _operation_response(
+            "plan_packages",
+            {
+                "native_architecture": "amd64\n",
+                "installed_inventory": "openssl\tamd64\t1.0\tinstalled\n",
+                "simulation": simulation,
+            },
+        ),
+    )
+    result = await transport.async_plan("pve1", 200)
+    assert result.not_upgraded_count == 4
+    assert result.packages[0].candidate_version == "1.1"
+    assert json.loads(connection.process_kwargs["input"])["operation"] == (
+        "plan_packages"
+    )
+
+
+async def test_update_transport_parses_sane_before_and_after_inventory(
+    hass: HomeAssistant, tmp_path: Path
+) -> None:
+    """Mutation evidence is package-system sanity, not candidate attestation."""
+    transport, _connector, connection, *_ = await _transport(
+        hass,
+        tmp_path,
+        _operation_response(
+            "update_packages",
+            {
+                "before_inventory": "openssl\tamd64\t1.0\tinstalled\n",
+                # A newer-than-reviewed candidate is accepted after the gate.
+                "after_inventory": "openssl\tamd64\t1.2\tinstalled\n",
+            },
+        ),
+    )
+    result = await transport.async_update("pve1", 200)
+    assert result.before == {("openssl", "amd64"): "1.0"}
+    assert result.after == {("openssl", "amd64"): "1.2"}
+    assert json.loads(connection.process_kwargs["input"])["operation"] == (
+        "update_packages"
+    )
+
+
+@pytest.mark.parametrize(
+    "after_inventory",
+    [
+        "malformed\n",
+        "openssl\tamd64\t1.1\thalf-configured\n",
+    ],
+)
+async def test_update_transport_rejects_malformed_or_unfinished_post_inventory(
+    hass: HomeAssistant, tmp_path: Path, after_inventory: str
+) -> None:
+    """Post-mutation dpkg evidence must parse and contain no unfinished state."""
+    transport, *_ = await _transport(
+        hass,
+        tmp_path,
+        _operation_response(
+            "update_packages",
+            {
+                "before_inventory": "openssl\tamd64\t1.0\tinstalled\n",
+                "after_inventory": after_inventory,
+            },
+        ),
+    )
+    with pytest.raises(PackageUpdateError) as caught:
+        await transport.async_update("pve1", 200)
+    assert caught.value.outcome is PackageUpdateOutcome.MUTATION_FAILED
+
+
+@pytest.mark.parametrize("operation", ["plan_packages", "update_packages"])
+async def test_old_helper_operation_response_is_actionable_outdated_error(
+    hass: HomeAssistant, tmp_path: Path, operation: str
+) -> None:
+    """An older protocol-1 helper gets bootstrap guidance, not parser noise."""
+    old_helper_response = {
+        "protocol_version": 1,
+        "helper_version": 2,
+        "operation": "scan_packages",
+        "target": {},
+        "ok": False,
+        "error": {"classification": "execution_failed", "message": "unknown"},
+    }
+    transport, *_ = await _transport(hass, tmp_path, old_helper_response)
+    call = transport.async_plan if operation == "plan_packages" else transport.async_update
+    with pytest.raises(PackageUpdateError) as caught:
+        await call("pve1", 200)
+    assert caught.value.outcome is PackageUpdateOutcome.HELPER_OUTDATED
+    assert "bootstrap" in str(caught.value)
+
+
+async def test_ping_transport_requires_exact_pong_evidence(
+    hass: HomeAssistant, tmp_path: Path
+) -> None:
+    """The typed liveness response carries no arbitrary command output."""
+    transport, _connector, connection, *_ = await _transport(
+        hass, tmp_path, _operation_response("ping", {"pong": True})
+    )
+    assert await transport.async_ping("pve1", 200) is True
+    assert json.loads(connection.process_kwargs["input"])["operation"] == "ping"
+
+    malformed, *_ = await _transport(
+        hass, tmp_path, _operation_response("ping", {"pong": True, "extra": "x"})
+    )
+    with pytest.raises(PackageUpdateError) as caught:
+        await malformed.async_ping("pve1", 200)
+    assert caught.value.outcome is PackageUpdateOutcome.LIVENESS_FAILED
+
+
+def test_update_transport_timeout_exceeds_helper_deadline() -> None:
+    """The helper can classify its own bounded update timeout before SSH does."""
+    assert UPDATE_TRANSPORT_TIMEOUT_SECONDS > 1800

@@ -40,6 +40,7 @@ from .const import (
     NODE_ONLINE,
 )
 from .packages.manager import PackageManager
+from .packages.presentation import notify_retained_snapshots, notify_update_complete
 from .packages.transport import AsyncSSHPackageTransport
 
 type ProxmoxConfigEntry = ConfigEntry[ProxmoxCoordinator]
@@ -135,6 +136,13 @@ class ProxmoxCoordinator(DataUpdateCoordinator[dict[str, ProxmoxNodeData]]):
             config_entry,
             transport=package_transport,
             on_state_change=self.async_update_listeners,
+            proxmox_getter=lambda: self.proxmox,
+            on_retained_snapshots=lambda node, vmid, names: (
+                notify_retained_snapshots(hass, node, vmid, names)
+            ),
+            on_update_complete=lambda node, vmid, record: notify_update_complete(
+                hass, node, vmid, record
+            ),
         )
         self.package_node: str | None = config_entry.data.get(CONF_PACKAGE_NODE)
 

@@ -44,7 +44,7 @@ PACKAGE_SCAN_KNOWN_HOSTS = ".ssh/known_hosts"
 
 GUIDED_USERNAME = "hubinetnext@pve"
 GUIDED_TOKEN_ID = "ha"
-INTEGRATION_VERSION = "2026.9.1.3"
+INTEGRATION_VERSION = "2026.9.1.4"
 
 
 class ProxmoxPermission(StrEnum):

@@ -31,11 +31,48 @@ class PackageScanStatus(StrEnum):
     FAILED = "failed"
 
 
+class PackageUpdateOutcome(StrEnum):
+    """Bounded outcome for a package update attempt."""
+
+    PLAN_CHANGED = "plan_changed"
+    PLAN_FAILED = "plan_failed"
+    SNAPSHOT_FAILED = "snapshot_failed"
+    PACKAGE_MANAGER_BUSY = "package_manager_busy"
+    MUTATION_FAILED = "mutation_failed"
+    MUTATION_TIMED_OUT = "mutation_timed_out"
+    MUTATION_UNCERTAIN = "mutation_uncertain"
+    GUEST_UNAVAILABLE = "guest_unavailable"
+    LIVENESS_FAILED = "liveness_failed"
+    HELPER_OUTDATED = "helper_outdated"
+    SUCCESS = "success"
+
+
+class PackageUpdateStatus(StrEnum):
+    """Latest in-memory package update attempt state."""
+
+    NEVER = "never"
+    RUNNING = "running"
+    SUCCESS = "success"
+    FAILED = "failed"
+
+
 @dataclass(slots=True)
 class PackageScanError(Exception):
     """A bounded package scan failure safe to expose to Home Assistant."""
 
     failure: PackageScanFailure
+    message: str
+
+    def __str__(self) -> str:
+        """Return the bounded failure message."""
+        return self.message
+
+
+@dataclass(slots=True)
+class PackageUpdateError(Exception):
+    """A bounded package update failure safe to expose to Home Assistant."""
+
+    outcome: PackageUpdateOutcome
     message: str
 
     def __str__(self) -> str:
@@ -64,6 +101,30 @@ class PackageScanResult:
     packages: tuple[PendingPackage, ...]
     reboot_required: bool | None
     not_upgraded_count: int
+
+
+@dataclass(frozen=True, slots=True)
+class PackageMutationResult:
+    """Parsed package inventories observed immediately around mutation."""
+
+    before: dict[tuple[str, str], str]
+    after: dict[tuple[str, str], str]
+
+
+@dataclass(frozen=True, slots=True)
+class PackageUpdateRecord:
+    """Small ephemeral outcome of the latest package update attempt."""
+
+    status: PackageUpdateStatus = PackageUpdateStatus.NEVER
+    last_attempt: datetime | None = None
+    outcome: PackageUpdateOutcome | None = None
+    snapshot_retained: bool = False
+    snapshot_uncertain: bool = False
+    snapshot_cleanup_failed: bool = False
+    snapshot_name: str | None = None
+    liveness: bool | None = None
+    changed_package_count: int | None = None
+    error_message: str | None = None
 
 
 @dataclass(frozen=True, slots=True)

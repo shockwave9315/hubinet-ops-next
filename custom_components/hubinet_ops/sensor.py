@@ -31,7 +31,12 @@ from .entity import (
     ProxmoxVMEntity,
 )
 from .helpers import is_granted
-from .packages.models import PackageScanRecord, PackageScanStatus
+from .packages.models import (
+    PackageScanRecord,
+    PackageScanStatus,
+    PackageUpdateRecord,
+    PackageUpdateStatus,
+)
 
 PARALLEL_UPDATES = 0
 
@@ -492,6 +497,13 @@ PACKAGE_SCAN_SENSOR = SensorEntityDescription(
     translation_key="pending_packages",
     entity_category=EntityCategory.DIAGNOSTIC,
 )
+PACKAGE_UPDATE_SENSOR = SensorEntityDescription(
+    key="package_update_status",
+    translation_key="package_update_status",
+    device_class=SensorDeviceClass.ENUM,
+    options=list(PackageUpdateStatus),
+    entity_category=EntityCategory.DIAGNOSTIC,
+)
 
 
 async def async_setup_entry(
@@ -539,9 +551,13 @@ async def async_setup_entry(
         ]
         if coordinator.package_manager.configured:
             entities.extend(
-                PackageScanSensor(coordinator, container, node_data)
+                entity
                 for node_data, container in containers
                 if node_data.node["node"] == coordinator.package_node
+                for entity in (
+                    PackageScanSensor(coordinator, container, node_data),
+                    PackageUpdateSensor(coordinator, container, node_data),
+                )
             )
         async_add_entities(entities)
 
@@ -763,6 +779,56 @@ class PackageScanSensor(ProxmoxContainerEntity, SensorEntity):
             self._node_name, self.device_id, token
         )
         return {"reviewed": confirmed}
+
+
+class PackageUpdateSensor(ProxmoxContainerEntity, SensorEntity):
+    """Latest in-memory package update outcome for one package-eligible LXC."""
+
+    def __init__(
+        self,
+        coordinator: ProxmoxCoordinator,
+        container_data: dict[str, Any],
+        node_data: ProxmoxNodeData,
+    ) -> None:
+        """Initialize the package update outcome sensor."""
+        super().__init__(coordinator, PACKAGE_UPDATE_SENSOR, container_data, node_data)
+
+    @property
+    def _update_record(self) -> PackageUpdateRecord:
+        return self.coordinator.package_manager.update_record(
+            self._node_name, self.device_id
+        )
+
+    @property
+    @override
+    def native_value(self) -> str:
+        """Return the bounded lifecycle state of the latest attempt."""
+        return self._update_record.status
+
+    @property
+    @override
+    def extra_state_attributes(self) -> dict[str, Any]:
+        """Return bounded outcome facts, never package rows."""
+        record = self._update_record
+        attributes: dict[str, Any] = {"update_status": record.status}
+        if record.last_attempt is not None:
+            attributes["last_attempt"] = record.last_attempt.isoformat()
+        if record.outcome is not None:
+            attributes["outcome"] = record.outcome
+        if record.changed_package_count is not None:
+            attributes["changed_package_count"] = record.changed_package_count
+        if record.liveness is not None:
+            attributes["liveness"] = record.liveness
+        attributes["retained_snapshot"] = record.snapshot_retained
+        attributes["snapshot_uncertain"] = record.snapshot_uncertain
+        attributes["snapshot_cleanup_failed"] = record.snapshot_cleanup_failed
+        if record.snapshot_retained and record.snapshot_name is not None:
+            attributes["retained_snapshot_name"] = record.snapshot_name
+        if record.snapshot_uncertain and record.snapshot_name is not None:
+            attributes["uncertain_snapshot_name"] = record.snapshot_name
+        if record.error_message is not None:
+            attributes["last_error"] = record.error_message
+        return attributes
 
 
 class ProxmoxStorageSensor(ProxmoxStorageEntity, SensorEntity):
