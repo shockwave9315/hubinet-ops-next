@@ -26,6 +26,10 @@ Inst apt [2.6.1] (2.6.2 Debian:12/oldstable [amd64])
 2 upgraded, 0 newly installed, 0 to remove and 41 not upgraded.
 """
 TWO_INVENTORY = "openssl\tamd64\t3.0.11-1\tinstalled\napt\tamd64\t2.6.1\tinstalled\n"
+AUTOREMOVE_SIMULATION = (
+    "Remv libslirp0 [4.7.0-1]\n"
+    "0 upgraded, 0 newly installed, 1 to remove and 0 not upgraded.\n"
+)
 
 
 def _load_helper() -> ModuleType:
@@ -58,6 +62,7 @@ class FakeHelperRunner:
         update_stderr: str = "",
         mutation_returncode: int = 0,
         mutation_stderr: str = "",
+        autoremove_simulation: str = AUTOREMOVE_SIMULATION,
         inventory_outputs: tuple[str, ...] | None = None,
         ping_returncode: int = 0,
         reboot_returncode: int = 1,
@@ -70,6 +75,7 @@ class FakeHelperRunner:
         self.update_stderr = update_stderr
         self.mutation_returncode = mutation_returncode
         self.mutation_stderr = mutation_stderr
+        self.autoremove_simulation = autoremove_simulation
         self.inventory_outputs = inventory_outputs or (TWO_INVENTORY,)
         self.inventory_reads = 0
         self.ping_returncode = ping_returncode
@@ -98,6 +104,12 @@ class FakeHelperRunner:
             )
         if "apt-get -s upgrade" in rendered:
             return helper.CommandResult(0, TWO_UPDATES.encode(), b"")
+        if "apt-get -s autoremove" in rendered:
+            return helper.CommandResult(0, self.autoremove_simulation.encode(), b"")
+        if "apt-get autoremove" in rendered:
+            return helper.CommandResult(
+                self.mutation_returncode, b"", self.mutation_stderr.encode()
+            )
         if "apt-get upgrade" in rendered:
             return helper.CommandResult(
                 self.mutation_returncode, b"", self.mutation_stderr.encode()
@@ -139,7 +151,7 @@ def test_helper_uses_fixed_commands_and_returns_versioned_identity() -> None:
     response = _handle(runner)
     assert response["ok"] is True
     assert response["protocol_version"] == 1
-    assert response["helper_version"] == 3
+    assert response["helper_version"] == 4
     assert response["operation"] == "scan_packages"
     assert response["target"] == {"node": "pve1", "vmid": 200}
     assert response["evidence"]["reboot_required"] is True
@@ -169,7 +181,7 @@ def test_probe_returns_local_node_and_never_calls_pct() -> None:
     )
     assert response == {
         "protocol_version": 1,
-        "helper_version": 3,
+        "helper_version": 4,
         "operation": "probe",
         "ok": True,
         "node": "pve1",
@@ -236,6 +248,88 @@ def test_plan_uses_current_apt_lists_without_refresh_or_version_gate() -> None:
     assert not any("apt-get --version" in command for command in rendered)
     assert not any("/etc/os-release" in command for command in rendered)
     assert sum(call[0][4:] == helper.APT_SIMULATION_COMMAND for call in runner.calls) == 1
+
+
+def test_cleanup_operations_use_one_fixed_safe_policy_and_existing_lock() -> None:
+    """Plan and mutation pin removal semantics without caller package argv."""
+    plan_runner = FakeHelperRunner(
+        inventory_outputs=("libslirp0\tamd64\t4.7.0-1\tinstalled\n",)
+    )
+    locked: list[int] = []
+
+    @contextmanager
+    def lock(vmid: int):
+        locked.append(vmid)
+        yield
+
+    plan = helper.handle_request(
+        _request(operation="plan_autoremove"),
+        runner=plan_runner,
+        lock_factory=lock,
+    )
+    assert plan["ok"] is True
+    assert set(plan["evidence"]) == {
+        "native_architecture",
+        "installed_inventory",
+        "autoremove_simulation",
+    }
+
+    mutation_runner = FakeHelperRunner(
+        inventory_outputs=(
+            "libslirp0\tamd64\t4.7.0-1\tinstalled\n",
+            "",
+        )
+    )
+    mutation = helper.handle_request(
+        _request(operation="autoremove_packages"),
+        runner=mutation_runner,
+        lock_factory=lock,
+    )
+    assert mutation["ok"] is True
+    assert locked == [200, 200]
+
+    plan_command = next(
+        argv
+        for argv, *_ in plan_runner.calls
+        if argv[4:] == helper.APT_AUTOREMOVE_SIMULATION_COMMAND
+    )
+    mutation_command = next(
+        argv
+        for argv, *_ in mutation_runner.calls
+        if argv[4:] == helper.APT_AUTOREMOVE_MUTATION_COMMAND
+    )
+    required = {
+        "APT::Get::Remove=true",
+        "APT::Get::Purge=false",
+        "APT::Protect-Kernels=true",
+        "APT::Ignore-Hold=false",
+        "APT::Get::allow-remove-essential=false",
+        "APT::Get::allow-change-held-packages=false",
+        "APT::Get::AllowUnauthenticated=false",
+        "APT::Get::Force-Yes=false",
+        "APT::Get::allow-downgrades=false",
+    }
+    assert required <= set(plan_command)
+    assert required <= set(mutation_command)
+    assert plan_command[-len(helper.APT_CLEANUP_OPTIONS) :] == (
+        mutation_command[-len(helper.APT_CLEANUP_OPTIONS) :]
+    )
+    for command in (plan_command, mutation_command):
+        assert "APT::Get::Remove=false" not in command
+        assert "--purge" not in command
+        assert "libslirp0" not in command
+        assert "APT::Get::Upgrade-Allow-New" not in command
+        assert not any(value.startswith("Dpkg::Options") for value in command)
+        assert "update" not in command
+
+
+def test_cleanup_operation_requests_have_no_package_input() -> None:
+    """The exact existing envelope cannot carry a deletion plan or argv."""
+    for operation in ("plan_autoremove", "autoremove_packages"):
+        request = _request(operation=operation)
+        assert helper.validate_request(request) == (operation, "pve1", 200)
+        with pytest.raises(helper.RequestError):
+            helper.validate_request({**request, "packages": ["libslirp0"]})
 
 
 def test_update_uses_one_fixed_bare_upgrade_without_plan_material() -> None:

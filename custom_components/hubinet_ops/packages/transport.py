@@ -24,7 +24,9 @@ from .models import (
 from .parser import (
     PackageScanParseError,
     ParsedAptSimulation,
+    ParsedAutoremoveSimulation,
     parse_apt_simulation,
+    parse_autoremove_simulation,
     parse_installed_inventory,
     parse_os_release,
 )
@@ -36,6 +38,8 @@ OPERATION_PROBE = "probe"
 OPERATION_SCAN_PACKAGES = "scan_packages"
 OPERATION_PLAN_PACKAGES = "plan_packages"
 OPERATION_UPDATE_PACKAGES = "update_packages"
+OPERATION_PLAN_AUTOREMOVE = "plan_autoremove"
+OPERATION_AUTOREMOVE_PACKAGES = "autoremove_packages"
 OPERATION_PING = "ping"
 
 _NODE_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9.-]{0,62}")
@@ -162,6 +166,7 @@ class AsyncSSHPackageTransport:
         self._port = port
         self._client_key: asyncssh.SSHKey | None = None
         self._known_hosts_data: bytes | None = None
+        self._observed_helper_version: int | None = None
         if private_key and host_key:
             self._client_key = asyncssh.import_private_key(private_key.encode())
             if self._client_key.get_algorithm() != "ssh-ed25519":
@@ -178,6 +183,11 @@ class AsyncSSHPackageTransport:
     def configured(self) -> bool:
         """Return whether both in-memory trust inputs are present."""
         return self._client_key is not None and self._known_hosts_data is not None
+
+    @property
+    def observed_helper_version(self) -> int | None:
+        """Return the latest structurally valid helper version seen on the wire."""
+        return self._observed_helper_version
 
     async def async_prepare(self, hass: HomeAssistant) -> None:
         """Retain the package-manager setup hook; no filesystem I/O is needed."""
@@ -340,6 +350,90 @@ class AsyncSSHPackageTransport:
             )
         return PackageMutationResult(before=before.installed, after=after.installed)
 
+    async def async_plan_autoremove(
+        self, expected_node: str, vmid: int
+    ) -> ParsedAutoremoveSimulation:
+        """Return a fresh fixed autoremove simulation without metadata refresh."""
+        payload = await self._async_update_request(
+            expected_node,
+            vmid,
+            OPERATION_PLAN_AUTOREMOVE,
+            timeout=TRANSPORT_TIMEOUT_SECONDS,
+            timeout_outcome=PackageUpdateOutcome.PLAN_FAILED,
+            connection_outcome=PackageUpdateOutcome.PLAN_FAILED,
+        )
+        evidence = _parse_update_response(
+            payload, expected_node, vmid, OPERATION_PLAN_AUTOREMOVE
+        )
+        try:
+            native_architecture = evidence["native_architecture"]
+            installed_inventory = evidence["installed_inventory"]
+            simulation = evidence["autoremove_simulation"]
+        except KeyError as err:
+            raise PackageUpdateError(
+                PackageUpdateOutcome.PLAN_FAILED,
+                "cleanup plan helper returned incomplete evidence",
+            ) from err
+        if not all(
+            isinstance(value, str)
+            for value in (native_architecture, installed_inventory, simulation)
+        ):
+            raise PackageUpdateError(
+                PackageUpdateOutcome.PLAN_FAILED,
+                "cleanup plan helper returned malformed evidence",
+            )
+        try:
+            return parse_autoremove_simulation(
+                simulation,
+                native_architecture=native_architecture,
+                installed_inventory=installed_inventory,
+            )
+        except PackageScanParseError as err:
+            raise PackageUpdateError(PackageUpdateOutcome.PLAN_FAILED, str(err)) from err
+
+    async def async_autoremove(
+        self, expected_node: str, vmid: int
+    ) -> PackageMutationResult:
+        """Run the fixed autoremove mutation and parse inventory evidence."""
+        payload = await self._async_update_request(
+            expected_node,
+            vmid,
+            OPERATION_AUTOREMOVE_PACKAGES,
+            timeout=UPDATE_TRANSPORT_TIMEOUT_SECONDS,
+            timeout_outcome=PackageUpdateOutcome.MUTATION_TIMED_OUT,
+            connection_outcome=PackageUpdateOutcome.MUTATION_UNCERTAIN,
+        )
+        evidence = _parse_update_response(
+            payload, expected_node, vmid, OPERATION_AUTOREMOVE_PACKAGES
+        )
+        try:
+            before_text = evidence["before_inventory"]
+            after_text = evidence["after_inventory"]
+        except KeyError as err:
+            raise PackageUpdateError(
+                PackageUpdateOutcome.MUTATION_UNCERTAIN,
+                "autoremove helper returned incomplete inventory evidence",
+            ) from err
+        if not isinstance(before_text, str) or not isinstance(after_text, str):
+            raise PackageUpdateError(
+                PackageUpdateOutcome.MUTATION_UNCERTAIN,
+                "autoremove helper returned malformed inventory evidence",
+            )
+        try:
+            before = parse_installed_inventory(before_text)
+            after = parse_installed_inventory(after_text)
+        except PackageScanParseError as err:
+            raise PackageUpdateError(
+                PackageUpdateOutcome.MUTATION_FAILED,
+                "post-autoremove package inventory could not be parsed",
+            ) from err
+        if before.unfinished or after.unfinished:
+            raise PackageUpdateError(
+                PackageUpdateOutcome.MUTATION_FAILED,
+                "dpkg reports unfinished package state after autoremove",
+            )
+        return PackageMutationResult(before=before.installed, after=after.installed)
+
     async def async_ping(self, expected_node: str, vmid: int) -> bool:
         """Ask the validated running LXC to execute only ``/bin/true``."""
         payload = await self._async_update_request(
@@ -458,6 +552,12 @@ class AsyncSSHPackageTransport:
             raise PackageHelperProtocolError(
                 "package helper returned a malformed response"
             ) from err
+        if (
+            isinstance(payload, Mapping)
+            and type(payload.get("helper_version")) is int
+            and payload["helper_version"] >= 1
+        ):
+            self._observed_helper_version = payload["helper_version"]
         # The deployed helper contract is ok:true -> exit 0; ok:false may
         # legitimately use a nonzero exit. A structured success payload
         # paired with an abnormal exit (including no observed exit code at
@@ -622,7 +722,10 @@ def _parse_update_response(
             outcome = PackageUpdateOutcome.PACKAGE_MANAGER_BUSY
         elif classification in {"guest_unavailable", "identity_mismatch"}:
             outcome = PackageUpdateOutcome.GUEST_UNAVAILABLE
-        elif expected_operation == OPERATION_PLAN_PACKAGES:
+        elif expected_operation in {
+            OPERATION_PLAN_PACKAGES,
+            OPERATION_PLAN_AUTOREMOVE,
+        }:
             outcome = PackageUpdateOutcome.PLAN_FAILED
         elif expected_operation == OPERATION_PING:
             outcome = PackageUpdateOutcome.LIVENESS_FAILED
@@ -636,7 +739,10 @@ def _parse_update_response(
     if not isinstance(evidence, Mapping):
         outcome = (
             PackageUpdateOutcome.PLAN_FAILED
-            if expected_operation == OPERATION_PLAN_PACKAGES
+            if expected_operation in {
+                OPERATION_PLAN_PACKAGES,
+                OPERATION_PLAN_AUTOREMOVE,
+            }
             else (
                 PackageUpdateOutcome.LIVENESS_FAILED
                 if expected_operation == OPERATION_PING

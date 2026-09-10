@@ -18,11 +18,13 @@ import time
 from typing import Any
 
 PROTOCOL_VERSION = 1
-HELPER_VERSION = 3
+HELPER_VERSION = 4
 OPERATION_PROBE = "probe"
 OPERATION_SCAN_PACKAGES = "scan_packages"
 OPERATION_PLAN_PACKAGES = "plan_packages"
 OPERATION_UPDATE_PACKAGES = "update_packages"
+OPERATION_PLAN_AUTOREMOVE = "plan_autoremove"
+OPERATION_AUTOREMOVE_PACKAGES = "autoremove_packages"
 OPERATION_PING = "ping"
 # Retained as a compatibility alias for existing helper tests/importers.
 OPERATION = OPERATION_SCAN_PACKAGES
@@ -117,6 +119,44 @@ APT_MUTATION_COMMAND = (
     "apt-get",
     "upgrade",
     *APT_HARDENED_OPTIONS,
+)
+APT_CLEANUP_OPTIONS = (
+    "-y",
+    "-o",
+    "APT::Get::Remove=true",
+    "-o",
+    "APT::Get::Purge=false",
+    "-o",
+    "APT::Protect-Kernels=true",
+    "-o",
+    "APT::Ignore-Hold=false",
+    "-o",
+    "APT::Get::allow-remove-essential=false",
+    "-o",
+    "APT::Get::allow-change-held-packages=false",
+    "-o",
+    "APT::Get::AllowUnauthenticated=false",
+    "-o",
+    "APT::Get::Force-Yes=false",
+    "-o",
+    "APT::Get::allow-downgrades=false",
+)
+APT_AUTOREMOVE_SIMULATION_COMMAND = (
+    "env",
+    "LC_ALL=C",
+    "DEBIAN_FRONTEND=noninteractive",
+    "apt-get",
+    "-s",
+    "autoremove",
+    *APT_CLEANUP_OPTIONS,
+)
+APT_AUTOREMOVE_MUTATION_COMMAND = (
+    "env",
+    "LC_ALL=C",
+    "DEBIAN_FRONTEND=noninteractive",
+    "apt-get",
+    "autoremove",
+    *APT_CLEANUP_OPTIONS,
 )
 INVENTORY_COMMAND = (
     "env",
@@ -323,6 +363,8 @@ def validate_request(payload: Any) -> tuple[str, str | None, int | None]:
         OPERATION_SCAN_PACKAGES,
         OPERATION_PLAN_PACKAGES,
         OPERATION_UPDATE_PACKAGES,
+        OPERATION_PLAN_AUTOREMOVE,
+        OPERATION_AUTOREMOVE_PACKAGES,
         OPERATION_PING,
     }:
         raise RequestError("unknown host-control operation")
@@ -583,6 +625,41 @@ def _plan(
     return _collect_plan(vmid, runner, deadline)
 
 
+def _plan_autoremove(
+    expected_node: str, vmid: int, runner: Runner, deadline: OperationDeadline
+) -> dict[str, str]:
+    """Collect a fixed removal-only simulation without refreshing metadata."""
+    _validate_local_node(expected_node, runner, deadline)
+    _validate_target(vmid, runner, deadline)
+    architecture = _guest_command(
+        runner,
+        deadline,
+        vmid,
+        ("env", "LC_ALL=C", "dpkg", "--print-architecture"),
+        max_output=4096,
+    )
+    native_architecture, _ = _decode(architecture)
+    if architecture.returncode != 0:
+        raise ScanError("execution_failed", "could not determine guest architecture")
+    installed_inventory = _read_inventory(runner, deadline, vmid)
+    _validate_inventory_sane(installed_inventory)
+    simulation = _guest_command(
+        runner,
+        deadline,
+        vmid,
+        APT_AUTOREMOVE_SIMULATION_COMMAND,
+        max_output=8 * 1024 * 1024,
+    )
+    autoremove_simulation, simulation_stderr = _decode(simulation)
+    if simulation.returncode != 0:
+        raise _package_failure("simulation", simulation_stderr)
+    return {
+        "native_architecture": native_architecture,
+        "installed_inventory": installed_inventory,
+        "autoremove_simulation": autoremove_simulation,
+    }
+
+
 def _update_packages(
     expected_node: str, vmid: int, runner: Runner, deadline: OperationDeadline
 ) -> dict[str, str]:
@@ -604,6 +681,29 @@ def _update_packages(
     if mutation.returncode != 0:
         raise _package_failure("mutation", mutation_stderr)
 
+    after = _read_inventory(runner, deadline, vmid)
+    _validate_inventory_sane(after)
+    return {"before_inventory": before, "after_inventory": after}
+
+
+def _autoremove_packages(
+    expected_node: str, vmid: int, runner: Runner, deadline: OperationDeadline
+) -> dict[str, str]:
+    """Run one fixed hardened autoremove and return before/after inventories."""
+    _validate_local_node(expected_node, runner, deadline)
+    _validate_target(vmid, runner, deadline)
+    before = _read_inventory(runner, deadline, vmid)
+    _validate_inventory_sane(before)
+    mutation = _guest_command(
+        runner,
+        deadline,
+        vmid,
+        APT_AUTOREMOVE_MUTATION_COMMAND,
+        command_timeout=UPDATE_COMMAND_TIMEOUT_SECONDS,
+    )
+    _, mutation_stderr = _decode(mutation)
+    if mutation.returncode != 0:
+        raise _package_failure("mutation", mutation_stderr)
     after = _read_inventory(runner, deadline, vmid)
     _validate_inventory_sane(after)
     return {"before_inventory": before, "after_inventory": after}
@@ -720,7 +820,7 @@ def handle_request(
 ) -> dict[str, Any]:
     """Perform the fixed, read/refresh-only package scan command sequence."""
     operation, expected_node, vmid = validate_request(payload)
-    if operation == OPERATION_UPDATE_PACKAGES:
+    if operation in {OPERATION_UPDATE_PACKAGES, OPERATION_AUTOREMOVE_PACKAGES}:
         operation_timeout = UPDATE_OPERATION_TIMEOUT_SECONDS
     elif operation == OPERATION_PING:
         operation_timeout = PING_OPERATION_TIMEOUT_SECONDS
@@ -759,6 +859,10 @@ def handle_request(
                 evidence = _plan(expected_node, vmid, runner, deadline)
             elif operation == OPERATION_UPDATE_PACKAGES:
                 evidence = _update_packages(expected_node, vmid, runner, deadline)
+            elif operation == OPERATION_PLAN_AUTOREMOVE:
+                evidence = _plan_autoremove(expected_node, vmid, runner, deadline)
+            elif operation == OPERATION_AUTOREMOVE_PACKAGES:
+                evidence = _autoremove_packages(expected_node, vmid, runner, deadline)
             else:
                 evidence = _ping(expected_node, vmid, runner, deadline)
     except ScanError as err:
@@ -812,6 +916,8 @@ def main() -> int:
                     OPERATION_SCAN_PACKAGES,
                     OPERATION_PLAN_PACKAGES,
                     OPERATION_UPDATE_PACKAGES,
+                    OPERATION_PLAN_AUTOREMOVE,
+                    OPERATION_AUTOREMOVE_PACKAGES,
                     OPERATION_PING,
                 }:
                     failure_operation = payload["operation"]
