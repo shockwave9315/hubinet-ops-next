@@ -820,9 +820,12 @@ class PackageUpdateSensor(ProxmoxContainerEntity, SensorEntity):
         if record.liveness is not None:
             attributes["liveness"] = record.liveness
         attributes["retained_snapshot"] = record.snapshot_retained
+        attributes["snapshot_uncertain"] = record.snapshot_uncertain
         attributes["snapshot_cleanup_failed"] = record.snapshot_cleanup_failed
         if record.snapshot_retained and record.snapshot_name is not None:
             attributes["retained_snapshot_name"] = record.snapshot_name
+        if record.snapshot_uncertain and record.snapshot_name is not None:
+            attributes["uncertain_snapshot_name"] = record.snapshot_name
         if record.error_message is not None:
             attributes["last_error"] = record.error_message
         return attributes

@@ -394,21 +394,41 @@ def test_bootstrap_has_valid_shell_syntax_and_bounded_options() -> None:
 
 
 def test_release_version_pin_is_current_and_consistent() -> None:
-    """All manual release pins match the explicitly expected next release."""
+    """The three accepted manually maintained release pins remain equal."""
     source = _source()
     version = json.loads(MANIFEST.read_text())["version"]
-    assert version == "2026.9.1.4"
-    assert version == INTEGRATION_VERSION
-    assert f'RELEASE_VERSION="{version}"' in source
+    bootstrap_version = re.search(
+        r'^  RELEASE_VERSION="([^"]+)"$', source, re.MULTILINE
+    )
+    assert bootstrap_version is not None
+    assert version == INTEGRATION_VERSION == bootstrap_version.group(1)
     assert f"/${{RELEASE_VERSION}}/deploy/" in source
 
 
 def test_bootstrap_helper_hash_matches_shipped_release_source() -> None:
-    """Bootstrap verifies the exact helper bytes shipped in this source tree."""
+    """Bootstrap hash matches local source and the release tag when it exists."""
     source = _source()
+    version = json.loads(MANIFEST.read_text())["version"]
     expected_hash = re.search(r'HELPER_SHA256="([0-9a-f]{64})"', source)
     assert expected_hash is not None
     assert expected_hash.group(1) == hashlib.sha256(HELPER.read_bytes()).hexdigest()
+
+    tag_ref = f"refs/tags/{version}"
+    tag_exists = subprocess.run(
+        ["git", "rev-parse", "--verify", "--quiet", tag_ref],
+        cwd=REPOSITORY_ROOT,
+        check=False,
+        capture_output=True,
+    )
+    assert tag_exists.returncode in {0, 1}
+    if tag_exists.returncode == 0:
+        tagged_helper = subprocess.run(
+            ["git", "show", f"{tag_ref}:deploy/hubinet-package-scan-helper.py"],
+            cwd=REPOSITORY_ROOT,
+            check=True,
+            capture_output=True,
+        ).stdout
+        assert expected_hash.group(1) == hashlib.sha256(tagged_helper).hexdigest()
 
 
 def test_bootstrap_owns_only_the_fixed_resource_contract() -> None:

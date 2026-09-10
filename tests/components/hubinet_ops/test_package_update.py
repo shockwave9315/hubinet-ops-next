@@ -23,6 +23,7 @@ from custom_components.hubinet_ops.packages.presentation import (
 )
 from custom_components.hubinet_ops.packages.snapshots import (
     RetainedSnapshotSummary,
+    SnapshotError,
     retained_snapshot_summary,
 )
 from homeassistant.components import persistent_notification as pn
@@ -268,6 +269,46 @@ async def test_update_sensor_terminal_failure_remains_readable_when_guest_stops(
     assert state.attributes["retained_snapshot"] is True
     assert state.attributes["retained_snapshot_name"] == snapshot_name
     assert "packages" not in state.attributes
+
+
+async def test_update_sensor_exposes_uncertain_snapshot_without_retained_name(
+    hass: HomeAssistant,
+    mock_proxmox_client: MagicMock,
+    mock_config_entry: MockConfigEntry,
+    package_transport_material: None,
+) -> None:
+    """The sensor exposes possible snapshot existence without claiming retention."""
+    await _setup_scanned(hass, mock_config_entry)
+    await _press(hass, REVIEW)
+    await _press(hass, APPROVE)
+    snapshot_name = "hubinet-preupd-20260908120000-ab12cd"
+    with (
+        patch(
+            "custom_components.hubinet_ops.packages.transport."
+            "AsyncSSHPackageTransport.async_plan",
+            new=AsyncMock(return_value=ParsedAptSimulation(RESULT.packages, 0)),
+        ),
+        patch(
+            "custom_components.hubinet_ops.packages.manager.async_list_snapshots",
+            new=AsyncMock(return_value=[]),
+        ),
+        patch(
+            "custom_components.hubinet_ops.packages.manager.async_create_snapshot",
+            new=AsyncMock(side_effect=SnapshotError("create uncertain", True)),
+        ),
+        patch(
+            "custom_components.hubinet_ops.packages.manager.generate_snapshot_name",
+            return_value=snapshot_name,
+        ),
+    ):
+        await _press(hass, UPDATE)
+        await hass.async_block_till_done()
+
+    attributes = hass.states.get(UPDATE_SENSOR).attributes
+    assert attributes["retained_snapshot"] is False
+    assert attributes["snapshot_uncertain"] is True
+    assert attributes["uncertain_snapshot_name"] == snapshot_name
+    assert "retained_snapshot_name" not in attributes
 
 
 async def test_notification_rendering_escapes_foreign_markdown_and_control_text(
