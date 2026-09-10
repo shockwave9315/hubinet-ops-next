@@ -26,6 +26,8 @@ from custom_components.hubinet_ops.const import (
     DOMAIN,
     ProxmoxPermission,
 )
+from custom_components.hubinet_ops.packages.parser import ParsedAutoremoveSimulation
+from custom_components.hubinet_ops.packages.transport import PackageHelperProbe
 from homeassistant.const import (
     CONF_HOST,
     CONF_PASSWORD,
@@ -230,4 +232,20 @@ def package_transport_material(mock_config_entry: MockConfigEntry) -> Iterator[N
             CONF_SSH_HOST_KEY: host_key.export_public_key().decode().strip(),
         },
     )
-    yield
+    with (
+        patch(
+            "custom_components.hubinet_ops.packages.transport."
+            "AsyncSSHPackageTransport.async_probe",
+            AsyncMock(return_value=PackageHelperProbe(node="pve1", helper_version=4)),
+        ),
+        patch(
+            "custom_components.hubinet_ops.packages.transport."
+            "AsyncSSHPackageTransport.async_plan_autoremove",
+            AsyncMock(
+                return_value=ParsedAutoremoveSimulation(
+                    packages=(), not_upgraded_count=0
+                )
+            ),
+        ),
+    ):
+        yield
