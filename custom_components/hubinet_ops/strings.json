@@ -258,6 +258,9 @@
       "package_update": {
         "name": "Update packages"
       },
+      "package_autoremove": {
+        "name": "Autoremove unused packages"
+      },
       "reset": {
         "name": "Reset"
       },
@@ -327,6 +330,9 @@
       },
       "pending_packages": {
         "name": "Pending package updates"
+      },
+      "unused_packages": {
+        "name": "Unused packages"
       },
       "package_update_status": {
         "name": "Package update",
@@ -454,6 +460,9 @@
     "package_update_failed": {
       "message": "Package update could not start: {reason}"
     },
+    "package_autoremove_failed": {
+      "message": "Package cleanup could not start: {reason}"
+    },
     "package_review_notification_title": {
       "message": "Review package update"
     },
@@ -517,6 +526,36 @@
     "package_update_reason_liveness_failed": {
       "message": "the LXC did not answer the generic liveness probe"
     },
+    "package_cleanup_notification_title": {
+      "message": "Unused package cleanup"
+    },
+    "package_cleanup_candidates_notification": {
+      "message": "APT considers {count} installed package(s) on {node}/{vmid} safe to autoremove:\n\n{plan}\n\nPress **Autoremove unused packages** to explicitly approve this exact plan. Hubinet-Ops will revalidate the complete plan before mutation."
+    },
+    "package_cleanup_empty_notification": {
+      "message": "No unused packages were found on {node}/{vmid}."
+    },
+    "package_cleanup_unknown_notification": {
+      "message": "The current unused-package state for {node}/{vmid} could not be determined. Run Scan to try again."
+    },
+    "package_cleanup_result_notification_title": {
+      "message": "Package cleanup result"
+    },
+    "package_cleanup_plan_changed_notification": {
+      "message": "The cleanup plan for {node}/{vmid} changed after it was displayed. Nothing was changed and no snapshot was created. Run Scan again."
+    },
+    "package_cleanup_success_notification": {
+      "message": "Explicit package cleanup for {node}/{vmid} succeeded. {changed} installed package row(s) actually changed, LXC liveness was confirmed, and the temporary snapshot was removed."
+    },
+    "package_cleanup_snapshot_failed_notification": {
+      "message": "Explicit package cleanup for {node}/{vmid} succeeded and LXC liveness was confirmed. {changed} installed package row(s) actually changed, but snapshot cleanup failed. Retained safety snapshot: {snapshot}."
+    },
+    "package_cleanup_helper_outdated_notification": {
+      "message": "Package cleanup for {node}/{vmid} is unavailable because the deployed helper does not support it. Follow the Hubinet-Ops Repair instruction, then press Scan again."
+    },
+    "package_cleanup_failed_notification": {
+      "message": "Explicit package cleanup for {node}/{vmid} did not complete cleanly: {reason}. {retained}"
+    },
     "permissions_error": {
       "message": "Failed to retrieve Proxmox VE permissions. Please check your credentials and try again."
     },
@@ -525,6 +564,12 @@
     },
     "timeout_connect": {
       "message": "A timeout occurred while trying to connect to the Proxmox VE instance."
+    }
+  },
+  "issues": {
+    "helper_outdated": {
+      "title": "Hubinet-Ops host helper requires an update",
+      "description": "Installed helper: {installed}\nRequired helper: {required}\n\nUpdate the helper on the Proxmox VE host:\n\n```text\n{bootstrap_command}\n```\n\nThis is a normal repair run. Do not use `--reset`. Existing API token and SSH enrollment credentials are not rotated.\n\nAfter the command succeeds, press Scan or reload Hubinet-Ops."
     }
   },
   "selector": {

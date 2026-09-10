@@ -252,6 +252,11 @@ PACKAGE_UPDATE_BUTTON = ButtonEntityDescription(
     translation_key="package_update",
     entity_category=EntityCategory.CONFIG,
 )
+PACKAGE_AUTOREMOVE_BUTTON = ButtonEntityDescription(
+    key="package_autoremove",
+    translation_key="package_autoremove",
+    entity_category=EntityCategory.CONFIG,
+)
 
 
 async def async_setup_entry(
@@ -328,6 +333,11 @@ async def async_setup_entry(
                 ):
                     entities.append(
                         PackageUpdateButtonEntity(coordinator, container, node_data)
+                    )
+                    entities.append(
+                        PackageAutoremoveButtonEntity(
+                            coordinator, container, node_data
+                        )
                     )
         async_add_entities(entities)
 
@@ -497,11 +507,15 @@ class PackageScanButtonEntity(ProxmoxContainerEntity, ProxmoxBaseButton):
         update = self.coordinator.package_manager.update_record(
             self._node_name, self.device_id
         )
+        cleanup = self.coordinator.package_manager.cleanup_record(
+            self._node_name, self.device_id
+        )
         return (
             super().available
             and self.container_data.get("status") == VM_CONTAINER_RUNNING
             and scan.status is not PackageScanStatus.RUNNING
             and update.status is not PackageUpdateStatus.RUNNING
+            and cleanup.status is not PackageUpdateStatus.RUNNING
         )
 
 
@@ -554,10 +568,14 @@ class PackageReviewButtonEntity(ProxmoxContainerEntity, ButtonEntity):
         update = self.coordinator.package_manager.update_record(
             self._node_name, self.device_id
         )
+        cleanup = self.coordinator.package_manager.cleanup_record(
+            self._node_name, self.device_id
+        )
         return (
             super().available
             and self.container_data.get("status") == VM_CONTAINER_RUNNING
             and update.status is not PackageUpdateStatus.RUNNING
+            and cleanup.status is not PackageUpdateStatus.RUNNING
             and record.status is PackageScanStatus.SUCCESS
             and record.result is not None
             and bool(record.result.packages)
@@ -594,10 +612,12 @@ class PackageApproveButtonEntity(ProxmoxContainerEntity, ButtonEntity):
         manager = self.coordinator.package_manager
         record = manager.record(self._node_name, self.device_id)
         update = manager.update_record(self._node_name, self.device_id)
+        cleanup = manager.cleanup_record(self._node_name, self.device_id)
         return (
             super().available
             and self.container_data.get("status") == VM_CONTAINER_RUNNING
             and update.status is not PackageUpdateStatus.RUNNING
+            and cleanup.status is not PackageUpdateStatus.RUNNING
             and record.status is PackageScanStatus.SUCCESS
             and record.result is not None
             and bool(record.result.packages)
@@ -655,14 +675,85 @@ class PackageUpdateButtonEntity(ProxmoxContainerEntity, ButtonEntity):
         manager = self.coordinator.package_manager
         record = manager.record(self._node_name, self.device_id)
         update = manager.update_record(self._node_name, self.device_id)
+        cleanup = manager.cleanup_record(self._node_name, self.device_id)
         return (
             super().available
             and self.container_data.get("status") == VM_CONTAINER_RUNNING
             and update.status is not PackageUpdateStatus.RUNNING
+            and cleanup.status is not PackageUpdateStatus.RUNNING
             and record.status is PackageScanStatus.SUCCESS
             and record.result is not None
             and bool(record.result.packages)
             and record.reviewed
+            and is_granted(
+                self.coordinator.permissions,
+                p_type="vms",
+                p_id=self.device_id,
+                permission=ProxmoxPermission.SNAPSHOT,
+            )
+        )
+
+
+class PackageAutoremoveButtonEntity(ProxmoxContainerEntity, ButtonEntity):
+    """Run only the exact displayed and freshly revalidated cleanup plan."""
+
+    def __init__(
+        self,
+        coordinator: ProxmoxCoordinator,
+        container_data: dict[str, Any],
+        node_data: ProxmoxNodeData,
+    ) -> None:
+        """Initialize the explicit Autoremove button."""
+        super().__init__(
+            coordinator, PACKAGE_AUTOREMOVE_BUTTON, container_data, node_data
+        )
+
+    @override
+    async def async_press(self) -> None:
+        """Start explicit cleanup after independently revalidating current state."""
+        node_data = self.coordinator.data.get(self._node_name)
+        container = (
+            node_data.containers.get(self.device_id) if node_data is not None else None
+        )
+        try:
+            self.coordinator.package_manager.async_start_autoremove(
+                self._node_name,
+                self.device_id,
+                target_is_running=(
+                    container is not None
+                    and container.get("status") == VM_CONTAINER_RUNNING
+                ),
+                snapshot_permission=is_granted(
+                    self.coordinator.permissions,
+                    p_type="vms",
+                    p_id=self.device_id,
+                    permission=ProxmoxPermission.SNAPSHOT,
+                ),
+            )
+        except PackageUpdateError as err:
+            raise HomeAssistantError(
+                translation_domain=DOMAIN,
+                translation_key="package_autoremove_failed",
+                translation_placeholders={"reason": str(err)},
+            ) from err
+
+    @property
+    @override
+    def available(self) -> bool:
+        """Require current displayed evidence and no conflicting package flow."""
+        manager = self.coordinator.package_manager
+        scan = manager.record(self._node_name, self.device_id)
+        update = manager.update_record(self._node_name, self.device_id)
+        cleanup = manager.cleanup_record(self._node_name, self.device_id)
+        evidence = manager.cleanup_evidence(self._node_name, self.device_id)
+        return (
+            super().available
+            and self.container_data.get("status") == VM_CONTAINER_RUNNING
+            and scan.status is not PackageScanStatus.RUNNING
+            and update.status is not PackageUpdateStatus.RUNNING
+            and cleanup.status is not PackageUpdateStatus.RUNNING
+            and evidence is not None
+            and bool(evidence.candidates)
             and is_granted(
                 self.coordinator.permissions,
                 p_type="vms",

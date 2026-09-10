@@ -290,7 +290,9 @@ async def test_guided_happy_path_creates_one_ready_entry(
         token_name="ha",
         token_value="guided-token-secret",
     )
-    probe.assert_awaited_once()
+    # Guided validation probes before entry creation; loaded runtime then performs
+    # its separate one-shot, non-blocking compatibility observation.
+    assert probe.await_count == 2
 
 
 async def test_guided_duplicate_stops_before_bootstrap(

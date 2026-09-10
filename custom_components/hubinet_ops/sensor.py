@@ -504,6 +504,11 @@ PACKAGE_UPDATE_SENSOR = SensorEntityDescription(
     options=list(PackageUpdateStatus),
     entity_category=EntityCategory.DIAGNOSTIC,
 )
+UNUSED_PACKAGES_SENSOR = SensorEntityDescription(
+    key="unused_packages",
+    translation_key="unused_packages",
+    entity_category=EntityCategory.DIAGNOSTIC,
+)
 
 
 async def async_setup_entry(
@@ -557,6 +562,7 @@ async def async_setup_entry(
                 for entity in (
                     PackageScanSensor(coordinator, container, node_data),
                     PackageUpdateSensor(coordinator, container, node_data),
+                    UnusedPackagesSensor(coordinator, container, node_data),
                 )
             )
         async_add_entities(entities)
@@ -811,6 +817,71 @@ class PackageUpdateSensor(ProxmoxContainerEntity, SensorEntity):
         """Return bounded outcome facts, never package rows."""
         record = self._update_record
         attributes: dict[str, Any] = {"update_status": record.status}
+        if record.last_attempt is not None:
+            attributes["last_attempt"] = record.last_attempt.isoformat()
+        if record.outcome is not None:
+            attributes["outcome"] = record.outcome
+        if record.changed_package_count is not None:
+            attributes["changed_package_count"] = record.changed_package_count
+        if record.liveness is not None:
+            attributes["liveness"] = record.liveness
+        attributes["retained_snapshot"] = record.snapshot_retained
+        attributes["snapshot_uncertain"] = record.snapshot_uncertain
+        attributes["snapshot_cleanup_failed"] = record.snapshot_cleanup_failed
+        if record.snapshot_retained and record.snapshot_name is not None:
+            attributes["retained_snapshot_name"] = record.snapshot_name
+        if record.snapshot_uncertain and record.snapshot_name is not None:
+            attributes["uncertain_snapshot_name"] = record.snapshot_name
+        if record.error_message is not None:
+            attributes["last_error"] = record.error_message
+        return attributes
+
+
+class UnusedPackagesSensor(ProxmoxContainerEntity, SensorEntity):
+    """Exact count from the latest successful ephemeral cleanup observation."""
+
+    def __init__(
+        self,
+        coordinator: ProxmoxCoordinator,
+        container_data: dict[str, Any],
+        node_data: ProxmoxNodeData,
+    ) -> None:
+        """Initialize the unused-package summary sensor."""
+        super().__init__(
+            coordinator, UNUSED_PACKAGES_SENSOR, container_data, node_data
+        )
+
+    @property
+    @override
+    def available(self) -> bool:
+        """Follow the existing package-scan container availability policy."""
+        return (
+            super().available
+            and self.container_data.get("status") == VM_CONTAINER_RUNNING
+        )
+
+    @property
+    @override
+    def native_value(self) -> int | None:
+        """Return unknown without evidence, otherwise the exact candidate count."""
+        evidence = self.coordinator.package_manager.cleanup_evidence(
+            self._node_name, self.device_id
+        )
+        return None if evidence is None else len(evidence.candidates)
+
+    @property
+    @override
+    def extra_state_attributes(self) -> dict[str, Any]:
+        """Return only bounded observation and latest mutation facts."""
+        manager = self.coordinator.package_manager
+        evidence = manager.cleanup_evidence(self._node_name, self.device_id)
+        record = manager.cleanup_record(self._node_name, self.device_id)
+        attributes: dict[str, Any] = {
+            "autoremove_status": record.status,
+            "running": record.status is PackageUpdateStatus.RUNNING,
+        }
+        if evidence is not None:
+            attributes["observed_at"] = evidence.observed_at.isoformat()
         if record.last_attempt is not None:
             attributes["last_attempt"] = record.last_attempt.isoformat()
         if record.outcome is not None:
