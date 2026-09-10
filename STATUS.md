@@ -84,9 +84,15 @@ Status date: 2026-09-10
 ## PR #11: UX truthfulness and localization
 
 - Package evidence truthfulness architecture: **ACCEPTED BY MAINTAINER on
-  2026-09-10**; implementation **NOT STARTED / PENDING**.
-- Polish and English localization repair: **ACCEPTED FOR PR #11**.
-- Guided reinstall recovery UX: **ACCEPTED FOR PR #11**.
+  2026-09-10**; implementation **IMPLEMENTED**. A non-running observation now
+  discards current Scan, Review, and cleanup evidence while preserving running
+  and terminal mutation attempts.
+- Polish and English localization repair: **IMPLEMENTED** across the normal
+  user-facing integration surface, including package notifications and tables.
+- Guided reinstall recovery UX: **IMPLEMENTED** with the existing `--reset`
+  command shown as the secondary recovery path.
+- Release target: integration `2026.9.1.6`, helper v4, protocol v1.
+- Validation: **485 tests and 195 snapshots passed**; repository Ruff passed.
 
 ## Next
 
