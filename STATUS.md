@@ -81,6 +81,13 @@ Status date: 2026-09-10
 - Post-audit bounded correction pass: **COMPLETE**.
 - Validation: **473 tests and 195 snapshots passed**; repository Ruff passed.
 
+## PR #11: UX truthfulness and localization
+
+- Package evidence truthfulness architecture: **ACCEPTED BY MAINTAINER on
+  2026-09-10**; implementation **NOT STARTED / PENDING**.
+- Polish and English localization repair: **ACCEPTED FOR PR #11**.
+- Guided reinstall recovery UX: **ACCEPTED FOR PR #11**.
+
 ## Next
 
 Design the future Post-update Health feature when the maintainer accepts that

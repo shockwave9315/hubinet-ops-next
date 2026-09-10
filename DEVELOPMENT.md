@@ -36,6 +36,12 @@ Both `.venv/` and `.dev/` are ignored by Git. `.venv` is disposable. The
 bootstrap script and pinned upstream commit, not a preserved local environment,
 are the reproducible source.
 
+For this custom integration, `strings.json` is the canonical English authoring
+content and must remain structurally and semantically synchronized with
+`translations/en.json`. Custom integrations do not run Home Assistant Core's
+translation build pipeline, so neither file may ship unresolved `[%key:...%]`
+references.
+
 ## Daily workflow
 
 After bootstrap, reuse `.venv` and `.dev/home-assistant-core`. Do not create
