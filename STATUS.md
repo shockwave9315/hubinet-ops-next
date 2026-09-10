@@ -51,8 +51,9 @@ Status date: 2026-09-09
 
 ## Package Update
 
-- Package Update architecture: **ACCEPTED BY MAINTAINER** and documented in
-  [ARCHITECTURE.md](ARCHITECTURE.md).
+- Package Update architecture: **ACCEPTED BY MAINTAINER BEFORE IMPLEMENTATION
+  on 2026-09-09**; see the
+  [maintainer decision record](ARCHITECTURE.md#package-update-maintainer-decision-record).
 - Package Update: **IMPLEMENTED**.
 
 ## Guided enrollment

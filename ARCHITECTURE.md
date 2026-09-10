@@ -710,6 +710,21 @@ copy; a generalized workflow/state machine; a custom frontend; a review
 entity; a custom WebSocket API; a second inventory; a custom target resolver;
 a cross-target transaction; or post-update health architecture.
 
+## Package Update maintainer decision record
+
+On 2026-09-09, before Package Update implementation began, the maintainer
+explicitly approved the architecture governing PR #9. PR #9 records that prior
+decision; neither the pull request nor its code created the acceptance. The
+decision was recorded late because the previous workflow permitted project
+memory synchronization to be deferred until handoff; `AGENTS.md` now requires
+a pre-implementation acceptance checkpoint.
+
+The accepted scope was Scan -> Review -> Approve -> execution-time exact-plan
+verification -> native PVE safety snapshot -> fixed hardened bare
+`apt-get upgrade` -> post-mutation dpkg sanity -> generic LXC liveness -> exact
+current-snapshot cleanup. State remains ephemeral, with no automatic rollback,
+persistence or recovery, scheduler or worker, or application-health subsystem.
+
 ## Package update architecture
 
 This section records the Package Update architecture explicitly accepted by
