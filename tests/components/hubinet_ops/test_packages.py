@@ -28,7 +28,10 @@ from custom_components.hubinet_ops.packages.models import (
     PendingPackage,
 )
 from custom_components.hubinet_ops.packages.parser import ParsedAptSimulation
-from custom_components.hubinet_ops.packages.snapshots import SnapshotError
+from custom_components.hubinet_ops.packages.snapshots import (
+    RetainedSnapshotSummary,
+    SnapshotError,
+)
 from homeassistant.components.button import SERVICE_PRESS
 from homeassistant.const import ATTR_ENTITY_ID, STATE_UNAVAILABLE, Platform
 from homeassistant.core import HomeAssistant
@@ -1159,7 +1162,9 @@ async def test_success_reports_actual_inventory_changes_and_deletes_current_snap
     assert record.changed_package_count == 2
     assert record.liveness is True
     assert record.snapshot_retained is False
-    retained.assert_called_once_with("pve1", 200, (old,))
+    retained.assert_called_once_with(
+        "pve1", 200, RetainedSnapshotSummary(total_count=1, names=(old,))
+    )
     create.assert_awaited_once()
     delete.assert_awaited_once()
     assert delete.await_args.args[3] == "hubinet-preupd-20260908120000-ab12cd"
@@ -1217,6 +1222,7 @@ async def test_mutation_failures_retain_confirmed_snapshot(
     assert record.status is PackageUpdateStatus.FAILED
     assert record.outcome is failure.outcome
     assert record.snapshot_retained is True
+    assert record.snapshot_uncertain is False
     assert record.snapshot_name == "hubinet-preupd-20260908120000-ab12cd"
     delete.assert_not_awaited()
 
@@ -1244,7 +1250,89 @@ async def test_snapshot_create_failure_prevents_mutation_and_preserves_uncertain
     record = manager.update_record("pve1", 200)
     assert record.status is PackageUpdateStatus.FAILED
     assert record.outcome is PackageUpdateOutcome.SNAPSHOT_FAILED
-    assert record.snapshot_retained is True
+    assert record.snapshot_retained is False
+    assert record.snapshot_uncertain is True
+    assert record.snapshot_name == "hubinet-preupd-20260908120000-ab12cd"
+    assert transport.update_calls == 0
+    delete.assert_not_awaited()
+
+
+async def test_cancellation_before_snapshot_post_claims_no_snapshot(
+    hass: HomeAssistant, mock_config_entry: MockConfigEntry
+) -> None:
+    """Cancellation before the native POST reports neither retained nor uncertain."""
+    transport = UpdateTransport()
+    manager, _proxmox = _update_manager(hass, mock_config_entry, transport)
+    await _review_target(manager, "pve1", 200)
+    before_submit = asyncio.Event()
+
+    async def blocked_before_submit(*_args, **_kwargs) -> None:
+        before_submit.set()
+        await asyncio.Event().wait()
+
+    patches = _snapshot_patches()
+    with (
+        patches[0],
+        patch(
+            "custom_components.hubinet_ops.packages.manager.async_create_snapshot",
+            new=blocked_before_submit,
+        ),
+        patches[2] as delete,
+        patches[3],
+    ):
+        task = manager.async_start_update(
+            "pve1", 200, target_is_running=True, snapshot_permission=True
+        )
+        await before_submit.wait()
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+    record = manager.update_record("pve1", 200)
+    assert record.outcome is PackageUpdateOutcome.SNAPSHOT_FAILED
+    assert record.snapshot_retained is False
+    assert record.snapshot_uncertain is False
+    assert record.snapshot_name is None
+    assert transport.update_calls == 0
+    delete.assert_not_awaited()
+
+
+async def test_cancellation_after_snapshot_submission_is_uncertain(
+    hass: HomeAssistant, mock_config_entry: MockConfigEntry
+) -> None:
+    """Cancellation after entering native POST but before readiness is uncertain."""
+    transport = UpdateTransport()
+    manager, _proxmox = _update_manager(hass, mock_config_entry, transport)
+    await _review_target(manager, "pve1", 200)
+    after_submit = asyncio.Event()
+
+    async def blocked_after_submit(*_args, **kwargs) -> None:
+        kwargs["on_submit"]()
+        after_submit.set()
+        await asyncio.Event().wait()
+
+    patches = _snapshot_patches()
+    with (
+        patches[0],
+        patch(
+            "custom_components.hubinet_ops.packages.manager.async_create_snapshot",
+            new=blocked_after_submit,
+        ),
+        patches[2] as delete,
+        patches[3],
+    ):
+        task = manager.async_start_update(
+            "pve1", 200, target_is_running=True, snapshot_permission=True
+        )
+        await after_submit.wait()
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+    record = manager.update_record("pve1", 200)
+    assert record.outcome is PackageUpdateOutcome.SNAPSHOT_FAILED
+    assert record.snapshot_retained is False
+    assert record.snapshot_uncertain is True
     assert record.snapshot_name == "hubinet-preupd-20260908120000-ab12cd"
     assert transport.update_calls == 0
     delete.assert_not_awaited()
@@ -1284,6 +1372,7 @@ async def test_pruned_interrupted_mutation_still_reports_retained_snapshot(
     outcome = complete.call_args.args[2]
     assert outcome.outcome is PackageUpdateOutcome.MUTATION_UNCERTAIN
     assert outcome.snapshot_retained is True
+    assert outcome.snapshot_uncertain is False
     assert outcome.snapshot_name == "hubinet-preupd-20260908120000-ab12cd"
 
 

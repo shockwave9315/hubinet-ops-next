@@ -18,6 +18,7 @@ _TASK_MAX_POLLS = 120
 
 type Executor = Callable[[Callable[[], Any]], Awaitable[Any]]
 type Sleeper = Callable[[float], Awaitable[None]]
+type SubmissionCallback = Callable[[], None]
 
 
 class SnapshotTaskState(StrEnum):
@@ -34,6 +35,7 @@ class SnapshotError(Exception):
 
     message: str
     may_exist: bool = False
+    terminal_failure: bool = False
 
     def __str__(self) -> str:
         """Return the bounded error message."""
@@ -62,8 +64,18 @@ def generate_snapshot_name(
     return validate_snapshot_name(name)
 
 
-def retained_snapshot_names(rows: object, *, limit: int = 5) -> tuple[str, ...]:
-    """Return a bounded warning list of existing Hubinet pre-update snapshots."""
+@dataclass(frozen=True, slots=True)
+class RetainedSnapshotSummary:
+    """True retained-snapshot count with a bounded displayed-name subset."""
+
+    total_count: int
+    names: tuple[str, ...]
+
+
+def retained_snapshot_summary(
+    rows: object, *, limit: int = 5
+) -> RetainedSnapshotSummary:
+    """Return the true retained count and a bounded warning-name subset."""
     if not isinstance(rows, Sequence) or isinstance(rows, (str, bytes)):
         raise SnapshotError("PVE returned a malformed snapshot listing")
     if any(
@@ -81,7 +93,7 @@ def retained_snapshot_names(rows: object, *, limit: int = 5) -> tuple[str, ...]:
             and name.startswith(SNAPSHOT_PREFIX)
         }
     )
-    return tuple(names[:limit])
+    return RetainedSnapshotSummary(len(names), tuple(names[:limit]))
 
 
 def snapshot_is_complete(rows: object, snapshot_name: str) -> bool:
@@ -171,7 +183,11 @@ async def _async_wait_for_task(
         if state is SnapshotTaskState.SUCCESS:
             return
         if state is SnapshotTaskState.FAILED:
-            raise SnapshotError("PVE snapshot task did not succeed", True)
+            raise SnapshotError(
+                "PVE snapshot task did not succeed",
+                True,
+                isinstance(payload, Mapping) and payload.get("status") == "stopped",
+            )
         if poll + 1 < max_polls:
             await sleep(_TASK_POLL_INTERVAL_SECONDS)
     raise SnapshotError("PVE snapshot task did not finish before timeout", True)
@@ -196,18 +212,24 @@ async def async_create_snapshot(
     executor: Executor,
     sleep: Sleeper = asyncio.sleep,
     max_polls: int = _TASK_MAX_POLLS,
+    on_submit: SubmissionCallback = lambda: None,
 ) -> None:
     """Create, poll, and confirm one exact complete native LXC snapshot."""
     validate_snapshot_name(snapshot_name)
-    try:
-        raw_upid = await executor(
-            lambda: proxmox.nodes(node)
+    def _submit() -> object:
+        """Mark the precise point at which the native POST call is entered."""
+        on_submit()
+        return (
+            proxmox.nodes(node)
             .lxc(vmid)
             .snapshot.post(
                 snapname=snapshot_name,
                 description="Temporary Hubinet-Ops pre-update safety snapshot",
             )
         )
+
+    try:
+        raw_upid = await executor(_submit)
     except Exception as err:
         raise SnapshotError("could not submit native PVE snapshot", True) from err
     try:
@@ -215,14 +237,27 @@ async def async_create_snapshot(
     except SnapshotError as err:
         err.may_exist = True
         raise
-    await _async_wait_for_task(
-        proxmox,
-        node,
-        upid,
-        executor=executor,
-        sleep=sleep,
-        max_polls=max_polls,
-    )
+    try:
+        await _async_wait_for_task(
+            proxmox,
+            node,
+            upid,
+            executor=executor,
+            sleep=sleep,
+            max_polls=max_polls,
+        )
+    except SnapshotError as err:
+        if err.terminal_failure:
+            try:
+                rows = await async_list_snapshots(
+                    proxmox, node, vmid, executor=executor
+                )
+            except SnapshotError:
+                pass
+            else:
+                if snapshot_is_absent(rows, snapshot_name):
+                    err.may_exist = False
+        raise
     try:
         rows = await async_list_snapshots(proxmox, node, vmid, executor=executor)
     except SnapshotError as err:

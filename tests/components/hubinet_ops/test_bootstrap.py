@@ -393,13 +393,19 @@ def test_bootstrap_has_valid_shell_syntax_and_bounded_options() -> None:
     assert _source().rstrip().endswith('main "$@"')
 
 
-def test_release_version_and_helper_hash_are_consistent() -> None:
-    """Manifest, bootstrap tag, and exact helper bytes remain locked together."""
+def test_release_version_pin_is_current_and_consistent() -> None:
+    """All manual release pins match the explicitly expected next release."""
     source = _source()
     version = json.loads(MANIFEST.read_text())["version"]
+    assert version == "2026.9.1.4"
     assert version == INTEGRATION_VERSION
     assert f'RELEASE_VERSION="{version}"' in source
     assert f"/${{RELEASE_VERSION}}/deploy/" in source
+
+
+def test_bootstrap_helper_hash_matches_shipped_release_source() -> None:
+    """Bootstrap verifies the exact helper bytes shipped in this source tree."""
+    source = _source()
     expected_hash = re.search(r'HELPER_SHA256="([0-9a-f]{64})"', source)
     assert expected_hash is not None
     assert expected_hash.group(1) == hashlib.sha256(HELPER.read_bytes()).hexdigest()

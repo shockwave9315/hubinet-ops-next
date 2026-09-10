@@ -26,12 +26,13 @@ from .models import (
 )
 from .parser import ParsedAptSimulation
 from .snapshots import (
+    RetainedSnapshotSummary,
     SnapshotError,
     async_create_snapshot,
     async_delete_snapshot,
     async_list_snapshots,
     generate_snapshot_name,
-    retained_snapshot_names,
+    retained_snapshot_summary,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -43,11 +44,13 @@ _LIVENESS_RETRY_SECONDS = 3.0
 
 type ProxmoxGetter = Callable[[], Any]
 type Sleeper = Callable[[float], Awaitable[None]]
-type RetainedSnapshotCallback = Callable[[str, int, tuple[str, ...]], None]
+type RetainedSnapshotCallback = Callable[[str, int, RetainedSnapshotSummary], None]
 type UpdateCompleteCallback = Callable[[str, int, PackageUpdateRecord], None]
 
 
-def _noop_retained(_node: str, _vmid: int, _names: tuple[str, ...]) -> None:
+def _noop_retained(
+    _node: str, _vmid: int, _summary: RetainedSnapshotSummary
+) -> None:
     """Default retained-snapshot callback."""
 
 
@@ -458,7 +461,7 @@ class PackageManager:
     ) -> None:
         """Run the accepted plan/snapshot/mutation/sanity/liveness lifecycle."""
         snapshot_name: str | None = None
-        snapshot_attempted = False
+        snapshot_submitted = False
         snapshot_ready = False
         mutation_started = False
         changed_count: int | None = None
@@ -474,12 +477,16 @@ class PackageManager:
                     vmid,
                     executor=self._hass.async_add_executor_job,
                 )
-                retained = retained_snapshot_names(rows)
-                if retained:
+                retained = retained_snapshot_summary(rows)
+                if retained.total_count:
                     self._notify_retained_snapshots(node, vmid, retained)
 
                 snapshot_name = generate_snapshot_name()
-                snapshot_attempted = True
+
+                def _mark_snapshot_submitted() -> None:
+                    nonlocal snapshot_submitted
+                    snapshot_submitted = True
+
                 await async_create_snapshot(
                     proxmox,
                     node,
@@ -487,6 +494,7 @@ class PackageManager:
                     snapshot_name,
                     executor=self._hass.async_add_executor_job,
                     sleep=self._sleep,
+                    on_submit=_mark_snapshot_submitted,
                 )
                 snapshot_ready = True
 
@@ -547,10 +555,8 @@ class PackageManager:
                 status=PackageUpdateStatus.FAILED,
                 last_attempt=attempted_at,
                 outcome=PackageUpdateOutcome.SNAPSHOT_FAILED,
-                snapshot_retained=snapshot_attempted and err.may_exist,
-                snapshot_name=(
-                    snapshot_name if snapshot_attempted and err.may_exist else None
-                ),
+                snapshot_uncertain=err.may_exist,
+                snapshot_name=snapshot_name if err.may_exist else None,
                 error_message=str(err)[:_MAX_ERROR_MESSAGE_LENGTH],
             )
         except asyncio.CancelledError:
@@ -562,8 +568,11 @@ class PackageManager:
                     if mutation_started
                     else PackageUpdateOutcome.SNAPSHOT_FAILED
                 ),
-                snapshot_retained=snapshot_attempted,
-                snapshot_name=snapshot_name if snapshot_attempted else None,
+                snapshot_retained=snapshot_ready,
+                snapshot_uncertain=snapshot_submitted and not snapshot_ready,
+                snapshot_name=(
+                    snapshot_name if snapshot_ready or snapshot_submitted else None
+                ),
                 changed_package_count=changed_count,
                 error_message="package update was interrupted",
             )
@@ -585,8 +594,11 @@ class PackageManager:
                     if mutation_started
                     else PackageUpdateOutcome.SNAPSHOT_FAILED
                 ),
-                snapshot_retained=snapshot_attempted,
-                snapshot_name=snapshot_name if snapshot_attempted else None,
+                snapshot_retained=snapshot_ready,
+                snapshot_uncertain=snapshot_submitted and not snapshot_ready,
+                snapshot_name=(
+                    snapshot_name if snapshot_ready or snapshot_submitted else None
+                ),
                 changed_package_count=changed_count,
                 error_message="unexpected package update failure",
             )
@@ -648,11 +660,11 @@ class PackageManager:
             )
 
     def _notify_retained_snapshots(
-        self, node: str, vmid: int, names: tuple[str, ...]
+        self, node: str, vmid: int, summary: RetainedSnapshotSummary
     ) -> None:
         """Publish a warning without allowing presentation to fail the update."""
         try:
-            self._on_retained_snapshots(node, vmid, names)
+            self._on_retained_snapshots(node, vmid, summary)
         except Exception:
             _LOGGER.exception(
                 "Could not publish retained snapshot warning for %s/%s", node, vmid

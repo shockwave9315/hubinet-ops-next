@@ -21,6 +21,10 @@ from custom_components.hubinet_ops.packages.presentation import (
     notify_review_plan,
     notify_update_complete,
 )
+from custom_components.hubinet_ops.packages.snapshots import (
+    RetainedSnapshotSummary,
+    retained_snapshot_summary,
+)
 from homeassistant.components import persistent_notification as pn
 from homeassistant.components.button import SERVICE_PRESS
 from homeassistant.const import ATTR_ENTITY_ID, STATE_UNAVAILABLE, STATE_UNKNOWN
@@ -300,11 +304,40 @@ async def test_notification_rendering_escapes_foreign_markdown_and_control_text(
     assert "origin&#124;x next" in message
     assert "<script>" not in message
 
-    notify_retained_snapshots(hass, "pve1", 200, ("safe|name\nnext",))
+    notify_retained_snapshots(
+        hass,
+        "pve1",
+        200,
+        RetainedSnapshotSummary(1, ("safe|name\nnext",)),
+    )
     warning = pn._async_get_or_create_notifications(hass)[  # noqa: SLF001
         "hubinet_ops_retained_snapshots_pve1_200"
     ]["message"]
     assert "safe&#124;name next" in warning
+
+
+async def test_retained_snapshot_warning_reports_total_and_bounded_subset(
+    hass: HomeAssistant,
+    mock_proxmox_client: MagicMock,
+    mock_config_entry: MockConfigEntry,
+    package_transport_material: None,
+) -> None:
+    """The real adapter summary never presents a truncated count as the total."""
+    await setup_integration(hass, mock_config_entry)
+    rows = [
+        {"name": f"hubinet-preupd-2026090{day}120000-ab12c{day}"}
+        for day in range(1, 8)
+    ]
+    summary = retained_snapshot_summary(rows)
+    notify_retained_snapshots(hass, "pve1", 200, summary)
+    warning = pn._async_get_or_create_notifications(hass)[  # noqa: SLF001
+        "hubinet_ops_retained_snapshots_pve1_200"
+    ]["message"]
+    assert summary.total_count == 7
+    assert len(summary.names) == 5
+    assert "Found 7 retained" in warning
+    assert "Showing 5" in warning
+    assert "2 more are not shown" in warning
 
 
 async def test_terminal_notifications_distinguish_success_cleanup_and_helper(
@@ -347,3 +380,30 @@ async def test_terminal_notifications_distinguish_success_cleanup_and_helper(
             "hubinet_ops_package_update_pve1_200"
         ]["message"]
         assert phrase in message
+
+
+async def test_uncertain_snapshot_notification_never_claims_confirmed_retention(
+    hass: HomeAssistant,
+    mock_proxmox_client: MagicMock,
+    mock_config_entry: MockConfigEntry,
+    package_transport_material: None,
+) -> None:
+    """An unconfirmed create is described only as a snapshot that may exist."""
+    await setup_integration(hass, mock_config_entry)
+    snapshot_name = "hubinet-preupd-20260908120000-ab12cd"
+    notify_update_complete(
+        hass,
+        "pve1",
+        200,
+        PackageUpdateRecord(
+            status=PackageUpdateStatus.FAILED,
+            outcome=PackageUpdateOutcome.SNAPSHOT_FAILED,
+            snapshot_uncertain=True,
+            snapshot_name=snapshot_name,
+        ),
+    )
+    message = pn._async_get_or_create_notifications(hass)[  # noqa: SLF001
+        "hubinet_ops_package_update_pve1_200"
+    ]["message"]
+    assert f"snapshot named {snapshot_name} may exist" in message
+    assert "snapshot was retained" not in message

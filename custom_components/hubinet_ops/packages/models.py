@@ -119,6 +119,7 @@ class PackageUpdateRecord:
     last_attempt: datetime | None = None
     outcome: PackageUpdateOutcome | None = None
     snapshot_retained: bool = False
+    snapshot_uncertain: bool = False
     snapshot_cleanup_failed: bool = False
     snapshot_name: str | None = None
     liveness: bool | None = None

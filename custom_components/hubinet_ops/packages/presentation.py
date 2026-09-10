@@ -13,6 +13,7 @@ from .models import (
     PackageUpdateRecord,
     PackageUpdateStatus,
 )
+from .snapshots import RetainedSnapshotSummary
 
 _REASON_KEYS = {
     PackageUpdateOutcome.PLAN_FAILED: "package_update_reason_plan_failed",
@@ -92,18 +93,25 @@ def notify_review_plan(
 
 
 def notify_retained_snapshots(
-    hass: HomeAssistant, node: str, vmid: int, names: tuple[str, ...]
+    hass: HomeAssistant,
+    node: str,
+    vmid: int,
+    summary: RetainedSnapshotSummary,
 ) -> None:
     """Warn about old prefix-matched snapshots without blocking the update."""
-    rendered_names = ", ".join(escape_markdown_cell(name) for name in names)
+    rendered_names = ", ".join(
+        escape_markdown_cell(name) for name in summary.names
+    )
     persistent_notification.async_create(
         hass,
         _translate(
             "package_retained_snapshot_warning",
             node=escape_markdown_cell(node),
             vmid=str(vmid),
-            count=str(len(names)),
+            count=str(summary.total_count),
+            shown=str(len(summary.names)),
             names=rendered_names,
+            remaining=str(summary.total_count - len(summary.names)),
         ),
         _translate("package_retained_snapshot_warning_title"),
         _notification_id("retained_snapshots", node, vmid),
@@ -138,14 +146,18 @@ def notify_update_complete(
         reason_key = _REASON_KEYS.get(
             record.outcome, "package_update_reason_mutation_uncertain"
         )
-        retained = (
-            _translate(
+        if record.snapshot_uncertain and record.snapshot_name is not None:
+            retained = _translate(
+                "package_update_uncertain_snapshot_detail",
+                snapshot=escape_markdown_cell(record.snapshot_name),
+            )
+        elif record.snapshot_retained and record.snapshot_name is not None:
+            retained = _translate(
                 "package_update_retained_snapshot_detail",
                 snapshot=escape_markdown_cell(record.snapshot_name),
             )
-            if record.snapshot_retained and record.snapshot_name is not None
-            else _translate("package_update_no_retained_snapshot_detail")
-        )
+        else:
+            retained = _translate("package_update_no_retained_snapshot_detail")
         placeholders = {
             **target,
             "reason": _translate(reason_key),

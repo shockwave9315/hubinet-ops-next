@@ -464,7 +464,7 @@
       "message": "Existing package-update snapshots"
     },
     "package_retained_snapshot_warning": {
-      "message": "Found {count} retained Hubinet package-update snapshot(s) for {node}/{vmid}: {names}. They were not changed, and the current update will continue with a new temporary snapshot."
+      "message": "Found {count} retained Hubinet package-update snapshot(s) for {node}/{vmid}. Showing {shown}: {names}. {remaining} more are not shown. They were not changed, and the current update will continue with a new temporary snapshot."
     },
     "package_update_notification_title": {
       "message": "Package update result"
@@ -486,6 +486,9 @@
     },
     "package_update_retained_snapshot_detail": {
       "message": "The safety snapshot was retained as {snapshot}. No automatic rollback or cleanup was attempted."
+    },
+    "package_update_uncertain_snapshot_detail": {
+      "message": "A safety snapshot named {snapshot} may exist; Hubinet-Ops could not confirm it. No automatic cleanup was attempted."
     },
     "package_update_no_retained_snapshot_detail": {
       "message": "No retained safety snapshot was confirmed."

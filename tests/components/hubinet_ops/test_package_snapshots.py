@@ -15,7 +15,7 @@ from custom_components.hubinet_ops.packages.snapshots import (
     async_delete_snapshot,
     generate_snapshot_name,
     parse_task_status,
-    retained_snapshot_names,
+    retained_snapshot_summary,
     snapshot_is_complete,
     validate_snapshot_name,
 )
@@ -71,8 +71,12 @@ def test_retained_discovery_is_prefix_only_bounded_and_ignores_current() -> None
         {"name": "manual-safe"},
         {"name": "current"},
     ]
-    assert retained_snapshot_names(rows) == (OLD, CURRENT)
-    assert retained_snapshot_names(rows, limit=1) == (OLD,)
+    summary = retained_snapshot_summary(rows)
+    assert summary.total_count == 2
+    assert summary.names == (OLD, CURRENT)
+    limited = retained_snapshot_summary(rows, limit=1)
+    assert limited.total_count == 2
+    assert limited.names == (OLD,)
 
 
 @pytest.mark.parametrize(
@@ -98,6 +102,7 @@ def test_native_task_status_semantics(
 
 async def test_create_waits_for_task_then_requires_exact_complete_row() -> None:
     """A submitted UPID is not readiness; terminal status and listing both matter."""
+    submitted = MagicMock()
     proxmox, node, lxc = _proxmox(
         statuses=[{"status": "running"}, {"status": "stopped", "exitstatus": "OK"}],
         listings=[[{"name": CURRENT, "snaptime": 1}]],
@@ -110,7 +115,9 @@ async def test_create_waits_for_task_then_requires_exact_complete_row() -> None:
         executor=_executor,
         sleep=_no_sleep,
         max_polls=2,
+        on_submit=submitted,
     )
+    submitted.assert_called_once_with()
     assert node.tasks.call_args_list[0].args == (UPID,)
     lxc.snapshot.post.assert_called_once_with(
         snapname=CURRENT,
@@ -146,6 +153,63 @@ async def test_create_never_accepts_failed_incomplete_or_still_running_task(
             max_polls=1,
         )
     assert caught.value.may_exist is True
+
+
+async def test_terminal_failed_create_task_relist_proves_exact_name_absent() -> None:
+    """A fresh valid absence proof clears uncertainty after terminal failure."""
+    proxmox, _node, lxc = _proxmox(
+        statuses=[{"status": "stopped", "exitstatus": "ERROR"}],
+        listings=[[]],
+    )
+    with pytest.raises(SnapshotError) as caught:
+        await async_create_snapshot(
+            proxmox,
+            "pve1",
+            200,
+            CURRENT,
+            executor=_executor,
+            sleep=_no_sleep,
+        )
+    assert caught.value.may_exist is False
+    lxc.snapshot.get.assert_called_once_with()
+
+
+async def test_task_status_read_failure_after_post_remains_uncertain() -> None:
+    """No terminal task evidence means an accepted POST may still create a snapshot."""
+    proxmox, _node, lxc = _proxmox(
+        statuses=[RuntimeError("status unavailable")], listings=[]
+    )
+    with pytest.raises(SnapshotError) as caught:
+        await async_create_snapshot(
+            proxmox,
+            "pve1",
+            200,
+            CURRENT,
+            executor=_executor,
+            sleep=_no_sleep,
+        )
+    assert caught.value.may_exist is True
+    lxc.snapshot.post.assert_called_once()
+    lxc.snapshot.get.assert_not_called()
+
+
+async def test_post_create_listing_failure_remains_uncertain() -> None:
+    """Task success without a readable exact snapshot row is not confirmation."""
+    proxmox, _node, lxc = _proxmox(
+        statuses=[{"status": "stopped", "exitstatus": "OK"}],
+        listings=[RuntimeError("listing unavailable")],
+    )
+    with pytest.raises(SnapshotError) as caught:
+        await async_create_snapshot(
+            proxmox,
+            "pve1",
+            200,
+            CURRENT,
+            executor=_executor,
+            sleep=_no_sleep,
+        )
+    assert caught.value.may_exist is True
+    lxc.snapshot.post.assert_called_once()
 
 
 def test_current_pseudo_entry_is_never_a_complete_owned_snapshot() -> None:
