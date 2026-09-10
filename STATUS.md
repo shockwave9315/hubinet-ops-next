@@ -79,7 +79,7 @@ Status date: 2026-09-10
   native snapshot/dpkg/liveness safety path.
 - Release target: integration `2026.9.1.5`, helper v4, protocol v1.
 - Post-audit bounded correction pass: **COMPLETE**.
-- Validation: **470 tests and 195 snapshots passed**; repository Ruff passed.
+- Validation: **473 tests and 195 snapshots passed**; repository Ruff passed.
 
 ## Next
 
