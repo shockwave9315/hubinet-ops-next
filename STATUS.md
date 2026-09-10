@@ -78,7 +78,8 @@ Status date: 2026-09-10
   presentation, explicit button action, a fresh equal plan, and the existing
   native snapshot/dpkg/liveness safety path.
 - Release target: integration `2026.9.1.5`, helper v4, protocol v1.
-- Validation: **461 tests and 195 snapshots passed**; repository Ruff passed.
+- Post-audit bounded correction pass: **COMPLETE**.
+- Validation: **470 tests and 195 snapshots passed**; repository Ruff passed.
 
 ## Next
 
