@@ -4,6 +4,7 @@ import asyncio
 from copy import deepcopy
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import pytest
 from tests.common import MockConfigEntry  # noqa: TID251
 
 from custom_components.hubinet_ops import async_unload_entry
@@ -15,10 +16,12 @@ from custom_components.hubinet_ops.const import (
     DOMAIN,
     EXPECTED_HELPER_VERSION,
 )
+from custom_components.hubinet_ops.packages.manager import PackageManager
 from custom_components.hubinet_ops.packages.models import (
     PackageMutationResult,
     PackageUpdateError,
     PackageUpdateOutcome,
+    PackageUpdateRecord,
     PackageUpdateStatus,
     RemovablePackage,
 )
@@ -29,9 +32,13 @@ from custom_components.hubinet_ops.packages.parser import (
 from custom_components.hubinet_ops.packages.presentation import (
     dismiss_cleanup_candidates,
     escape_markdown_cell,
+    notify_cleanup_complete,
     notify_cleanup_observation,
+    notify_retained_snapshots,
+    notify_update_complete,
     update_helper_issue,
 )
+from custom_components.hubinet_ops.packages.snapshots import RetainedSnapshotSummary
 from custom_components.hubinet_ops.packages.transport import PackageHelperProbe
 from homeassistant.components import persistent_notification as pn
 from homeassistant.components.button import SERVICE_PRESS
@@ -68,6 +75,29 @@ async def _press(hass: HomeAssistant, entity_id: str) -> None:
     await hass.services.async_call(
         "button", SERVICE_PRESS, {ATTR_ENTITY_ID: entity_id}, blocking=True
     )
+
+
+async def _establish_actionable_package_presentations(
+    hass: HomeAssistant, mock_config_entry: MockConfigEntry
+) -> PackageManager:
+    """Create real Scan/Review and cleanup-candidate presentations."""
+    with (
+        patch(
+            "custom_components.hubinet_ops.packages.transport."
+            "AsyncSSHPackageTransport.async_scan",
+            AsyncMock(return_value=RESULT),
+        ),
+        patch(
+            "custom_components.hubinet_ops.packages.transport."
+            "AsyncSSHPackageTransport.async_plan_autoremove",
+            AsyncMock(return_value=ParsedAutoremoveSimulation(CANDIDATES, 0)),
+        ),
+    ):
+        await setup_integration(hass, mock_config_entry)
+        await _press(hass, SCAN)
+        await hass.async_block_till_done()
+    await _press(hass, REVIEW)
+    return mock_config_entry.runtime_data.package_manager
 
 
 async def test_scan_presents_exact_cleanup_plan_before_enabling_autoremove(
@@ -286,6 +316,98 @@ async def test_successful_unload_clears_stale_helper_issue(
     assert await hass.config_entries.async_unload(mock_config_entry.entry_id)
     assert mock_config_entry.state is ConfigEntryState.NOT_LOADED
     assert issue_registry.async_get_issue(DOMAIN, issue_id) is None
+
+
+@pytest.mark.parametrize("lifecycle", ["reload", "unload", "remove"])
+async def test_successful_entry_lifecycle_dismisses_only_actionable_plans(
+    hass: HomeAssistant,
+    mock_proxmox_client: MagicMock,
+    mock_config_entry: MockConfigEntry,
+    package_transport_material: None,
+    lifecycle: str,
+) -> None:
+    """Successful reload, unload, and loaded removal discard stale plan UI."""
+    old_manager = await _establish_actionable_package_presentations(
+        hass, mock_config_entry
+    )
+    assert old_manager.record("pve1", 200).result is RESULT
+    assert old_manager.viewed_token("pve1", 200) is not None
+    assert old_manager.cleanup_evidence("pve1", 200) is not None
+
+    terminal = PackageUpdateRecord(
+        status=PackageUpdateStatus.SUCCESS,
+        outcome=PackageUpdateOutcome.SUCCESS,
+        changed_package_count=2,
+        liveness=True,
+    )
+    notify_update_complete(hass, "pve1", 200, terminal)
+    notify_cleanup_complete(hass, "pve1", 200, terminal)
+    notify_retained_snapshots(
+        hass,
+        "pve1",
+        200,
+        RetainedSnapshotSummary(1, ("hubinet-preupd-20260910120000-ab12cd",)),
+    )
+    notifications = pn._async_get_or_create_notifications(hass)  # noqa: SLF001
+    actionable_ids = {
+        "hubinet_ops_package_review_pve1_200",
+        "hubinet_ops_package_cleanup_candidates_pve1_200",
+    }
+    historical_ids = {
+        "hubinet_ops_package_update_pve1_200",
+        "hubinet_ops_package_cleanup_result_pve1_200",
+        "hubinet_ops_retained_snapshots_pve1_200",
+    }
+    assert actionable_ids <= notifications.keys()
+    assert historical_ids <= notifications.keys()
+
+    if lifecycle == "reload":
+        assert await hass.config_entries.async_reload(mock_config_entry.entry_id)
+    elif lifecycle == "unload":
+        assert await hass.config_entries.async_unload(mock_config_entry.entry_id)
+    else:
+        assert await hass.config_entries.async_remove(mock_config_entry.entry_id) == {
+            "require_restart": False
+        }
+    await hass.async_block_till_done()
+
+    assert actionable_ids.isdisjoint(notifications)
+    assert historical_ids <= notifications.keys()
+    if lifecycle == "reload":
+        manager = mock_config_entry.runtime_data.package_manager
+        assert manager is not old_manager
+        assert manager.record("pve1", 200).result is None
+        assert manager.viewed_token("pve1", 200) is None
+        assert manager.cleanup_evidence("pve1", 200) is None
+    elif lifecycle == "unload":
+        assert mock_config_entry.state is ConfigEntryState.NOT_LOADED
+    else:
+        assert hass.config_entries.async_get_entry(mock_config_entry.entry_id) is None
+
+
+async def test_failed_unload_preserves_actionable_package_presentations(
+    hass: HomeAssistant,
+    mock_proxmox_client: MagicMock,
+    mock_config_entry: MockConfigEntry,
+    package_transport_material: None,
+) -> None:
+    """An attempted unload cannot erase plans while the entry remains active."""
+    await _establish_actionable_package_presentations(hass, mock_config_entry)
+    notifications = pn._async_get_or_create_notifications(hass)  # noqa: SLF001
+    actionable_ids = {
+        "hubinet_ops_package_review_pve1_200",
+        "hubinet_ops_package_cleanup_candidates_pve1_200",
+    }
+    assert actionable_ids <= notifications.keys()
+
+    with patch.object(
+        hass.config_entries,
+        "async_unload_platforms",
+        AsyncMock(return_value=False),
+    ):
+        assert await async_unload_entry(hass, mock_config_entry) is False
+
+    assert actionable_ids <= notifications.keys()
 
 
 async def test_reload_without_package_transport_clears_stale_helper_issue(

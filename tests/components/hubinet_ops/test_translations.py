@@ -191,6 +191,14 @@ async def test_real_home_assistant_english_loading_resolves_runtime_content(
     assert loaded["entity"][f"component.{DOMAIN}.entity.button.resume.name"] == (
         "Resume"
     )
+    enrollment = config[
+        f"component.{DOMAIN}.config.step.enrollment.description"
+    ]
+    assert "Use `--reset` only" in enrollment
+    assert "API token" in enrollment
+    assert "SSH enrollment key" in enrollment
+    assert "Other Home Assistant instances" in enrollment
+    assert "must be re-enrolled" in enrollment
 
 
 async def test_real_home_assistant_polish_loading_covers_normal_ui(
@@ -215,6 +223,12 @@ async def test_real_home_assistant_polish_loading_covers_normal_ui(
         f"{prefix}.config.step.existing_credentials.data.username"
     ] == "Nazwa użytkownika"
     assert loaded["entity"][f"{prefix}.entity.button.resume.name"] == "Wznów"
+    enrollment = loaded["config"][f"{prefix}.config.step.enrollment.description"]
+    assert "Użyj `--reset` tylko" in enrollment
+    assert "token API Hubinet-Ops" in enrollment
+    assert "klucz SSH używany do rejestracji" in enrollment
+    assert "Inne instancje Home Assistanta" in enrollment
+    assert "ponownej rejestracji" in enrollment
     exceptions = loaded["exceptions"]
     for key in PACKAGE_PRESENTATION_KEYS:
         assert f"{prefix}.exceptions.{key}.message" in exceptions

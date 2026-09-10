@@ -50,7 +50,7 @@
         "data_description": {
           "enrollment": "Paste the complete HUBINET1 value printed by bootstrap. It is sensitive credential material: Hubinet-Ops does not store the raw blob, but you should discard terminal and clipboard copies after enrollment."
         },
-        "description": "Run this command once as root on the Proxmox VE host:\n\n```text\n{bootstrap_command}\n```\n\nThen paste the enrollment value below. Hubinet-Ops validates the API, SSH host key, SSH authentication, helper protocol, and local node before saving.\n\n**No enrollment value printed?**\n\nIf Hubinet-Ops was already configured on this host, the command above keeps the existing credentials and does not print a new enrollment. To create new enrollment credentials, run:\n\n```text\n{reset_bootstrap_command}\n```",
+        "description": "Run this command once as root on the Proxmox VE host:\n\n```text\n{bootstrap_command}\n```\n\nThen paste the enrollment value below. Hubinet-Ops validates the API, SSH host key, SSH authentication, helper protocol, and local node before saving.\n\n**No enrollment value printed?**\n\nIf Hubinet-Ops was already configured on this host, the command above keeps the existing credentials and does not print a new enrollment. To create new enrollment credentials, run:\n\n```text\n{reset_bootstrap_command}\n```\n\nUse `--reset` only when a new enrollment value is required. It rotates the Hubinet-Ops API token and SSH enrollment key. Other Home Assistant instances using the previous credentials for this host must be re-enrolled.",
         "title": "Enroll Hubinet-Ops"
       },
       "reauth_confirm": {

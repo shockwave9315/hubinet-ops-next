@@ -294,6 +294,19 @@ class PackageManager:
         return self._update_records.get((node, vmid), PackageUpdateRecord())
 
     @callback
+    def actionable_presentation_targets(self) -> frozenset[tuple[str, int]]:
+        """Return targets whose current package evidence may have actionable UI."""
+        targets = set(self._viewed_tokens) | set(self._cleanup_evidence)
+        targets.update(
+            key
+            for key, record in self._records.items()
+            if record.status is PackageScanStatus.SUCCESS
+            and record.result is not None
+            and record.result.packages
+        )
+        return frozenset(targets)
+
+    @callback
     def async_prune(self, current_targets: Collection[tuple[str, int]]) -> None:
         """Discard scan state for VMIDs no longer present upstream.
 
