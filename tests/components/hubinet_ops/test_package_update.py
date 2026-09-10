@@ -8,6 +8,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from tests.common import MockConfigEntry  # noqa: TID251
 
 from custom_components.hubinet_ops.packages.models import (
+    PackageMutationResult,
     PackageScanRecord,
     PackageUpdateError,
     PackageUpdateOutcome,
@@ -15,7 +16,10 @@ from custom_components.hubinet_ops.packages.models import (
     PackageUpdateStatus,
     PendingPackage,
 )
-from custom_components.hubinet_ops.packages.parser import ParsedAptSimulation
+from custom_components.hubinet_ops.packages.parser import (
+    ParsedAptSimulation,
+    ParsedAutoremoveSimulation,
+)
 from custom_components.hubinet_ops.packages.presentation import (
     notify_retained_snapshots,
     notify_review_plan,
@@ -32,7 +36,7 @@ from homeassistant.const import ATTR_ENTITY_ID, STATE_UNAVAILABLE, STATE_UNKNOWN
 from homeassistant.core import HomeAssistant
 
 from . import setup_integration
-from .test_packages import GateTransport, RESULT
+from .test_packages import RESULT, GateTransport
 
 SCAN = "button.ct_nginx_scan_pending_packages"
 REVIEW = "button.ct_nginx_review_package_update"
@@ -219,6 +223,107 @@ async def test_update_press_invalidates_scan_immediately_then_notifies_plan_chan
     ]
     assert "Nothing was changed and no snapshot was created" in notification["message"]
     assert "Scan, Review, and Approve again" in notification["message"]
+
+
+async def test_real_update_survives_stopped_observation_after_plan_gate(
+    hass: HomeAssistant,
+    mock_proxmox_client: MagicMock,
+    mock_config_entry: MockConfigEntry,
+    package_transport_material: None,
+) -> None:
+    """A stopped observation invalidates evidence without cancelling Update."""
+    await _setup_scanned(hass, mock_config_entry)
+    await _press(hass, REVIEW)
+    await _press(hass, APPROVE)
+    manager = mock_config_entry.runtime_data.package_manager
+    assert manager.cleanup_evidence("pve1", 200) is not None
+
+    plan_entered = asyncio.Event()
+    plan_release = asyncio.Event()
+
+    async def gated_plan(_self, _node, _vmid):
+        plan_entered.set()
+        await plan_release.wait()
+        return ParsedAptSimulation(RESULT.packages, RESULT.not_upgraded_count)
+
+    mutation = PackageMutationResult(
+        before={
+            ("openssl", "amd64"): "1.0",
+            ("example", "amd64"): "1.0",
+        },
+        after={
+            ("openssl", "amd64"): "1.1",
+            ("example", "amd64"): "1.1",
+        },
+    )
+    with (
+        patch(
+            "custom_components.hubinet_ops.packages.transport."
+            "AsyncSSHPackageTransport.async_plan",
+            new=gated_plan,
+        ),
+        patch(
+            "custom_components.hubinet_ops.packages.transport."
+            "AsyncSSHPackageTransport.async_update",
+            new=AsyncMock(return_value=mutation),
+        ),
+        patch(
+            "custom_components.hubinet_ops.packages.transport."
+            "AsyncSSHPackageTransport.async_ping",
+            new=AsyncMock(return_value=True),
+        ),
+        patch(
+            "custom_components.hubinet_ops.packages.transport."
+            "AsyncSSHPackageTransport.async_plan_autoremove",
+            new=AsyncMock(return_value=ParsedAutoremoveSimulation((), 0)),
+        ),
+        patch(
+            "custom_components.hubinet_ops.packages.manager.async_list_snapshots",
+            new=AsyncMock(return_value=[]),
+        ),
+        patch(
+            "custom_components.hubinet_ops.packages.manager.async_create_snapshot",
+            new=AsyncMock(),
+        ),
+        patch(
+            "custom_components.hubinet_ops.packages.manager.async_delete_snapshot",
+            new=AsyncMock(),
+        ),
+        patch(
+            "custom_components.hubinet_ops.packages.manager.generate_snapshot_name",
+            return_value="hubinet-preupd-20260910120000-ab12cd",
+        ),
+    ):
+        await _press(hass, UPDATE)
+        await plan_entered.wait()
+        update_task = manager._update_tasks[("pve1", 200)]  # noqa: SLF001
+        assert manager.update_record("pve1", 200).status is PackageUpdateStatus.RUNNING
+
+        stopped = deepcopy(mock_proxmox_client._node_mock.lxc.get.return_value)  # noqa: SLF001
+        for container in stopped:
+            if container["vmid"] == "200":
+                container["status"] = "stopped"
+        mock_proxmox_client._node_mock.lxc.get.return_value = stopped  # noqa: SLF001
+        await mock_config_entry.runtime_data.async_refresh()
+        await asyncio.sleep(0)
+
+        assert manager.record("pve1", 200) == PackageScanRecord()
+        assert manager.cleanup_evidence("pve1", 200) is None
+        assert manager.viewed_token("pve1", 200) is None
+        assert manager.update_record("pve1", 200).status is PackageUpdateStatus.RUNNING
+        assert manager._update_tasks[("pve1", 200)] is update_task  # noqa: SLF001
+        assert not update_task.done()
+        assert not update_task.cancelled()
+
+        plan_release.set()
+        await update_task
+        await hass.async_block_till_done()
+
+    record = manager.update_record("pve1", 200)
+    assert record.status is PackageUpdateStatus.SUCCESS
+    assert record.outcome is PackageUpdateOutcome.SUCCESS
+    assert record.changed_package_count == 2
+    assert record.liveness is True
 
 
 async def test_update_sensor_terminal_failure_remains_readable_when_guest_stops(
