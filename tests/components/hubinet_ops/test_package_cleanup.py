@@ -4,7 +4,7 @@ import asyncio
 from collections import deque
 from datetime import UTC, datetime
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, call, patch
 
 import pytest
 from tests.common import MockConfigEntry  # noqa: TID251
@@ -14,6 +14,7 @@ from custom_components.hubinet_ops.packages.models import (
     PackageMutationResult,
     PackageScanError,
     PackageScanFailure,
+    PackageScanRecord,
     PackageScanResult,
     PackageScanStatus,
     PackageUpdateError,
@@ -123,6 +124,7 @@ def _manager(
     *,
     presentation: MagicMock | None = None,
     invalidated: MagicMock | None = None,
+    update_complete: MagicMock | None = None,
     cleanup_complete: MagicMock | None = None,
 ) -> tuple[PackageManager, MagicMock]:
     proxmox = MagicMock()
@@ -137,6 +139,7 @@ def _manager(
         now=lambda: NOW,
         proxmox_getter=lambda: proxmox,
         sleep=AsyncMock(),
+        on_update_complete=update_complete or MagicMock(),
         on_cleanup_observation=presentation or MagicMock(),
         on_cleanup_invalidated=invalidated or MagicMock(),
         on_cleanup_complete=cleanup_complete or MagicMock(),
@@ -577,6 +580,163 @@ async def test_post_cleanup_observation_failure_preserves_mutation_success(
         )
     assert manager.cleanup_record("pve1", 200).status is PackageUpdateStatus.SUCCESS
     assert manager.cleanup_evidence("pve1", 200) is None
+
+
+async def test_pruned_update_post_success_observation_preserves_notification(
+    hass: HomeAssistant, mock_config_entry: MockConfigEntry
+) -> None:
+    """Prune cannot suppress an Update success already established locally."""
+    presentation = MagicMock()
+    complete = MagicMock()
+    transport = CleanupTransport([_parsed(()), _parsed(())])
+    manager, _ = _manager(
+        hass,
+        mock_config_entry,
+        transport,
+        presentation=presentation,
+        update_complete=complete,
+    )
+    await _scan(manager)
+    await _review(manager)
+    original_plan = transport.async_plan_autoremove
+    post_observation_entered = asyncio.Event()
+
+    async def gated_post_observation(
+        node: str, vmid: int
+    ) -> ParsedAutoremoveSimulation:
+        if transport.plan_calls == 1:
+            post_observation_entered.set()
+            await asyncio.Event().wait()
+        return await original_plan(node, vmid)
+
+    transport.async_plan_autoremove = (  # type: ignore[method-assign]
+        gated_post_observation
+    )
+    patches = _snapshot_patches()
+    with patches[0], patches[1], patches[2] as delete, patches[3]:
+        task = manager.async_start_update(
+            "pve1", 200, target_is_running=True, snapshot_permission=True
+        )
+        await post_observation_entered.wait()
+        assert transport.update_calls == 1
+        delete.assert_awaited_once()
+        manager.async_prune(set())
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+    assert manager.record("pve1", 200) == PackageScanRecord()
+    assert manager.update_record("pve1", 200) == PackageUpdateRecord()
+    assert manager.cleanup_record("pve1", 200) == PackageUpdateRecord()
+    assert manager.cleanup_evidence("pve1", 200) is None
+    presentation.assert_called_once_with("pve1", 200, (), "scan")
+    complete.assert_called_once()
+    outcome = complete.call_args.args[2]
+    assert outcome.status is PackageUpdateStatus.SUCCESS
+    assert outcome.outcome is PackageUpdateOutcome.SUCCESS
+
+
+async def test_pruned_autoremove_post_success_observation_preserves_notification(
+    hass: HomeAssistant, mock_config_entry: MockConfigEntry
+) -> None:
+    """Prune cannot suppress an Autoremove success already established locally."""
+    shown = _candidates(7)
+    presentation = MagicMock()
+    complete = MagicMock()
+    transport = CleanupTransport([_parsed(shown), _parsed(shown), _parsed(())])
+    manager, _ = _manager(
+        hass,
+        mock_config_entry,
+        transport,
+        presentation=presentation,
+        cleanup_complete=complete,
+    )
+    await _scan(manager)
+    original_plan = transport.async_plan_autoremove
+    post_observation_entered = asyncio.Event()
+
+    async def gated_post_observation(
+        node: str, vmid: int
+    ) -> ParsedAutoremoveSimulation:
+        if transport.plan_calls == 2:
+            post_observation_entered.set()
+            await asyncio.Event().wait()
+        return await original_plan(node, vmid)
+
+    transport.async_plan_autoremove = (  # type: ignore[method-assign]
+        gated_post_observation
+    )
+    patches = _snapshot_patches()
+    with patches[0], patches[1], patches[2] as delete, patches[3]:
+        task = manager.async_start_autoremove(
+            "pve1", 200, target_is_running=True, snapshot_permission=True
+        )
+        await post_observation_entered.wait()
+        assert transport.autoremove_calls == 1
+        delete.assert_awaited_once()
+        manager.async_prune(set())
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+    assert manager.record("pve1", 200) == PackageScanRecord()
+    assert manager.update_record("pve1", 200) == PackageUpdateRecord()
+    assert manager.cleanup_record("pve1", 200) == PackageUpdateRecord()
+    assert manager.cleanup_evidence("pve1", 200) is None
+    presentation.assert_called_once_with("pve1", 200, shown, "scan")
+    complete.assert_called_once()
+    outcome = complete.call_args.args[2]
+    assert outcome.status is PackageUpdateStatus.SUCCESS
+    assert outcome.outcome is PackageUpdateOutcome.SUCCESS
+
+
+async def test_owned_update_post_success_observation_cancel_publishes_unknown(
+    hass: HomeAssistant, mock_config_entry: MockConfigEntry
+) -> None:
+    """Without prune, cancellation keeps normal SUCCESS and UNKNOWN publication."""
+    presentation = MagicMock()
+    complete = MagicMock()
+    transport = CleanupTransport([_parsed(()), _parsed(())])
+    manager, _ = _manager(
+        hass,
+        mock_config_entry,
+        transport,
+        presentation=presentation,
+        update_complete=complete,
+    )
+    await _scan(manager)
+    await _review(manager)
+    original_plan = transport.async_plan_autoremove
+    post_observation_entered = asyncio.Event()
+
+    async def gated_post_observation(
+        node: str, vmid: int
+    ) -> ParsedAutoremoveSimulation:
+        if transport.plan_calls == 1:
+            post_observation_entered.set()
+            await asyncio.Event().wait()
+        return await original_plan(node, vmid)
+
+    transport.async_plan_autoremove = (  # type: ignore[method-assign]
+        gated_post_observation
+    )
+    patches = _snapshot_patches()
+    with patches[0], patches[1], patches[2], patches[3]:
+        task = manager.async_start_update(
+            "pve1", 200, target_is_running=True, snapshot_permission=True
+        )
+        await post_observation_entered.wait()
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+    record = manager.update_record("pve1", 200)
+    assert record.status is PackageUpdateStatus.SUCCESS
+    assert record.outcome is PackageUpdateOutcome.SUCCESS
+    assert manager.cleanup_evidence("pve1", 200) is None
+    assert presentation.call_args_list == [
+        call("pve1", 200, (), "scan"),
+        call("pve1", 200, None, "update"),
+    ]
+    complete.assert_called_once_with("pve1", 200, record)
 
 
 async def test_cleanup_press_invalidates_synchronously_and_double_press_fails(

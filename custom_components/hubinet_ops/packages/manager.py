@@ -774,8 +774,11 @@ class PackageManager:
                     self._transport.async_plan_autoremove(node, vmid)
                 )
             except asyncio.CancelledError:
-                self._publish_cleanup_observation(node, vmid, None, "update")
-                self._finish_update(node, vmid, own_record, outcome)
+                if self._update_records.get((node, vmid)) is own_record:
+                    self._publish_cleanup_observation(node, vmid, None, "update")
+                    self._finish_update(node, vmid, own_record, outcome)
+                else:
+                    self._notify_update_complete(node, vmid, outcome)
                 raise
             except Exception:
                 _LOGGER.debug(
@@ -1019,8 +1022,13 @@ class PackageManager:
                     self._transport.async_plan_autoremove(node, vmid)
                 )
             except asyncio.CancelledError:
-                self._publish_cleanup_observation(node, vmid, None, "autoremove")
-                self._finish_cleanup(node, vmid, own_record, outcome)
+                if self._cleanup_records.get((node, vmid)) is own_record:
+                    self._publish_cleanup_observation(
+                        node, vmid, None, "autoremove"
+                    )
+                    self._finish_cleanup(node, vmid, own_record, outcome)
+                else:
+                    self._notify_cleanup_complete(node, vmid, outcome)
                 raise
             except Exception:
                 _LOGGER.debug(
