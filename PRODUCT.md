@@ -59,6 +59,9 @@ current state and [ARCHITECTURE.md](ARCHITECTURE.md) for accepted design.
 - A failed scan is `UNKNOWN`, never equivalent to zero available updates.
 - An unsupported or unavailable guest is not equivalent to zero available
   updates.
+- A guest that leaves the running state invalidates its current package
+  evidence; after it runs again, pending and unused package values remain
+  `UNKNOWN` until the operator explicitly scans again.
 
 The product should use the smallest correct architecture. New architecture
 exists only to solve a demonstrated problem; anticipated future complexity is

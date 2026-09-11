@@ -36,7 +36,12 @@ from custom_components.hubinet_ops.packages.snapshots import (
     SnapshotError,
 )
 from homeassistant.components.button import SERVICE_PRESS
-from homeassistant.const import ATTR_ENTITY_ID, STATE_UNAVAILABLE, Platform
+from homeassistant.const import (
+    ATTR_ENTITY_ID,
+    STATE_UNAVAILABLE,
+    STATE_UNKNOWN,
+    Platform,
+)
 from homeassistant.core import HomeAssistant
 
 from . import setup_integration
@@ -792,21 +797,13 @@ async def test_in_flight_scan_does_not_block_native_proxmox_button(
     ).status.reboot.post.assert_called_once_with()
 
 
-async def test_stopped_lxc_hides_stored_package_count_but_preserves_it(
+async def test_stopped_lxc_invalidates_stored_package_count(
     hass: HomeAssistant,
     mock_proxmox_client: MagicMock,
     mock_config_entry: MockConfigEntry,
     package_transport_material: None,
 ) -> None:
-    """C5: a stopped guest must not keep exposing a stored exact count.
-
-    An unsupported or unavailable guest is not equivalent to zero available
-    updates (PRODUCT.md). The stored scan record itself is preserved, not
-    invalidated, since packages cannot change while the container is
-    stopped; only the sensor's (and, as already established, the button's)
-    availability changes. The prior result becomes visible again, without
-    a new scan, once the guest is running again.
-    """
+    """Leaving running invalidates evidence; restart remains unknown."""
     transport = GateTransport()
     zero_result = PackageScanResult(
         os_id="debian",
@@ -863,9 +860,11 @@ async def test_stopped_lxc_hides_stored_package_count_but_preserves_it(
     button_state = hass.states.get("button.ct_nginx_scan_pending_packages")
     assert button_state is not None
     assert button_state.state == STATE_UNAVAILABLE
+    # Accepted PR #11 architecture removes current package evidence as soon as
+    # the target is observed outside the running state.
+    assert coordinator.package_manager.record("pve1", 200) == PackageScanRecord()
 
-    # The guest starts again; the stored result becomes visible again
-    # without a new scan being triggered.
+    # The guest starts again; only an explicit Scan can establish fresh truth.
     running_containers = deepcopy(stopped_containers)
     for container in running_containers:
         if container["vmid"] == "200":
@@ -878,22 +877,17 @@ async def test_stopped_lxc_hides_stored_package_count_but_preserves_it(
 
     sensor_state = hass.states.get("sensor.ct_nginx_pending_package_updates")
     assert sensor_state is not None
-    assert sensor_state.state == "0"
+    assert sensor_state.state == STATE_UNKNOWN
     assert transport.calls == [("pve1", 200)]
 
 
-async def test_stopped_lxc_preserves_reviewed_state_and_resumes_without_rescan(
+async def test_stopped_lxc_discards_reviewed_state_and_requires_rescan(
     hass: HomeAssistant,
     mock_proxmox_client: MagicMock,
     mock_config_entry: MockConfigEntry,
     package_transport_material: None,
 ) -> None:
-    """T12: a stopped LXC keeps its stored review; starting shows it again.
-
-    Stopping the LXC does not clear the manager's stored review or token;
-    only the sensor's (and button's) availability changes while stopped.
-    No automatic re-scan happens once it starts again.
-    """
+    """A stopped LXC loses its review and starts again with unknown state."""
     transport = GateTransport()
 
     async def fake_scan(_self, expected_node, vmid):
@@ -940,10 +934,10 @@ async def test_stopped_lxc_preserves_reviewed_state_and_resumes_without_rescan(
     assert sensor_state is not None
     assert sensor_state.state == STATE_UNAVAILABLE
     record = coordinator.package_manager.record("pve1", 200)
-    assert record.reviewed is True
-    assert record.token == token
+    assert record == PackageScanRecord()
+    assert coordinator.package_manager.confirm_review("pve1", 200, token) is False
 
-    # The guest starts again; review becomes visible again, with no new scan.
+    # The guest starts again with no review and no automatic scan.
     running_containers = deepcopy(stopped_containers)
     for container in running_containers:
         if container["vmid"] == "200":
@@ -956,8 +950,8 @@ async def test_stopped_lxc_preserves_reviewed_state_and_resumes_without_rescan(
 
     sensor_state = hass.states.get("sensor.ct_nginx_pending_package_updates")
     assert sensor_state is not None
-    assert sensor_state.state == "2"
-    assert sensor_state.attributes["reviewed"] is True
+    assert sensor_state.state == STATE_UNKNOWN
+    assert "reviewed" not in sensor_state.attributes
     assert transport.calls == [("pve1", 200)]
 
 

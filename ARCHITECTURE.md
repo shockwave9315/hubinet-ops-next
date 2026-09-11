@@ -555,21 +555,28 @@ deletes the whole `PackageScanRecord`:
   present.
 - **Target disappears / is pruned:** the target's package record is deleted;
   review and token go with it.
+- **Target is observed non-running:** all current package evidence is deleted as
+  described below.
 - **VMID reappears later:** it starts with fresh package state and inherits
   no review. This design does not prove whether it is "the same LXC."
 - **HA restart / integration reload:** all ephemeral state, including review
   and tokens, is gone; nothing is reconstructed.
 
-### LXC stop/start does not invalidate review
+### Leaving the running state invalidates package evidence
 
-Stopping an LXC does not invalidate its stored successful record: the
-`PackageScanRecord`, its `reviewed` flag, and its scan token remain in RAM.
-Review actions are simply unavailable while the package sensor is
-unavailable (see below). When the LXC starts again, the stored result and
-review become visible again with no automatic re-scan. This design adds no
-historical-identity proof and no expiry based on elapsed time; future update
-execution independently re-obtains a fresh exact package plan before any
-mutation.
+A target observed as not running loses its whole `PackageScanRecord`, scan
+token and review, viewed token, cleanup evidence, rendered review plan, and
+rendered cleanup candidate plan. An in-flight Scan is cancelled when that
+evidence is removed so its `RUNNING` record and task ownership disappear
+together. In-flight Package Update and Autoremove attempts are not cancelled
+by this rule, and their terminal records remain as historical facts.
+
+When the target becomes running again, pending and unused package values are
+unknown until the operator explicitly runs Scan. This introduces no automatic
+Scan or `apt-get update`, TTL, transition registry, second inventory, or
+scheduler. This rule supersedes the former stop/start-preserves-review rule:
+live rollback testing demonstrated that the old rule could expose stale
+package state as current truth.
 
 ### No review TTL
 

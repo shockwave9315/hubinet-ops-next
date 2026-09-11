@@ -288,7 +288,10 @@ class ProxmoxveConfigFlow(ConfigFlow, domain=DOMAIN):
             step_id="enrollment",
             data_schema=ENROLLMENT_SCHEMA,
             errors=errors,
-            description_placeholders={"bootstrap_command": BOOTSTRAP_COMMAND},
+            description_placeholders={
+                "bootstrap_command": BOOTSTRAP_COMMAND,
+                "reset_bootstrap_command": RESET_BOOTSTRAP_COMMAND,
+            },
         )
 
     async def async_step_user_auth(

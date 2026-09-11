@@ -38,10 +38,12 @@ from .const import (
     DEFAULT_VERIFY_SSL,
     DOMAIN,
     NODE_ONLINE,
+    VM_CONTAINER_RUNNING,
 )
 from .packages.manager import PackageManager
 from .packages.presentation import (
     dismiss_cleanup_candidates,
+    dismiss_review_plan,
     notify_cleanup_complete,
     notify_cleanup_observation,
     notify_retained_snapshots,
@@ -159,6 +161,9 @@ class ProxmoxCoordinator(DataUpdateCoordinator[dict[str, ProxmoxNodeData]]):
                 )
             ),
             on_cleanup_invalidated=lambda node, vmid: dismiss_cleanup_candidates(
+                hass, node, vmid
+            ),
+            on_review_invalidated=lambda node, vmid: dismiss_review_plan(
                 hass, node, vmid
             ),
             on_helper_version=lambda version: update_helper_issue(
@@ -388,6 +393,13 @@ class ProxmoxCoordinator(DataUpdateCoordinator[dict[str, ProxmoxNodeData]]):
         # an unrelated new container) must not keep presenting a stale
         # package-scan result as current evidence.
         self.package_manager.async_prune(current_containers)
+        running_containers = {
+            (node_name, vmid)
+            for node_name, node_data in data.items()
+            for vmid, container in node_data.containers.items()
+            if container.get("status") == VM_CONTAINER_RUNNING
+        }
+        self.package_manager.async_invalidate_non_running(running_containers)
         self.known_containers &= current_containers
         new_containers = current_containers - self.known_containers
         if new_containers:

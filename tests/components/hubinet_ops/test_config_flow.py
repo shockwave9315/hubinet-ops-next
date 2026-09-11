@@ -186,6 +186,9 @@ async def _start_guided(hass: HomeAssistant) -> dict[str, Any]:
         "bootstrap_command"
     ]
     assert "/main/" not in result["description_placeholders"]["bootstrap_command"]
+    assert result["description_placeholders"]["reset_bootstrap_command"] == (
+        f'{result["description_placeholders"]["bootstrap_command"]} -s -- --reset'
+    )
     return result
 
 
@@ -321,12 +324,14 @@ async def test_guided_invalid_enrollment_creates_no_entry(
 ) -> None:
     """Malformed setup transport remains on the enrollment form."""
     result = await _start_guided(hass)
+    commands = result["description_placeholders"]
     result = await hass.config_entries.flow.async_configure(
         result["flow_id"], {"enrollment": "not-an-enrollment"}
     )
     assert result["type"] is FlowResultType.FORM
     assert result["step_id"] == "enrollment"
     assert result["errors"] == {"base": "invalid_enrollment_prefix"}
+    assert result["description_placeholders"] == commands
     assert hass.config_entries.async_entries(DOMAIN) == []
 
 

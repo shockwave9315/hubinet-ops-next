@@ -44,7 +44,7 @@ PACKAGE_SCAN_KNOWN_HOSTS = ".ssh/known_hosts"
 
 GUIDED_USERNAME = "hubinetnext@pve"
 GUIDED_TOKEN_ID = "ha"
-INTEGRATION_VERSION = "2026.9.1.5"
+INTEGRATION_VERSION = "2026.9.1.6"
 # Operator-facing full-functionality expectation only; protocol remains the
 # wire compatibility authority and supported old-helper operations stay usable.
 EXPECTED_HELPER_VERSION = 4
