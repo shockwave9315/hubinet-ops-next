@@ -15,6 +15,7 @@ from custom_components.hubinet_ops.packages.models import (
     PackageUpdateRecord,
     PackageUpdateStatus,
     PendingPackage,
+    RemovablePackage,
 )
 from custom_components.hubinet_ops.packages.parser import (
     ParsedAptSimulation,
@@ -42,8 +43,11 @@ SCAN = "button.ct_nginx_scan_pending_packages"
 REVIEW = "button.ct_nginx_review_package_update"
 APPROVE = "button.ct_nginx_approve_reviewed_plan"
 UPDATE = "button.ct_nginx_update_packages"
+AUTOREMOVE = "button.ct_nginx_autoremove_unused_packages"
 SCAN_SENSOR = "sensor.ct_nginx_pending_package_updates"
 UPDATE_SENSOR = "sensor.ct_nginx_package_update"
+UNUSED_SENSOR = "sensor.ct_nginx_unused_packages"
+CANDIDATES = (RemovablePackage("unused", "amd64", "1.0"),)
 
 
 async def _press(hass: HomeAssistant, entity_id: str) -> None:
@@ -225,26 +229,27 @@ async def test_update_press_invalidates_scan_immediately_then_notifies_plan_chan
     assert "Scan, Review, and Approve again" in notification["message"]
 
 
-async def test_real_update_survives_stopped_observation_after_plan_gate(
+async def test_real_update_cannot_restore_cleanup_evidence_after_stopped_observation(
     hass: HomeAssistant,
     mock_proxmox_client: MagicMock,
     mock_config_entry: MockConfigEntry,
     package_transport_material: None,
 ) -> None:
-    """A stopped observation invalidates evidence without cancelling Update."""
+    """A preserved Update cannot restore cleanup truth after the guest stops."""
     await _setup_scanned(hass, mock_config_entry)
     await _press(hass, REVIEW)
     await _press(hass, APPROVE)
     manager = mock_config_entry.runtime_data.package_manager
     assert manager.cleanup_evidence("pve1", 200) is not None
 
-    plan_entered = asyncio.Event()
-    plan_release = asyncio.Event()
+    cleanup_entered = asyncio.Event()
+    cleanup_release = asyncio.Event()
 
-    async def gated_plan(_self, _node, _vmid):
-        plan_entered.set()
-        await plan_release.wait()
-        return ParsedAptSimulation(RESULT.packages, RESULT.not_upgraded_count)
+    async def gated_cleanup(_self, _node, _vmid):
+        if not cleanup_entered.is_set():
+            cleanup_entered.set()
+            await cleanup_release.wait()
+        return ParsedAutoremoveSimulation(CANDIDATES, 0)
 
     mutation = PackageMutationResult(
         before={
@@ -260,7 +265,11 @@ async def test_real_update_survives_stopped_observation_after_plan_gate(
         patch(
             "custom_components.hubinet_ops.packages.transport."
             "AsyncSSHPackageTransport.async_plan",
-            new=gated_plan,
+            new=AsyncMock(
+                return_value=ParsedAptSimulation(
+                    RESULT.packages, RESULT.not_upgraded_count
+                )
+            ),
         ),
         patch(
             "custom_components.hubinet_ops.packages.transport."
@@ -275,7 +284,12 @@ async def test_real_update_survives_stopped_observation_after_plan_gate(
         patch(
             "custom_components.hubinet_ops.packages.transport."
             "AsyncSSHPackageTransport.async_plan_autoremove",
-            new=AsyncMock(return_value=ParsedAutoremoveSimulation((), 0)),
+            new=gated_cleanup,
+        ),
+        patch(
+            "custom_components.hubinet_ops.packages.transport."
+            "AsyncSSHPackageTransport.async_scan",
+            new=AsyncMock(return_value=RESULT),
         ),
         patch(
             "custom_components.hubinet_ops.packages.manager.async_list_snapshots",
@@ -295,7 +309,7 @@ async def test_real_update_survives_stopped_observation_after_plan_gate(
         ),
     ):
         await _press(hass, UPDATE)
-        await plan_entered.wait()
+        await cleanup_entered.wait()
         update_task = manager._update_tasks[("pve1", 200)]  # noqa: SLF001
         assert manager.update_record("pve1", 200).status is PackageUpdateStatus.RUNNING
 
@@ -315,15 +329,114 @@ async def test_real_update_survives_stopped_observation_after_plan_gate(
         assert not update_task.done()
         assert not update_task.cancelled()
 
-        plan_release.set()
+        cleanup_release.set()
         await update_task
         await hass.async_block_till_done()
 
-    record = manager.update_record("pve1", 200)
-    assert record.status is PackageUpdateStatus.SUCCESS
-    assert record.outcome is PackageUpdateOutcome.SUCCESS
-    assert record.changed_package_count == 2
-    assert record.liveness is True
+        record = manager.update_record("pve1", 200)
+        assert record.status is PackageUpdateStatus.SUCCESS
+        assert record.outcome is PackageUpdateOutcome.SUCCESS
+        assert record.changed_package_count == 2
+        assert record.liveness is True
+
+        running = deepcopy(mock_proxmox_client._node_mock.lxc.get.return_value)  # noqa: SLF001
+        for container in running:
+            if container["vmid"] == "200":
+                container["status"] = "running"
+        mock_proxmox_client._node_mock.lxc.get.return_value = running  # noqa: SLF001
+        await mock_config_entry.runtime_data.async_refresh()
+        await hass.async_block_till_done()
+
+        assert hass.states.get(SCAN_SENSOR).state == STATE_UNKNOWN
+        assert hass.states.get(UNUSED_SENSOR).state == STATE_UNKNOWN
+        assert hass.states.get(AUTOREMOVE).state == STATE_UNAVAILABLE
+        assert manager.cleanup_evidence("pve1", 200) is None
+        notifications = pn._async_get_or_create_notifications(hass)  # noqa: SLF001
+        cleanup_notification = notifications.get(
+            "hubinet_ops_package_cleanup_candidates_pve1_200"
+        )
+        if cleanup_notification is not None:
+            assert "Run Scan to try again" in cleanup_notification["message"]
+            assert "| unused |" not in cleanup_notification["message"]
+        assert "hubinet_ops_package_update_pve1_200" in notifications
+
+        await _press(hass, SCAN)
+        await hass.async_block_till_done()
+        assert manager.cleanup_evidence("pve1", 200) is not None
+        assert hass.states.get(UNUSED_SENSOR).state == "1"
+        assert hass.states.get(AUTOREMOVE).state != STATE_UNAVAILABLE
+
+
+async def test_uninterrupted_update_publishes_current_cleanup_evidence(
+    hass: HomeAssistant,
+    mock_proxmox_client: MagicMock,
+    mock_config_entry: MockConfigEntry,
+    package_transport_material: None,
+) -> None:
+    """Without a stopped observation, Update publishes normal cleanup truth."""
+    await _setup_scanned(hass, mock_config_entry)
+    await _press(hass, REVIEW)
+    await _press(hass, APPROVE)
+    mutation = PackageMutationResult(
+        before={
+            ("openssl", "amd64"): "1.0",
+            ("example", "amd64"): "1.0",
+        },
+        after={
+            ("openssl", "amd64"): "1.1",
+            ("example", "amd64"): "1.1",
+        },
+    )
+    with (
+        patch(
+            "custom_components.hubinet_ops.packages.transport."
+            "AsyncSSHPackageTransport.async_plan",
+            new=AsyncMock(
+                return_value=ParsedAptSimulation(
+                    RESULT.packages, RESULT.not_upgraded_count
+                )
+            ),
+        ),
+        patch(
+            "custom_components.hubinet_ops.packages.transport."
+            "AsyncSSHPackageTransport.async_update",
+            new=AsyncMock(return_value=mutation),
+        ),
+        patch(
+            "custom_components.hubinet_ops.packages.transport."
+            "AsyncSSHPackageTransport.async_ping",
+            new=AsyncMock(return_value=True),
+        ),
+        patch(
+            "custom_components.hubinet_ops.packages.transport."
+            "AsyncSSHPackageTransport.async_plan_autoremove",
+            new=AsyncMock(return_value=ParsedAutoremoveSimulation(CANDIDATES, 0)),
+        ),
+        patch(
+            "custom_components.hubinet_ops.packages.manager.async_list_snapshots",
+            new=AsyncMock(return_value=[]),
+        ),
+        patch(
+            "custom_components.hubinet_ops.packages.manager.async_create_snapshot",
+            new=AsyncMock(),
+        ),
+        patch(
+            "custom_components.hubinet_ops.packages.manager.async_delete_snapshot",
+            new=AsyncMock(),
+        ),
+        patch(
+            "custom_components.hubinet_ops.packages.manager.generate_snapshot_name",
+            return_value="hubinet-preupd-20260911120000-ab12cd",
+        ),
+    ):
+        await _press(hass, UPDATE)
+        await hass.async_block_till_done()
+
+    manager = mock_config_entry.runtime_data.package_manager
+    assert manager.update_record("pve1", 200).status is PackageUpdateStatus.SUCCESS
+    assert manager.cleanup_evidence("pve1", 200).candidates == CANDIDATES
+    assert hass.states.get(UNUSED_SENSOR).state == "1"
+    assert hass.states.get(AUTOREMOVE).state != STATE_UNAVAILABLE
 
 
 async def test_update_sensor_terminal_failure_remains_readable_when_guest_stops(

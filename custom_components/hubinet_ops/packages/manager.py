@@ -249,6 +249,7 @@ class PackageManager:
         self._update_records: dict[tuple[str, int], PackageUpdateRecord] = {}
         self._update_tasks: dict[tuple[str, int], asyncio.Task[None]] = {}
         self._cleanup_evidence: dict[tuple[str, int], CleanupEvidence] = {}
+        self._fenced_evidence: set[tuple[str, int]] = set()
         self._cleanup_records: dict[tuple[str, int], PackageUpdateRecord] = {}
         self._cleanup_tasks: dict[tuple[str, int], asyncio.Task[None]] = {}
         self._helper_version: int | None = None
@@ -328,6 +329,7 @@ class PackageManager:
                 self._records.keys()
                 | self._update_records.keys()
                 | self._cleanup_evidence.keys()
+                | self._fenced_evidence
                 | self._cleanup_records.keys()
             )
             if key not in current_targets
@@ -338,6 +340,7 @@ class PackageManager:
             had_scan = self._records.pop(key, None) is not None
             self._update_records.pop(key, None)
             had_cleanup = self._cleanup_evidence.pop(key, None) is not None
+            self._fenced_evidence.discard(key)
             self._cleanup_records.pop(key, None)
             had_viewed = self._viewed_tokens.pop(key, None) is not None
             if had_scan or had_viewed:
@@ -369,13 +372,16 @@ class PackageManager:
         stale = (
             self._records.keys()
             | self._tasks.keys()
+            | self._update_tasks.keys()
             | self._cleanup_evidence.keys()
+            | self._cleanup_tasks.keys()
             | self._viewed_tokens.keys()
         ) - set(running_targets)
         if not stale:
             return
         changed = False
         for key in stale:
+            self._fenced_evidence.add(key)
             had_scan = self._records.pop(key, None) is not None
             had_viewed = self._viewed_tokens.pop(key, None) is not None
             had_cleanup = self._cleanup_evidence.pop(key, None) is not None
@@ -436,6 +442,7 @@ class PackageManager:
                 "package cleanup is already running for this LXC VMID",
             )
 
+        self._fenced_evidence.discard((node, vmid))
         attempted_at = self._now()
         self._viewed_tokens.pop((node, vmid), None)
         self._dismiss_review(node, vmid)
@@ -1263,6 +1270,8 @@ class PackageManager:
     ) -> bool:
         """Present first, then make a non-empty exact cleanup plan actionable."""
         key = (node, vmid)
+        if key in self._fenced_evidence:
+            candidates = None
         self._cleanup_evidence.pop(key, None)
         if candidates:
             try:

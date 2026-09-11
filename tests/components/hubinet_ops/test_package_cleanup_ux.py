@@ -58,6 +58,7 @@ REVIEW = "button.ct_nginx_review_package_update"
 APPROVE = "button.ct_nginx_approve_reviewed_plan"
 UPDATE = "button.ct_nginx_update_packages"
 AUTOREMOVE = "button.ct_nginx_autoremove_unused_packages"
+PENDING = "sensor.ct_nginx_pending_package_updates"
 UNUSED = "sensor.ct_nginx_unused_packages"
 
 CANDIDATES = tuple(
@@ -78,6 +79,15 @@ async def _press(hass: HomeAssistant, entity_id: str) -> None:
     await hass.services.async_call(
         "button", SERVICE_PRESS, {ATTR_ENTITY_ID: entity_id}, blocking=True
     )
+
+
+def _set_container_status(mock_proxmox_client: MagicMock, status: str) -> None:
+    """Set CT200's current coordinator observation."""
+    containers = deepcopy(mock_proxmox_client._node_mock.lxc.get.return_value)  # noqa: SLF001
+    for container in containers:
+        if container["vmid"] == "200":
+            container["status"] = status
+    mock_proxmox_client._node_mock.lxc.get.return_value = containers  # noqa: SLF001
 
 
 async def _establish_actionable_package_presentations(
@@ -285,6 +295,132 @@ async def test_cleanup_entities_follow_snapshot_and_stopped_guest_policy(
         )
         is None
     )
+
+
+async def test_real_autoremove_cannot_restore_cleanup_after_stopped_observation(
+    hass: HomeAssistant,
+    mock_proxmox_client: MagicMock,
+    mock_config_entry: MockConfigEntry,
+    package_transport_material: None,
+) -> None:
+    """A preserved Autoremove cannot restore cleanup truth after a stop."""
+    with (
+        patch(
+            "custom_components.hubinet_ops.packages.transport."
+            "AsyncSSHPackageTransport.async_scan",
+            new=AsyncMock(return_value=RESULT),
+        ),
+        patch(
+            "custom_components.hubinet_ops.packages.transport."
+            "AsyncSSHPackageTransport.async_plan_autoremove",
+            new=AsyncMock(return_value=ParsedAutoremoveSimulation(CANDIDATES, 0)),
+        ),
+    ):
+        await setup_integration(hass, mock_config_entry)
+        await _press(hass, SCAN)
+        await hass.async_block_till_done()
+    manager = mock_config_entry.runtime_data.package_manager
+    assert manager.cleanup_evidence("pve1", 200) is not None
+
+    cleanup_entered = asyncio.Event()
+    cleanup_release = asyncio.Event()
+    plan_calls = 0
+
+    async def gated_cleanup(_self, _node, _vmid):
+        nonlocal plan_calls
+        plan_calls += 1
+        if plan_calls == 2:
+            cleanup_entered.set()
+            await cleanup_release.wait()
+        return ParsedAutoremoveSimulation(CANDIDATES, 0)
+
+    mutation = PackageMutationResult(
+        before={
+            (package.name, package.architecture): package.installed_version
+            for package in CANDIDATES
+        },
+        after={},
+    )
+    with (
+        patch(
+            "custom_components.hubinet_ops.packages.transport."
+            "AsyncSSHPackageTransport.async_plan_autoremove",
+            new=gated_cleanup,
+        ),
+        patch(
+            "custom_components.hubinet_ops.packages.transport."
+            "AsyncSSHPackageTransport.async_autoremove",
+            new=AsyncMock(return_value=mutation),
+        ),
+        patch(
+            "custom_components.hubinet_ops.packages.transport."
+            "AsyncSSHPackageTransport.async_ping",
+            new=AsyncMock(return_value=True),
+        ),
+        patch(
+            "custom_components.hubinet_ops.packages.transport."
+            "AsyncSSHPackageTransport.async_scan",
+            new=AsyncMock(return_value=RESULT),
+        ),
+        patch(
+            "custom_components.hubinet_ops.packages.manager.async_list_snapshots",
+            new=AsyncMock(return_value=[]),
+        ),
+        patch(
+            "custom_components.hubinet_ops.packages.manager.async_create_snapshot",
+            new=AsyncMock(),
+        ),
+        patch(
+            "custom_components.hubinet_ops.packages.manager.async_delete_snapshot",
+            new=AsyncMock(),
+        ),
+        patch(
+            "custom_components.hubinet_ops.packages.manager.generate_snapshot_name",
+            return_value="hubinet-preclean-20260911120000-ab12cd",
+        ),
+    ):
+        await _press(hass, AUTOREMOVE)
+        await cleanup_entered.wait()
+        cleanup_task = manager._cleanup_tasks[("pve1", 200)]  # noqa: SLF001
+
+        _set_container_status(mock_proxmox_client, "stopped")
+        await mock_config_entry.runtime_data.async_refresh()
+        await asyncio.sleep(0)
+        assert manager.cleanup_evidence("pve1", 200) is None
+        assert manager.cleanup_record("pve1", 200).status is PackageUpdateStatus.RUNNING
+        assert not cleanup_task.done()
+        assert not cleanup_task.cancelled()
+
+        cleanup_release.set()
+        await cleanup_task
+        await hass.async_block_till_done()
+        record = manager.cleanup_record("pve1", 200)
+        assert record.status is PackageUpdateStatus.SUCCESS
+        assert record.outcome is PackageUpdateOutcome.SUCCESS
+        assert record.changed_package_count == len(CANDIDATES)
+        assert record.liveness is True
+
+        _set_container_status(mock_proxmox_client, "running")
+        await mock_config_entry.runtime_data.async_refresh()
+        await hass.async_block_till_done()
+        assert hass.states.get(PENDING).state == STATE_UNKNOWN
+        assert hass.states.get(UNUSED).state == STATE_UNKNOWN
+        assert hass.states.get(AUTOREMOVE).state == STATE_UNAVAILABLE
+        assert manager.cleanup_evidence("pve1", 200) is None
+        notifications = pn._async_get_or_create_notifications(hass)  # noqa: SLF001
+        cleanup_notification = notifications.get(
+            "hubinet_ops_package_cleanup_candidates_pve1_200"
+        )
+        if cleanup_notification is not None:
+            assert "Run Scan to try again" in cleanup_notification["message"]
+            assert "| libatomic1 |" not in cleanup_notification["message"]
+        assert "hubinet_ops_package_cleanup_result_pve1_200" in notifications
+
+        await _press(hass, SCAN)
+        await hass.async_block_till_done()
+        assert manager.cleanup_evidence("pve1", 200) is not None
+        assert hass.states.get(UNUSED).state == str(len(CANDIDATES))
+        assert hass.states.get(AUTOREMOVE).state != STATE_UNAVAILABLE
 
 
 async def test_cleanup_notification_escapes_exact_rows_and_dismisses(

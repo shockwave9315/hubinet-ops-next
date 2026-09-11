@@ -164,17 +164,24 @@ async def test_non_running_observation_cancels_scan_without_stale_resurrection(
 
     manager.async_invalidate_non_running(set())
     assert manager.record(*KEY) == PackageScanRecord()
+    assert KEY in manager._fenced_evidence  # noqa: SLF001
     with pytest.raises(asyncio.CancelledError):
         await stale_task
     assert manager.record(*KEY) == PackageScanRecord()
 
     transport.rearm(KEY[1])
     fresh_task = manager.async_start_scan(*KEY, target_is_running=True)
+    assert KEY not in manager._fenced_evidence  # noqa: SLF001
     await asyncio.wait_for(transport.entered(KEY[1]).wait(), 1)
     assert transport.calls == [KEY, KEY]
     transport.release(KEY[1])
     await fresh_task
     assert manager.record(*KEY).status is PackageScanStatus.SUCCESS
+
+    manager.async_invalidate_non_running(set())
+    assert KEY in manager._fenced_evidence  # noqa: SLF001
+    manager.async_prune(set())
+    assert KEY not in manager._fenced_evidence  # noqa: SLF001
 
 
 async def test_non_running_invalidation_preserves_mutation_attempts_and_history(
