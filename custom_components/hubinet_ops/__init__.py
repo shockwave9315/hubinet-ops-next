@@ -34,6 +34,7 @@ from .packages.presentation import (
 PLATFORMS = [
     Platform.BINARY_SENSOR,
     Platform.BUTTON,
+    Platform.SELECT,
     Platform.SENSOR,
 ]
 

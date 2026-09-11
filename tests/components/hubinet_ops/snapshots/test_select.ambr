@@ -1,0 +1,169 @@
+# serializer version: 1
+# name: test_all_select_entities[select.ct_backup_snapshot_to_restore-entry]
+  EntityRegistryEntrySnapshot({
+    'aliases': list([
+      None,
+    ]),
+    'area_id': None,
+    'capabilities': dict({
+      <SelectEntityCapabilityAttribute.OPTIONS: 'options'>: list([
+      ]),
+    }),
+    'config_entry_id': <ANY>,
+    'config_subentry_id': <ANY>,
+    'device_class': None,
+    'device_id': <ANY>,
+    'disabled_by': None,
+    'domain': 'select',
+    'entity_category': <EntityCategory.CONFIG: 'config'>,
+    'entity_id': 'select.ct_backup_snapshot_to_restore',
+    'has_entity_name': True,
+    'hidden_by': None,
+    'icon': None,
+    'id': <ANY>,
+    'labels': set({
+    }),
+    'name': None,
+    'object_id_base': 'Snapshot to restore',
+    'options': dict({
+    }),
+    'original_device_class': None,
+    'original_icon': None,
+    'original_name': 'Snapshot to restore',
+    'platform': 'hubinet_ops',
+    'previous_unique_id': None,
+    'suggested_object_id': None,
+    'supported_features': 0,
+    'translation_key': 'snapshot_to_restore',
+    'unique_id': '1234_lxc_pve1_201_snapshot_to_restore',
+    'unit_of_measurement': None,
+  })
+# ---
+# name: test_all_select_entities[select.ct_backup_snapshot_to_restore-state]
+  StateSnapshot({
+    'attributes': ReadOnlyDict({
+      <EntityStateAttribute.FRIENDLY_NAME: 'friendly_name'>: 'ct-backup Snapshot to restore',
+      <SelectEntityCapabilityAttribute.OPTIONS: 'options'>: list([
+      ]),
+      'selected_snapshot': None,
+    }),
+    'context': <ANY>,
+    'entity_id': 'select.ct_backup_snapshot_to_restore',
+    'last_changed': <ANY>,
+    'last_reported': <ANY>,
+    'last_updated': <ANY>,
+    'state': 'unknown',
+  })
+# ---
+# name: test_all_select_entities[select.ct_nginx_snapshot_to_restore-entry]
+  EntityRegistryEntrySnapshot({
+    'aliases': list([
+      None,
+    ]),
+    'area_id': None,
+    'capabilities': dict({
+      <SelectEntityCapabilityAttribute.OPTIONS: 'options'>: list([
+      ]),
+    }),
+    'config_entry_id': <ANY>,
+    'config_subentry_id': <ANY>,
+    'device_class': None,
+    'device_id': <ANY>,
+    'disabled_by': None,
+    'domain': 'select',
+    'entity_category': <EntityCategory.CONFIG: 'config'>,
+    'entity_id': 'select.ct_nginx_snapshot_to_restore',
+    'has_entity_name': True,
+    'hidden_by': None,
+    'icon': None,
+    'id': <ANY>,
+    'labels': set({
+    }),
+    'name': None,
+    'object_id_base': 'Snapshot to restore',
+    'options': dict({
+    }),
+    'original_device_class': None,
+    'original_icon': None,
+    'original_name': 'Snapshot to restore',
+    'platform': 'hubinet_ops',
+    'previous_unique_id': None,
+    'suggested_object_id': None,
+    'supported_features': 0,
+    'translation_key': 'snapshot_to_restore',
+    'unique_id': '1234_lxc_pve1_200_snapshot_to_restore',
+    'unit_of_measurement': None,
+  })
+# ---
+# name: test_all_select_entities[select.ct_nginx_snapshot_to_restore-state]
+  StateSnapshot({
+    'attributes': ReadOnlyDict({
+      <EntityStateAttribute.FRIENDLY_NAME: 'friendly_name'>: 'ct-nginx Snapshot to restore',
+      <SelectEntityCapabilityAttribute.OPTIONS: 'options'>: list([
+      ]),
+      'selected_snapshot': None,
+    }),
+    'context': <ANY>,
+    'entity_id': 'select.ct_nginx_snapshot_to_restore',
+    'last_changed': <ANY>,
+    'last_reported': <ANY>,
+    'last_updated': <ANY>,
+    'state': 'unknown',
+  })
+# ---
+# name: test_all_select_entities[select.vm_web_snapshot_to_restore-entry]
+  EntityRegistryEntrySnapshot({
+    'aliases': list([
+      None,
+    ]),
+    'area_id': None,
+    'capabilities': dict({
+      <SelectEntityCapabilityAttribute.OPTIONS: 'options'>: list([
+      ]),
+    }),
+    'config_entry_id': <ANY>,
+    'config_subentry_id': <ANY>,
+    'device_class': None,
+    'device_id': <ANY>,
+    'disabled_by': None,
+    'domain': 'select',
+    'entity_category': <EntityCategory.CONFIG: 'config'>,
+    'entity_id': 'select.vm_web_snapshot_to_restore',
+    'has_entity_name': True,
+    'hidden_by': None,
+    'icon': None,
+    'id': <ANY>,
+    'labels': set({
+    }),
+    'name': None,
+    'object_id_base': 'Snapshot to restore',
+    'options': dict({
+    }),
+    'original_device_class': None,
+    'original_icon': None,
+    'original_name': 'Snapshot to restore',
+    'platform': 'hubinet_ops',
+    'previous_unique_id': None,
+    'suggested_object_id': None,
+    'supported_features': 0,
+    'translation_key': 'snapshot_to_restore',
+    'unique_id': '1234_qemu_pve1_100_snapshot_to_restore',
+    'unit_of_measurement': None,
+  })
+# ---
+# name: test_all_select_entities[select.vm_web_snapshot_to_restore-state]
+  StateSnapshot({
+    'attributes': ReadOnlyDict({
+      <EntityStateAttribute.FRIENDLY_NAME: 'friendly_name'>: 'vm-web Snapshot to restore',
+      <SelectEntityCapabilityAttribute.OPTIONS: 'options'>: list([
+      ]),
+      'selected_snapshot': None,
+    }),
+    'context': <ANY>,
+    'entity_id': 'select.vm_web_snapshot_to_restore',
+    'last_changed': <ANY>,
+    'last_reported': <ANY>,
+    'last_updated': <ANY>,
+    'state': 'unknown',
+  })
+# ---

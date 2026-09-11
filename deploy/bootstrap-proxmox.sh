@@ -4,7 +4,7 @@
 set -eu
 
 main() {
-  RELEASE_VERSION="2026.9.1.6"
+  RELEASE_VERSION="2026.9.1.7"
   HELPER_SHA256="f8a5f45ebad1775db1eae9fe491ec5481ca853bbaf9725439eff48eff76b9f86"
   REPOSITORY="shockwave9315/hubinet-ops-next"
   HELPER_URL="https://raw.githubusercontent.com/${REPOSITORY}/${RELEASE_VERSION}/deploy/hubinet-package-scan-helper.py"

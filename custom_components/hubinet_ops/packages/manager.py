@@ -252,6 +252,7 @@ class PackageManager:
         self._fenced_evidence: set[tuple[str, int]] = set()
         self._cleanup_records: dict[tuple[str, int], PackageUpdateRecord] = {}
         self._cleanup_tasks: dict[tuple[str, int], asyncio.Task[None]] = {}
+        self._restore_reserved: set[tuple[str, int]] = set()
         self._helper_version: int | None = None
         self._helper_probe_task: asyncio.Task[None] | None = None
         self._viewed_tokens: dict[tuple[str, int], str] = {}
@@ -293,6 +294,64 @@ class PackageManager:
     def update_record(self, node: str, vmid: int) -> PackageUpdateRecord:
         """Return the latest ephemeral package-update state for one LXC."""
         return self._update_records.get((node, vmid), PackageUpdateRecord())
+
+    @callback
+    def restore_reserved(self, node: str, vmid: int) -> bool:
+        """Return whether Restore owns this LXC in the current manager lifetime."""
+        return (node, vmid) in self._restore_reserved
+
+    @callback
+    def begin_restore(self, node: str, vmid: int) -> None:
+        """Synchronously claim one LXC against every package mutation path."""
+        if any(target_vmid == vmid for _node, target_vmid in self._restore_reserved):
+            raise PackageUpdateError(
+                PackageUpdateOutcome.PACKAGE_MANAGER_BUSY,
+                "a snapshot Restore is already active for this LXC VMID",
+            )
+        if any(
+            target_vmid == vmid and record.status is PackageScanStatus.RUNNING
+            for (_node, target_vmid), record in self._records.items()
+        ) or any(
+            target_vmid == vmid and record.status is PackageUpdateStatus.RUNNING
+            for records in (self._update_records, self._cleanup_records)
+            for (_node, target_vmid), record in records.items()
+        ):
+            raise PackageUpdateError(
+                PackageUpdateOutcome.PACKAGE_MANAGER_BUSY,
+                "a package scan, update, or cleanup is active for this LXC VMID",
+            )
+        self._restore_reserved.add((node, vmid))
+        self._on_state_change()
+
+    @callback
+    def invalidate_restore_target(self, node: str, vmid: int) -> None:
+        """Invalidate current package truth immediately before Restore submission."""
+        key = (node, vmid)
+        if key not in self._restore_reserved:
+            raise RuntimeError("LXC Restore invalidation requires its reservation")
+        self._fenced_evidence.add(key)
+        had_scan = self._records.pop(key, None) is not None
+        had_viewed = self._viewed_tokens.pop(key, None) is not None
+        had_cleanup = self._cleanup_evidence.pop(key, None) is not None
+        if had_scan or had_viewed:
+            self._dismiss_review(node, vmid)
+        if had_cleanup:
+            try:
+                self._on_cleanup_invalidated(node, vmid)
+            except Exception:
+                _LOGGER.exception(
+                    "Could not dismiss stale cleanup presentation for %s/%s",
+                    node,
+                    vmid,
+                )
+        self._on_state_change()
+
+    @callback
+    def end_restore(self, node: str, vmid: int) -> None:
+        """Release one Restore reservation after a known terminal outcome."""
+        if (node, vmid) in self._restore_reserved:
+            self._restore_reserved.discard((node, vmid))
+            self._on_state_change()
 
     @callback
     def actionable_presentation_targets(self) -> frozenset[tuple[str, int]]:
@@ -416,6 +475,11 @@ class PackageManager:
             raise PackageScanError(
                 PackageScanFailure.GUEST_UNAVAILABLE,
                 "LXC is not present and running in current Proxmox data",
+            )
+        if any(target_vmid == vmid for _node, target_vmid in self._restore_reserved):
+            raise PackageScanError(
+                PackageScanFailure.PACKAGE_MANAGER_BUSY,
+                "snapshot Restore owns this LXC VMID",
             )
         if any(
             target_vmid == vmid and record.status is PackageScanStatus.RUNNING
@@ -634,6 +698,11 @@ class PackageManager:
             raise PackageUpdateError(
                 PackageUpdateOutcome.SNAPSHOT_FAILED,
                 "VM.Snapshot permission is required for package updates",
+            )
+        if any(target_vmid == vmid for _node, target_vmid in self._restore_reserved):
+            raise PackageUpdateError(
+                PackageUpdateOutcome.PACKAGE_MANAGER_BUSY,
+                "snapshot Restore owns this LXC VMID",
             )
         if any(
             target_vmid == vmid and record.status is PackageScanStatus.RUNNING
@@ -891,6 +960,11 @@ class PackageManager:
             raise PackageUpdateError(
                 PackageUpdateOutcome.SNAPSHOT_FAILED,
                 "VM.Snapshot permission is required for package cleanup",
+            )
+        if any(target_vmid == vmid for _node, target_vmid in self._restore_reserved):
+            raise PackageUpdateError(
+                PackageUpdateOutcome.PACKAGE_MANAGER_BUSY,
+                "snapshot Restore owns this LXC VMID",
             )
         if any(
             target_vmid == vmid and record.status is PackageScanStatus.RUNNING
