@@ -104,16 +104,17 @@ Status date: 2026-09-11
 - Architecture: **ACCEPTED BY MAINTAINER on 2026-09-11**, before runtime
   implementation; see the durable boundary in
   [ARCHITECTURE.md](ARCHITECTURE.md).
-- Implementation: **NOT STARTED** at this documentation checkpoint.
+- Implementation: **IMPLEMENTED IN PR #12**. Native PVE snapshot selection and
+  explicit Restore are available for eligible QEMU VMs and LXCs; LXC package
+  truth and operation exclusion follow the accepted fail-closed boundary.
 - Release target: integration `2026.9.1.7`, helper v4, protocol v1 unchanged.
-- Scope: operator-controlled native snapshot selection and explicit Restore
-  for QEMU VMs and LXCs, with fail-closed package truth and operation exclusion
-  for LXC Restore.
+- Validation: **547 tests and 207 snapshots passed**; repository Ruff,
+  translation and release-parity checks, helper SHA/protocol consistency,
+  ShellCheck, and shell syntax passed.
 
 ## Next
 
-Implement PR #12 within its accepted native snapshot Restore architecture.
-Post-update Health remains separate future work.
+Post-update Health remains separate future work and is not part of PR #12.
 
 ## Explicitly not started
 
