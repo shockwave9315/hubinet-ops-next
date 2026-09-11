@@ -8,7 +8,13 @@ from unittest.mock import patch
 
 import pytest
 
-from custom_components.hubinet_ops import binary_sensor, button, sensor
+from custom_components.hubinet_ops import (
+    binary_sensor,
+    button,
+    select,
+    sensor,
+    snapshot_restore,
+)
 from custom_components.hubinet_ops.const import DOMAIN
 from custom_components.hubinet_ops.packages.models import (
     PackageScanRecord,
@@ -115,7 +121,9 @@ def _runtime_entity_translation_keys() -> dict[str, set[str]]:
             button.PACKAGE_APPROVE_BUTTON,
             button.PACKAGE_UPDATE_BUTTON,
             button.PACKAGE_AUTOREMOVE_BUTTON,
+            snapshot_restore.SNAPSHOT_RESTORE_BUTTON,
         ),
+        "select": (select.SNAPSHOT_SELECT,),
         "sensor": (
             *sensor.NODE_SENSORS,
             *sensor.VM_SENSORS,

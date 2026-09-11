@@ -1,6 +1,6 @@
 # Status
 
-Status date: 2026-09-10
+Status date: 2026-09-11
 
 ## Current baseline
 
@@ -11,6 +11,11 @@ Status date: 2026-09-10
   Core `proxmoxve`, plus the package scan, review, and update subsystem and
   guided fresh-install enrollment documented in
   [ARCHITECTURE.md](ARCHITECTURE.md).
+- Current release: integration `2026.9.1.6`, helper v4, protocol v1.
+- Merged baseline commit:
+  `6598d603fb2c1ad4b185e7d79a92f029f89ced46`.
+- Baseline validation: **495 tests and 195 snapshots passed**; repository Ruff
+  passed.
 
 ## Merged
 
@@ -94,10 +99,25 @@ Status date: 2026-09-10
 - Release target: integration `2026.9.1.6`, helper v4, protocol v1.
 - Validation: **495 tests and 195 snapshots passed**; repository Ruff passed.
 
+## PR #12: native snapshot Restore
+
+- Architecture: **ACCEPTED BY MAINTAINER on 2026-09-11**, before runtime
+  implementation; see the durable boundary in
+  [ARCHITECTURE.md](ARCHITECTURE.md).
+- Implementation: **IMPLEMENTED IN PR #12**. Native PVE snapshot selection and
+  explicit Restore are available for eligible QEMU VMs and LXCs; LXC package
+  truth and operation exclusion follow the accepted fail-closed boundary.
+- Release target: integration `2026.9.1.7`, helper v4, protocol v1 unchanged.
+- Post-implementation red-team result: **PASS AFTER SMALL FIXES**. The focused
+  file-boundary, initial-polling, selector-identity, validation, and safety-test
+  corrections are applied on the open PR #12 branch.
+- Validation: **563 tests and 207 snapshots passed**; repository Ruff,
+  translation and release-parity checks, helper SHA/protocol consistency,
+  ShellCheck, and shell syntax passed.
+
 ## Next
 
-Design the future Post-update Health feature when the maintainer accepts that
-work.
+Post-update Health remains separate future work and is not part of PR #12.
 
 ## Explicitly not started
 

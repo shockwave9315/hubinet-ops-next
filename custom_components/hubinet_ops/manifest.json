@@ -1,7 +1,7 @@
 {
   "domain": "hubinet_ops",
   "name": "Hubinet-Ops",
-  "version": "2026.9.1.6",
+  "version": "2026.9.1.7",
   "codeowners": ["@Corbeno", "@erwindouna", "@CoMPaTech"],
   "config_flow": true,
   "documentation": "https://github.com/shockwave9315/hubinet-ops-next",

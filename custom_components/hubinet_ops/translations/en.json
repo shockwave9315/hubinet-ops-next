@@ -273,6 +273,9 @@
       "snapshot_create": {
         "name": "Create snapshot"
       },
+      "snapshot_restore": {
+        "name": "Restore"
+      },
       "start": {
         "name": "Start"
       },
@@ -287,6 +290,11 @@
       },
       "suspend_all": {
         "name": "Suspend all"
+      }
+    },
+    "select": {
+      "snapshot_to_restore": {
+        "name": "Snapshot to restore"
       }
     },
     "sensor": {
@@ -462,6 +470,54 @@
     },
     "package_autoremove_failed": {
       "message": "Package cleanup could not start: {reason}"
+    },
+    "snapshot_selection_invalid": {
+      "message": "The selected native snapshot is no longer available. Update the entity and select it again."
+    },
+    "snapshot_restore_no_selection": {
+      "message": "Select one exact native snapshot before pressing Restore."
+    },
+    "snapshot_restore_guest_missing": {
+      "message": "Snapshot Restore could not start because the guest is no longer present in current Proxmox data."
+    },
+    "snapshot_restore_permission_denied": {
+      "message": "Snapshot Restore requires VM.Audit, VM.Snapshot, and VM.PowerMgmt permissions."
+    },
+    "snapshot_restore_busy": {
+      "message": "Snapshot Restore could not start because another Restore or package operation is active for this LXC."
+    },
+    "snapshot_restore_target_qemu": {
+      "message": "QEMU VM"
+    },
+    "snapshot_restore_target_lxc": {
+      "message": "LXC"
+    },
+    "snapshot_restore_notification_title": {
+      "message": "Snapshot Restore result"
+    },
+    "snapshot_restore_success_notification": {
+      "message": "{target_type} {node}/{vmid}: rollback to snapshot **{snapshot}** completed and start was requested at {timestamp}."
+    },
+    "snapshot_restore_failed_notification": {
+      "message": "{target_type} {node}/{vmid}: PVE reported an error while rolling back to snapshot **{snapshot}** at {timestamp}. The rollback worker exited, but the guest may already have changed."
+    },
+    "snapshot_restore_not_started_notification": {
+      "message": "{target_type} {node}/{vmid}: rollback to snapshot **{snapshot}** was not started at {timestamp}."
+    },
+    "snapshot_restore_uncertain_notification": {
+      "message": "{target_type} {node}/{vmid}: the outcome of rollback to snapshot **{snapshot}** could not be established at {timestamp}. Inspect the PVE task before taking further action."
+    },
+    "snapshot_restore_upid_detail": {
+      "message": "PVE task: `{upid}`"
+    },
+    "snapshot_restore_reason_detail": {
+      "message": "Reason: {reason}"
+    },
+    "snapshot_restore_lxc_package_detail": {
+      "message": "Package information for this LXC is no longer current. Pending and unused package values remain unknown until you run a manual Scan."
+    },
+    "snapshot_restore_uncertain_lxc_guidance": {
+      "message": "Restore and package controls remain fail-closed for this LXC in the current Home Assistant runtime. Inspect the PVE task using the UPID when available. Reload the integration only after the PVE task is finished and no Hubinet package operation is running for this entry."
     },
     "package_table_package": {
       "message": "Package"

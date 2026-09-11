@@ -39,6 +39,9 @@
       "snapshot_create": {
         "default": "mdi:backup-restore"
       },
+      "snapshot_restore": {
+        "default": "mdi:backup-restore"
+      },
       "start": {
         "default": "mdi:play"
       },
@@ -53,6 +56,11 @@
       },
       "suspend_all": {
         "default": "mdi:pause"
+      }
+    },
+    "select": {
+      "snapshot_to_restore": {
+        "default": "mdi:backup-restore"
       }
     },
     "sensor": {

@@ -32,6 +32,7 @@ from .packages.models import (
     PackageUpdateStatus,
 )
 from .packages.presentation import notify_review_plan
+from .snapshot_restore import setup_restore_buttons
 
 PARALLEL_UPDATES = 1
 
@@ -266,6 +267,7 @@ async def async_setup_entry(
 ) -> None:
     """Set up ProxmoxVE buttons."""
     coordinator = entry.runtime_data
+    setup_restore_buttons(coordinator, async_add_entities)
 
     def _async_add_new_nodes(nodes: list[ProxmoxNodeData]) -> None:
         """Add new node buttons."""
@@ -501,18 +503,14 @@ class PackageScanButtonEntity(ProxmoxContainerEntity, ProxmoxBaseButton):
     @override
     def available(self) -> bool:
         """Return whether current upstream state says this LXC can be scanned."""
-        scan = self.coordinator.package_manager.record(
-            self._node_name, self.device_id
-        )
-        update = self.coordinator.package_manager.update_record(
-            self._node_name, self.device_id
-        )
-        cleanup = self.coordinator.package_manager.cleanup_record(
-            self._node_name, self.device_id
-        )
+        manager = self.coordinator.package_manager
+        scan = manager.record(self._node_name, self.device_id)
+        update = manager.update_record(self._node_name, self.device_id)
+        cleanup = manager.cleanup_record(self._node_name, self.device_id)
         return (
             super().available
             and self.container_data.get("status") == VM_CONTAINER_RUNNING
+            and not manager.restore_reserved(self._node_name, self.device_id)
             and scan.status is not PackageScanStatus.RUNNING
             and update.status is not PackageUpdateStatus.RUNNING
             and cleanup.status is not PackageUpdateStatus.RUNNING
@@ -562,18 +560,14 @@ class PackageReviewButtonEntity(ProxmoxContainerEntity, ButtonEntity):
     @override
     def available(self) -> bool:
         """Return whether a successful non-empty plan can currently be viewed."""
-        record = self.coordinator.package_manager.record(
-            self._node_name, self.device_id
-        )
-        update = self.coordinator.package_manager.update_record(
-            self._node_name, self.device_id
-        )
-        cleanup = self.coordinator.package_manager.cleanup_record(
-            self._node_name, self.device_id
-        )
+        manager = self.coordinator.package_manager
+        record = manager.record(self._node_name, self.device_id)
+        update = manager.update_record(self._node_name, self.device_id)
+        cleanup = manager.cleanup_record(self._node_name, self.device_id)
         return (
             super().available
             and self.container_data.get("status") == VM_CONTAINER_RUNNING
+            and not manager.restore_reserved(self._node_name, self.device_id)
             and update.status is not PackageUpdateStatus.RUNNING
             and cleanup.status is not PackageUpdateStatus.RUNNING
             and record.status is PackageScanStatus.SUCCESS
@@ -616,6 +610,7 @@ class PackageApproveButtonEntity(ProxmoxContainerEntity, ButtonEntity):
         return (
             super().available
             and self.container_data.get("status") == VM_CONTAINER_RUNNING
+            and not manager.restore_reserved(self._node_name, self.device_id)
             and update.status is not PackageUpdateStatus.RUNNING
             and cleanup.status is not PackageUpdateStatus.RUNNING
             and record.status is PackageScanStatus.SUCCESS
@@ -679,6 +674,7 @@ class PackageUpdateButtonEntity(ProxmoxContainerEntity, ButtonEntity):
         return (
             super().available
             and self.container_data.get("status") == VM_CONTAINER_RUNNING
+            and not manager.restore_reserved(self._node_name, self.device_id)
             and update.status is not PackageUpdateStatus.RUNNING
             and cleanup.status is not PackageUpdateStatus.RUNNING
             and record.status is PackageScanStatus.SUCCESS
@@ -749,6 +745,7 @@ class PackageAutoremoveButtonEntity(ProxmoxContainerEntity, ButtonEntity):
         return (
             super().available
             and self.container_data.get("status") == VM_CONTAINER_RUNNING
+            and not manager.restore_reserved(self._node_name, self.device_id)
             and scan.status is not PackageScanStatus.RUNNING
             and update.status is not PackageUpdateStatus.RUNNING
             and cleanup.status is not PackageUpdateStatus.RUNNING
