@@ -35,7 +35,7 @@
     'suggested_object_id': None,
     'supported_features': 0,
     'translation_key': 'snapshot_to_restore',
-    'unique_id': '1234_lxc_pve1_201_snapshot_to_restore',
+    'unique_id': '1234_201_snapshot_to_restore',
     'unit_of_measurement': None,
   })
 # ---
@@ -91,7 +91,7 @@
     'suggested_object_id': None,
     'supported_features': 0,
     'translation_key': 'snapshot_to_restore',
-    'unique_id': '1234_lxc_pve1_200_snapshot_to_restore',
+    'unique_id': '1234_200_snapshot_to_restore',
     'unit_of_measurement': None,
   })
 # ---
@@ -147,7 +147,7 @@
     'suggested_object_id': None,
     'supported_features': 0,
     'translation_key': 'snapshot_to_restore',
-    'unique_id': '1234_qemu_pve1_100_snapshot_to_restore',
+    'unique_id': '1234_100_snapshot_to_restore',
     'unit_of_measurement': None,
   })
 # ---

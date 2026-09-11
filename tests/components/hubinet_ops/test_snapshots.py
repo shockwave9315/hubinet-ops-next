@@ -12,6 +12,7 @@ from custom_components.hubinet_ops.snapshots import (
     async_rollback_snapshot,
     async_validate_snapshot,
     eligible_snapshots,
+    snapshot_name_is_eligible,
 )
 
 UPID = "UPID:pve1:00000001:00000002:00000003:qmrollback:100:user@pam:"
@@ -51,8 +52,23 @@ def test_snapshot_eligibility_filter_and_order() -> None:
         "same-a",
         "same_b",
         "older",
-        "A",
     ]
+
+
+@pytest.mark.parametrize(
+    ("name", "eligible"),
+    [
+        ("A", False),
+        ("A1", True),
+        ("A" * 40, True),
+        ("A" * 41, False),
+        ("Éclair", False),
+        ("bad.name", False),
+    ],
+)
+def test_snapshot_name_boundaries(name: str, eligible: bool) -> None:
+    """Match PVE pve-configid ASCII syntax and exact length boundaries."""
+    assert snapshot_name_is_eligible(name) is eligible
 
 
 @pytest.mark.parametrize("kind", list(SnapshotKind))
@@ -141,6 +157,8 @@ async def test_known_terminal_error_is_failed() -> None:
             ResourceException(400, "bad request", "rejected"),
             RestoreOutcome.NOT_STARTED,
         ),
+        (ResourceException(403, "forbidden", "rejected"), RestoreOutcome.NOT_STARTED),
+        (ResourceException(408, "timeout", "unknown"), RestoreOutcome.UNCERTAIN),
         (ResourceException(500, "server error", "unknown"), RestoreOutcome.UNCERTAIN),
         (ConnectionError("connection lost"), RestoreOutcome.UNCERTAIN),
     ],
@@ -166,6 +184,59 @@ async def test_malformed_upid_is_uncertain() -> None:
     )
     assert result.outcome is RestoreOutcome.UNCERTAIN
     assert result.upid is None
+
+
+async def test_wrong_node_upid_is_uncertain() -> None:
+    """Do not observe a task ID belonging to another PVE node."""
+    proxmox, guest = _proxmox(SnapshotKind.LXC)
+    guest.snapshot.return_value.rollback.post.return_value = UPID.replace(
+        "UPID:pve1:", "UPID:pve2:"
+    )
+    with patch(
+        "custom_components.hubinet_ops.snapshots.Tasks.blocking_status"
+    ) as blocking_status:
+        result = await async_rollback_snapshot(
+            proxmox, "pve1", 100, SnapshotKind.LXC, "wanted", executor=_executor
+        )
+    assert result.outcome is RestoreOutcome.UNCERTAIN
+    blocking_status.assert_not_called()
+
+
+async def test_all_observation_attempts_raising_is_uncertain() -> None:
+    """Exhausted task-status visibility remains fail-closed."""
+    proxmox, guest = _proxmox(SnapshotKind.QEMU)
+    guest.snapshot.return_value.rollback.post.return_value = UPID
+    with patch(
+        "custom_components.hubinet_ops.snapshots.Tasks.blocking_status",
+        side_effect=ConnectionError("status unavailable"),
+    ) as blocking_status:
+        result = await async_rollback_snapshot(
+            proxmox,
+            "pve1",
+            100,
+            SnapshotKind.QEMU,
+            "wanted",
+            executor=_executor,
+            sleep=lambda _seconds: None,
+        )
+    assert result.outcome is RestoreOutcome.UNCERTAIN
+    assert result.upid == UPID
+    assert blocking_status.call_count == 3
+
+
+async def test_stopped_task_without_exitstatus_is_failed() -> None:
+    """A known stopped worker without success evidence is FAILED."""
+    proxmox, guest = _proxmox(SnapshotKind.QEMU)
+    guest.snapshot.return_value.rollback.post.return_value = UPID
+    with patch(
+        "custom_components.hubinet_ops.snapshots.Tasks.blocking_status",
+        return_value={"status": "stopped"},
+    ):
+        result = await async_rollback_snapshot(
+            proxmox, "pve1", 100, SnapshotKind.QEMU, "wanted", executor=_executor
+        )
+    assert result.outcome is RestoreOutcome.FAILED
+    assert result.upid == UPID
 
 
 async def test_observation_retries_share_one_absolute_deadline() -> None:

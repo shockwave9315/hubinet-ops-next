@@ -108,7 +108,10 @@ Status date: 2026-09-11
   explicit Restore are available for eligible QEMU VMs and LXCs; LXC package
   truth and operation exclusion follow the accepted fail-closed boundary.
 - Release target: integration `2026.9.1.7`, helper v4, protocol v1 unchanged.
-- Validation: **547 tests and 207 snapshots passed**; repository Ruff,
+- Post-implementation red-team result: **PASS AFTER SMALL FIXES**. The focused
+  file-boundary, initial-polling, selector-identity, validation, and safety-test
+  corrections are applied on the open PR #12 branch.
+- Validation: **563 tests and 207 snapshots passed**; repository Ruff,
   translation and release-parity checks, helper SHA/protocol consistency,
   ShellCheck, and shell syntax passed.
 

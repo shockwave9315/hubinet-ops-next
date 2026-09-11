@@ -15,7 +15,7 @@ RESTORE_OBSERVATION_TIMEOUT = 600.0
 _MAX_OBSERVATION_ATTEMPTS = 3
 _OBSERVATION_RETRY_SECONDS = 5.0
 _MAX_REASON_LENGTH = 500
-_SNAPSHOT_NAME_RE = re.compile(r"[A-Za-z][A-Za-z0-9_-]{0,39}", re.ASCII)
+_SNAPSHOT_NAME_RE = re.compile(r"[A-Za-z][A-Za-z0-9_-]{1,39}", re.ASCII)
 _TASK_WARNING_RE = re.compile(r"WARNINGS: [0-9]+", re.ASCII)
 
 type Executor = Callable[[Callable[[], Any]], Awaitable[Any]]

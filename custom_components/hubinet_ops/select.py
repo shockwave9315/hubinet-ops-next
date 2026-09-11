@@ -29,11 +29,9 @@ SNAPSHOT_SELECT = SelectEntityDescription(
 _LOGGER = logging.getLogger(__name__)
 
 
-def snapshot_select_unique_id(
-    entry_id: str, kind: SnapshotKind, node: str, vmid: int
-) -> str:
+def snapshot_select_unique_id(entry_id: str, vmid: int) -> str:
     """Return the stable selection entity unique ID for one exact guest."""
-    return f"{entry_id}_{kind}_{node}_{vmid}_{SNAPSHOT_SELECT.key}"
+    return f"{entry_id}_{vmid}_{SNAPSHOT_SELECT.key}"
 
 
 def snapshot_selection_signal(
@@ -43,7 +41,7 @@ def snapshot_selection_signal(
     return f"{DOMAIN}_snapshot_selection_clear_{entry_id}_{kind}_{node}_{vmid}"
 
 
-def _has_restore_permissions(
+def has_restore_permissions(
     coordinator: ProxmoxCoordinator, vmid: int
 ) -> bool:
     """Require the complete current native Restore permission set."""
@@ -77,9 +75,8 @@ async def async_setup_entry(
             (
                 ProxmoxVMSnapshotSelect(coordinator, vm, node_data)
                 for node_data, vm in vms
-                if _has_restore_permissions(coordinator, int(vm["vmid"]))
+                if has_restore_permissions(coordinator, int(vm["vmid"]))
             ),
-            update_before_add=True,
         )
 
     def _async_add_new_containers(
@@ -89,9 +86,8 @@ async def async_setup_entry(
             (
                 ProxmoxContainerSnapshotSelect(coordinator, container, node_data)
                 for node_data, container in containers
-                if _has_restore_permissions(coordinator, int(container["vmid"]))
+                if has_restore_permissions(coordinator, int(container["vmid"]))
             ),
-            update_before_add=True,
         )
 
     coordinator.new_vms_callbacks.append(_async_add_new_vms)
@@ -127,8 +123,6 @@ class SnapshotSelectMixin(SelectEntity):
         """Initialize state not owned by the upstream-derived base entity."""
         self._attr_unique_id = snapshot_select_unique_id(
             self.coordinator.config_entry.entry_id,
-            self._kind,
-            self._node_name,
             self.device_id,
         )
         self._attr_options = []
@@ -156,6 +150,7 @@ class SnapshotSelectMixin(SelectEntity):
                 self._async_clear_selection,
             )
         )
+        self.async_schedule_update_ha_state(True)
 
     @callback
     def _async_clear_selection(self) -> None:

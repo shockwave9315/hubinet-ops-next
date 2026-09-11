@@ -2,12 +2,12 @@
 
 import asyncio
 from datetime import UTC, datetime
+from threading import Event as ThreadEvent
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from tests.common import MockConfigEntry  # noqa: TID251
 
-from custom_components.hubinet_ops.button import snapshot_restore_notification_id
 from custom_components.hubinet_ops.const import DOMAIN
 from custom_components.hubinet_ops.packages.models import (
     CleanupEvidence,
@@ -16,6 +16,9 @@ from custom_components.hubinet_ops.packages.models import (
     RemovablePackage,
 )
 from custom_components.hubinet_ops.select import ATTR_SELECTED_SNAPSHOT
+from custom_components.hubinet_ops.snapshot_restore import (
+    snapshot_restore_notification_id,
+)
 from custom_components.hubinet_ops.snapshots import (
     RestoreOutcome,
     RestoreResult,
@@ -36,6 +39,9 @@ SELECT_VM = "select.vm_web_snapshot_to_restore"
 RESTORE_VM = "button.vm_web_restore"
 SELECT_LXC = "select.ct_nginx_snapshot_to_restore"
 RESTORE_LXC = "button.ct_nginx_restore"
+SCAN_LXC = "button.ct_nginx_scan_pending_packages"
+UPDATE_LXC = "button.ct_nginx_update_packages"
+AUTOREMOVE_LXC = "button.ct_nginx_autoremove_unused_packages"
 KEY = ("pve1", 200)
 NOW = datetime(2026, 9, 11, tzinfo=UTC)
 
@@ -47,9 +53,10 @@ def enable_all_entities(entity_registry_enabled_by_default: None) -> None:
 
 def _set_snapshot_rows(
     mock_proxmox_client: MagicMock, family: str, vmid: int, rows: object
-) -> None:
+) -> MagicMock:
     guest = getattr(mock_proxmox_client._node_mock, family)(vmid)  # noqa: SLF001
     guest.snapshot.get.return_value = rows
+    return guest.snapshot.get
 
 
 def _prepare_snapshot_rows(mock_proxmox_client: MagicMock) -> None:
@@ -106,7 +113,7 @@ async def test_qemu_restore_consumes_choice_without_package_coupling(
     )
     result = RestoreResult(RestoreOutcome.SUCCESS, "UPID:test")
     with patch(
-        "custom_components.hubinet_ops.button.async_rollback_snapshot",
+        "custom_components.hubinet_ops.snapshot_restore.async_rollback_snapshot",
         AsyncMock(return_value=result),
     ) as rollback:
         await _press(hass, RESTORE_VM)
@@ -137,7 +144,7 @@ async def test_restore_background_work_does_not_hold_native_button_semaphore(
         return RestoreResult(RestoreOutcome.SUCCESS)
 
     with patch(
-        "custom_components.hubinet_ops.button.async_rollback_snapshot",
+        "custom_components.hubinet_ops.snapshot_restore.async_rollback_snapshot",
         side_effect=blocked_rollback,
     ):
         await hass.services.async_call(
@@ -178,7 +185,7 @@ async def test_restore_uses_explicit_attribute_for_sentinel_names(
     await setup_integration(hass, mock_config_entry)
     await _select(hass, SELECT_VM, snapshot_name)
     with patch(
-        "custom_components.hubinet_ops.button.async_rollback_snapshot",
+        "custom_components.hubinet_ops.snapshot_restore.async_rollback_snapshot",
         AsyncMock(return_value=RestoreResult(RestoreOutcome.SUCCESS)),
     ) as rollback:
         await _press(hass, RESTORE_VM)
@@ -205,7 +212,7 @@ async def test_stale_or_active_snapshot_is_not_started_before_lxc_invalidation(
         wraps=manager.invalidate_restore_target
     )
     with patch(
-        "custom_components.hubinet_ops.button.async_rollback_snapshot",
+        "custom_components.hubinet_ops.snapshot_restore.async_rollback_snapshot",
         AsyncMock(),
     ) as rollback:
         await _press(hass, RESTORE_LXC)
@@ -249,7 +256,7 @@ async def test_lxc_restore_outcome_release_table(
     )
     await _select(hass, SELECT_LXC)
     with patch(
-        "custom_components.hubinet_ops.button.async_rollback_snapshot",
+        "custom_components.hubinet_ops.snapshot_restore.async_rollback_snapshot",
         AsyncMock(return_value=RestoreResult(outcome, "UPID:test", "reason")),
     ):
         await _press(hass, RESTORE_LXC)
@@ -272,7 +279,7 @@ async def test_cancellation_after_possible_submission_keeps_lxc_reservation(
     await setup_integration(hass, mock_config_entry)
     await _select(hass, SELECT_LXC)
     with patch(
-        "custom_components.hubinet_ops.button.async_rollback_snapshot",
+        "custom_components.hubinet_ops.snapshot_restore.async_rollback_snapshot",
         AsyncMock(side_effect=asyncio.CancelledError),
     ):
         await _press(hass, RESTORE_LXC)
@@ -302,6 +309,123 @@ async def test_background_task_creation_failure_releases_lxc_reservation(
     assert not manager.restore_reserved(*KEY)
 
 
+@pytest.mark.parametrize("failure", [RuntimeError("validation failed"), asyncio.CancelledError()])
+async def test_pre_submission_failure_releases_lxc_reservation(
+    hass: HomeAssistant,
+    mock_proxmox_client: MagicMock,
+    mock_config_entry: MockConfigEntry,
+    failure: BaseException,
+) -> None:
+    """Exception or cancellation before POST cannot strand the reservation."""
+    _prepare_snapshot_rows(mock_proxmox_client)
+    await setup_integration(hass, mock_config_entry)
+    await _select(hass, SELECT_LXC)
+    manager = mock_config_entry.runtime_data.package_manager
+    with (
+        patch(
+            "custom_components.hubinet_ops.snapshot_restore.async_validate_snapshot",
+            AsyncMock(side_effect=failure),
+        ),
+        patch(
+            "custom_components.hubinet_ops.snapshot_restore.async_rollback_snapshot",
+            AsyncMock(),
+        ) as rollback,
+    ):
+        await hass.services.async_call(
+            "button",
+            SERVICE_PRESS,
+            {ATTR_ENTITY_ID: RESTORE_LXC},
+            blocking=True,
+        )
+        await hass.async_block_till_done()
+
+    assert not manager.restore_reserved(*KEY)
+    rollback.assert_not_awaited()
+
+
+async def test_restore_reservation_blocks_buttons_during_fresh_snapshot_get(
+    hass: HomeAssistant,
+    mock_proxmox_client: MagicMock,
+    mock_config_entry: MockConfigEntry,
+    package_transport_material: None,
+) -> None:
+    """Keep real package controls excluded throughout awaited fresh validation."""
+    _prepare_snapshot_rows(mock_proxmox_client)
+    await setup_integration(hass, mock_config_entry)
+    manager = mock_config_entry.runtime_data.package_manager
+    manager._records[KEY] = PackageScanRecord(  # noqa: SLF001
+        status=PackageScanStatus.SUCCESS,
+        result=RESULT,
+        token="token",
+        reviewed=True,
+    )
+    manager._cleanup_evidence[KEY] = CleanupEvidence(  # noqa: SLF001
+        (RemovablePackage("unused", "amd64", "1"),),
+        NOW,
+    )
+    manager._on_state_change()  # noqa: SLF001
+    await _select(hass, SELECT_LXC)
+
+    entered = asyncio.Event()
+    release = ThreadEvent()
+    get = _set_snapshot_rows(
+        mock_proxmox_client,
+        "lxc",
+        200,
+        [{"name": "wanted", "snaptime": 1}],
+    )
+
+    def blocked_get() -> list[dict[str, int | str]]:
+        hass.loop.call_soon_threadsafe(entered.set)
+        if not release.wait(5):
+            raise TimeoutError("test did not release fresh snapshot GET")
+        return [{"name": "wanted", "snaptime": 1}]
+
+    get.side_effect = blocked_get
+
+    try:
+        with (
+            patch(
+                "custom_components.hubinet_ops.snapshot_restore.async_rollback_snapshot",
+                AsyncMock(return_value=RestoreResult(RestoreOutcome.SUCCESS)),
+            ),
+            patch.object(manager, "async_start_scan", wraps=manager.async_start_scan) as scan,
+            patch.object(
+                manager, "async_start_update", wraps=manager.async_start_update
+            ) as update,
+            patch.object(
+                manager,
+                "async_start_autoremove",
+                wraps=manager.async_start_autoremove,
+            ) as autoremove,
+        ):
+            await hass.services.async_call(
+                "button",
+                SERVICE_PRESS,
+                {ATTR_ENTITY_ID: RESTORE_LXC},
+                blocking=True,
+            )
+            await asyncio.wait_for(entered.wait(), 1)
+
+            assert manager.restore_reserved(*KEY)
+            for entity_id in (SCAN_LXC, UPDATE_LXC, AUTOREMOVE_LXC):
+                assert hass.states.get(entity_id).state == STATE_UNAVAILABLE
+                await hass.services.async_call(
+                    "button",
+                    SERVICE_PRESS,
+                    {ATTR_ENTITY_ID: entity_id},
+                    blocking=True,
+                )
+            scan.assert_not_called()
+            update.assert_not_called()
+            autoremove.assert_not_called()
+
+            release.set()
+            await hass.async_block_till_done()
+    finally:
+        release.set()
+
+
 @pytest.mark.parametrize(
     ("outcome", "expected"),
     [
@@ -322,7 +446,7 @@ async def test_restore_notification_wording_and_lxc_guidance(
     await setup_integration(hass, mock_config_entry)
     await _select(hass, SELECT_LXC)
     with patch(
-        "custom_components.hubinet_ops.button.async_rollback_snapshot",
+        "custom_components.hubinet_ops.snapshot_restore.async_rollback_snapshot",
         AsyncMock(return_value=RestoreResult(outcome, "UPID:test", "bounded")),
     ):
         await _press(hass, RESTORE_LXC)
@@ -386,7 +510,7 @@ async def test_restore_result_notification_survives_entry_unload(
     await setup_integration(hass, mock_config_entry)
     await _select(hass, SELECT_LXC)
     with patch(
-        "custom_components.hubinet_ops.button.async_rollback_snapshot",
+        "custom_components.hubinet_ops.snapshot_restore.async_rollback_snapshot",
         AsyncMock(return_value=RestoreResult(RestoreOutcome.UNCERTAIN, "UPID:test")),
     ):
         await _press(hass, RESTORE_LXC)
@@ -409,7 +533,7 @@ async def test_polish_restore_notification_path_is_localized(
     hass.config.language = "pl"
     await _select(hass, SELECT_LXC)
     with patch(
-        "custom_components.hubinet_ops.button.async_rollback_snapshot",
+        "custom_components.hubinet_ops.snapshot_restore.async_rollback_snapshot",
         AsyncMock(return_value=RestoreResult(RestoreOutcome.SUCCESS)),
     ):
         await _press(hass, RESTORE_LXC)

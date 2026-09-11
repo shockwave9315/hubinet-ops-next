@@ -1,12 +1,17 @@
 """Tests for presentation-only native snapshot selection."""
 
+import asyncio
+from threading import Event as ThreadEvent
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from syrupy.assertion import SnapshotAssertion
 from tests.common import MockConfigEntry, snapshot_platform  # noqa: TID251
 
-from custom_components.hubinet_ops.select import ATTR_SELECTED_SNAPSHOT
+from custom_components.hubinet_ops.select import (
+    ATTR_SELECTED_SNAPSHOT,
+    snapshot_select_unique_id,
+)
 from homeassistant.components.homeassistant import (
     DOMAIN as HA_DOMAIN,
     SERVICE_UPDATE_ENTITY,
@@ -111,6 +116,60 @@ async def test_select_owns_polling_and_has_no_default(
     assert select_platform.entities[SELECT_VM].should_poll is True
 
 
+def test_select_unique_id_survives_guest_node_change() -> None:
+    """Persistent selector identity follows guest VMID, not its current node."""
+    ids_by_node = {
+        node: snapshot_select_unique_id("entry", 100) for node in ("pve1", "pve2")
+    }
+    assert set(ids_by_node.values()) == {"entry_100_snapshot_to_restore"}
+
+
+async def test_initial_snapshot_get_does_not_block_entry_setup(
+    hass: HomeAssistant,
+    mock_proxmox_client: MagicMock,
+    mock_config_entry: MockConfigEntry,
+) -> None:
+    """Schedule optional initial snapshot I/O after normal entry setup."""
+    entered = asyncio.Event()
+    release = ThreadEvent()
+
+    def blocked_get() -> list[dict[str, int | str]]:
+        hass.loop.call_soon_threadsafe(entered.set)
+        if not release.wait(5):
+            raise TimeoutError("test did not release snapshot GET")
+        return [{"name": "wanted", "snaptime": 1}]
+
+    get = _set_snapshot_rows(mock_proxmox_client, "qemu", 100, [])
+    get.side_effect = blocked_get
+    _set_snapshot_rows(mock_proxmox_client, "lxc", 200, [])
+    _set_snapshot_rows(mock_proxmox_client, "lxc", 201, [])
+    mock_config_entry.add_to_hass(hass)
+    try:
+        assert await asyncio.wait_for(
+            hass.config_entries.async_setup(mock_config_entry.entry_id), 1
+        )
+        await asyncio.wait_for(entered.wait(), 1)
+
+        state = hass.states.get(SELECT_VM)
+        assert state is not None
+        assert state.state == STATE_UNAVAILABLE
+        assert state.attributes["options"] == []
+        assert hass.states.get("sensor.vm_web_cpu_usage") is not None
+
+        coordinator = mock_config_entry.runtime_data
+        coordinator.async_request_refresh = AsyncMock()
+        release.set()
+        await hass.async_block_till_done()
+
+        state = hass.states.get(SELECT_VM)
+        assert state is not None
+        assert state.state == STATE_UNKNOWN
+        assert state.attributes["options"] == ["wanted"]
+        coordinator.async_request_refresh.assert_not_awaited()
+    finally:
+        release.set()
+
+
 async def test_selection_is_not_restored_after_entry_reload(
     hass: HomeAssistant,
     mock_proxmox_client: MagicMock,
@@ -200,8 +259,6 @@ async def test_disappearing_selection_clears_only_local_choice(
     assert state.state == STATE_UNKNOWN
     assert state.attributes[ATTR_SELECTED_SNAPSHOT] is None
     assert state.attributes["options"] == ["other"]
-    get.return_value[0]["name"] = "changed-locally"
-    assert mock_proxmox_client._qemu_mocks[100].snapshot.post.call_count == 0  # noqa: SLF001
 
 
 async def test_snapshot_poll_failure_isolated_from_main_entities(
