@@ -39,8 +39,10 @@ The current intended product scope is:
 2. package review;
 3. explicit LXC package update;
 4. explicit operator-controlled cleanup of current APT autoremove
-   candidates; and
-5. post-update health.
+   candidates;
+5. operator-controlled native PVE snapshot selection and explicit Restore for
+   QEMU VMs and LXCs; and
+6. post-update health.
 
 These are product intentions, not claims that the features or their
 architecture are accepted or implemented. See [STATUS.md](STATUS.md) for the
@@ -62,6 +64,15 @@ current state and [ARCHITECTURE.md](ARCHITECTURE.md) for accepted design.
 - A guest that leaves the running state invalidates its current package
   evidence; after it runs again, pending and unused package values remain
   `UNKNOWN` until the operator explicitly scans again.
+- Snapshot Restore is never automatic. It requires selection of one exact
+  native PVE snapshot followed by a separate explicit Restore button press.
+- The native Proxmox VE API remains authoritative for snapshot operations.
+- Once Hubinet starts submitting an accepted LXC Restore, current package
+  truth is invalid: pending and unused values become `UNKNOWN`, and a manual
+  Scan is required before package truth becomes actionable again.
+- Package operations are refused for an LXC while its Hubinet Restore is
+  running or its outcome remains uncertain in the current Home Assistant
+  runtime.
 
 The product should use the smallest correct architecture. New architecture
 exists only to solve a demonstrated problem; anticipated future complexity is

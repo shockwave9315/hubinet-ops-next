@@ -1,6 +1,6 @@
 # Status
 
-Status date: 2026-09-10
+Status date: 2026-09-11
 
 ## Current baseline
 
@@ -11,6 +11,11 @@ Status date: 2026-09-10
   Core `proxmoxve`, plus the package scan, review, and update subsystem and
   guided fresh-install enrollment documented in
   [ARCHITECTURE.md](ARCHITECTURE.md).
+- Current release: integration `2026.9.1.6`, helper v4, protocol v1.
+- Merged baseline commit:
+  `6598d603fb2c1ad4b185e7d79a92f029f89ced46`.
+- Baseline validation: **495 tests and 195 snapshots passed**; repository Ruff
+  passed.
 
 ## Merged
 
@@ -94,10 +99,21 @@ Status date: 2026-09-10
 - Release target: integration `2026.9.1.6`, helper v4, protocol v1.
 - Validation: **495 tests and 195 snapshots passed**; repository Ruff passed.
 
+## PR #12: native snapshot Restore
+
+- Architecture: **ACCEPTED BY MAINTAINER on 2026-09-11**, before runtime
+  implementation; see the durable boundary in
+  [ARCHITECTURE.md](ARCHITECTURE.md).
+- Implementation: **NOT STARTED** at this documentation checkpoint.
+- Release target: integration `2026.9.1.7`, helper v4, protocol v1 unchanged.
+- Scope: operator-controlled native snapshot selection and explicit Restore
+  for QEMU VMs and LXCs, with fail-closed package truth and operation exclusion
+  for LXC Restore.
+
 ## Next
 
-Design the future Post-update Health feature when the maintainer accepts that
-work.
+Implement PR #12 within its accepted native snapshot Restore architecture.
+Post-update Health remains separate future work.
 
 ## Explicitly not started
 

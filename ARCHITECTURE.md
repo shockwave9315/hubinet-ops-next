@@ -71,6 +71,73 @@ Hubinet-Ops owns:
 - the guided-enrollment bootstrap described below; and
 - the package scan, review, and update subsystem described below.
 
+### Native snapshot selection and Restore
+
+On 2026-09-11, before implementation, the maintainer accepted the PR #12
+native snapshot Restore architecture. The feature is additive to the
+upstream-derived integration and preserves native PVE as authority:
+
+```text
+Home Assistant -> proxmoxer -> native PVE snapshot API
+```
+
+The fork-owned `snapshots.py` is a thin, stateless adapter for listing QEMU and
+LXC snapshots, exact execution-time validation, native rollback submission
+with `start=1`, and bounded native UPID observation. It has no package-manager
+knowledge and is not a manager, registry, database, durable workflow, rollback
+framework, inventory, or coordinator. The existing
+`packages/snapshots.py` remains separate package-update safety-snapshot glue.
+
+Each eligible QEMU VM and LXC receives one presentation-only **Snapshot to
+restore** select and one separate explicit **Restore** button. Select options
+are exact native snapshot names ordered newest-first, excluding `current`,
+`vzdump`, malformed names, and rows with active or incomplete `snapstate`.
+Nothing is selected by default. The select polls only its native snapshot
+endpoint, approximately every 300 seconds, and snapshot enumeration is not
+added to the normal upstream-derived coordinator or another
+`DataUpdateCoordinator`. Restore reads only the select's explicit
+`selected_snapshot` attribute, consumes an accepted choice through an
+entry-and-target-scoped dispatcher signal, performs a fresh native snapshot
+list, and revalidates that exact target before rollback.
+
+Rollback completion is classified through bounded observation of the native
+PVE UPID as `NOT_STARTED`, `SUCCESS`, `FAILED`, or `UNCERTAIN`. An absolute
+observation deadline is shared across a small bounded number of transient-read
+retries. Unknown or uncertain evidence fails closed; no timer assumes a task
+finished, and no persistent recovery or reconciliation is introduced. A
+normal upstream coordinator refresh follows each Restore attempt so native
+guest state converges.
+
+LXC Restore and package operations share one minimal ephemeral exclusion rule
+owned by `PackageManager`, conceptually `_restore_reserved: set[(node, vmid)]`.
+Package start/claim callbacks and Restore reservation are synchronous event-loop
+transitions with no await between checking and publishing ownership. Restore
+is rejected while Scan, Update, Autoremove, or another Restore is active for
+the target; those package operations are rejected while Restore owns the
+reservation.
+
+The accepted LXC flow is reservation, fresh native listing and exact
+validation, synchronous package-truth invalidation on the Home Assistant event
+loop, then native rollback submission and UPID observation. Invalidation makes
+pending and unused values unknown, removes current successful Scan, Review,
+viewed-token, and cleanup evidence, dismisses actionable review and cleanup
+notifications, and fences the target, while preserving historical terminal
+Update and Autoremove results. A manual Scan is required to establish new
+current truth.
+
+Reservations are released for `NOT_STARTED`, `SUCCESS`, and `FAILED`. If
+submission may have started but the outcome is `UNCERTAIN`, including
+cancellation after possible submission, the reservation remains until the
+integration reloads or Home Assistant restarts. Target pruning does not clear
+it. This is ordinary in-memory concurrency state, not lifecycle or recovery
+architecture.
+
+Two residuals are explicitly accepted for PR #12. A rollback initiated
+externally in PVE may occur entirely between normal coordinator polls and
+leave package evidence stale; detecting external rollback is out of scope.
+Reload or restart loses ephemeral package/Restore operation ownership;
+persistent recovery is also out of scope.
+
 ### Helper repair and explicit package cleanup boundary
 
 On 2026-09-10, before implementation, the maintainer accepted helper-upgrade
