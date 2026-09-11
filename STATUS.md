@@ -92,7 +92,7 @@ Status date: 2026-09-10
 - Guided reinstall recovery UX: **IMPLEMENTED** with the existing `--reset`
   command shown as the secondary recovery path.
 - Release target: integration `2026.9.1.6`, helper v4, protocol v1.
-- Validation: **493 tests and 195 snapshots passed**; repository Ruff passed.
+- Validation: **495 tests and 195 snapshots passed**; repository Ruff passed.
 
 ## Next
 
