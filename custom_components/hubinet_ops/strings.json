@@ -261,6 +261,9 @@
       "package_autoremove": {
         "name": "Autoremove unused packages"
       },
+      "package_health_check": {
+        "name": "Health check"
+      },
       "reset": {
         "name": "Reset"
       },
@@ -348,6 +351,14 @@
           "never": "Never run",
           "running": "Running",
           "success": "Success",
+          "failed": "Failed"
+        }
+      },
+      "package_health": {
+        "name": "Health",
+        "state": {
+          "healthy": "Healthy",
+          "degraded": "Degraded",
           "failed": "Failed"
         }
       },
@@ -470,6 +481,9 @@
     },
     "package_autoremove_failed": {
       "message": "Package cleanup could not start: {reason}"
+    },
+    "package_health_failed": {
+      "message": "Health check could not start: {reason}"
     },
     "snapshot_selection_invalid": {
       "message": "The selected native snapshot is no longer available. Update the entity and select it again."

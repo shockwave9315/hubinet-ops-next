@@ -11,6 +11,10 @@ from tests.common import MockConfigEntry  # noqa: TID251
 
 from custom_components.hubinet_ops.packages.manager import PackageManager
 from custom_components.hubinet_ops.packages.models import (
+    HealthDpkgState,
+    HealthState,
+    PackageHealthEvidence,
+    PackageHealthOutcome,
     PackageMutationResult,
     PackageScanError,
     PackageScanFailure,
@@ -63,6 +67,21 @@ class CleanupTransport:
             )
         )
         self.ping_results: deque[bool | PackageUpdateError] = deque([True])
+        self.health_calls = 0
+        self.health_entered = asyncio.Event()
+        self.health_release = asyncio.Event()
+        self.health_release.set()
+        self.health_outcome: PackageHealthOutcome | Exception = PackageHealthOutcome(
+            HealthState.HEALTHY,
+            None,
+            PackageHealthEvidence(
+                guest_exec=True,
+                guest_exec_unavailable=False,
+                dpkg=HealthDpkgState.OK,
+                unfinished_package_count=None,
+                reboot_required=None,
+            ),
+        )
 
     async def async_prepare(self, hass: HomeAssistant) -> None:
         """Perform no remote work during immediate preparation."""
@@ -111,6 +130,17 @@ class CleanupTransport:
         if isinstance(result, PackageUpdateError):
             raise result
         return result
+
+    async def async_check_health(
+        self, expected_node: str, vmid: int
+    ) -> PackageHealthOutcome:
+        """Wait for release before returning or raising the configured outcome."""
+        self.health_calls += 1
+        self.health_entered.set()
+        await self.health_release.wait()
+        if isinstance(self.health_outcome, Exception):
+            raise self.health_outcome
+        return self.health_outcome
 
 
 def _parsed(candidates: tuple[RemovablePackage, ...]) -> ParsedAutoremoveSimulation:

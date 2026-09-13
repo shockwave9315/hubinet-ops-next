@@ -72,6 +72,9 @@ class FakeHelperRunner:
         inventory_outputs: tuple[str, ...] | None = None,
         ping_returncode: int = 0,
         reboot_returncode: int = 1,
+        audit_returncode: int = 0,
+        audit_stdout: str = "",
+        status_after_exec_failure: str | None = None,
     ) -> None:
         """Initialize fixed command outcomes."""
         self.local_node = local_node
@@ -86,6 +89,10 @@ class FakeHelperRunner:
         self.inventory_reads = 0
         self.ping_returncode = ping_returncode
         self.reboot_returncode = reboot_returncode
+        self.audit_returncode = audit_returncode
+        self.audit_stdout = audit_stdout
+        self.status_after_exec_failure = status_after_exec_failure
+        self.status_calls = 0
         self.calls: list[tuple[tuple[str, ...], float, int]] = []
 
     def __call__(self, argv, timeout, max_output):
@@ -99,7 +106,11 @@ class FakeHelperRunner:
         if argv[:2] == ("pct", "config"):
             return helper.CommandResult(self.config_returncode, b"arch: amd64\n", b"")
         if argv[:2] == ("pct", "status"):
-            return helper.CommandResult(0, f"status: {self.status}\n".encode(), b"")
+            self.status_calls += 1
+            status = self.status
+            if self.status_calls > 1 and self.status_after_exec_failure is not None:
+                status = self.status_after_exec_failure
+            return helper.CommandResult(0, f"status: {status}\n".encode(), b"")
         if "/etc/os-release" in rendered:
             return helper.CommandResult(0, b'ID=debian\nVERSION_ID="12"\n', b"")
         if "apt-get --version" in rendered:
@@ -119,6 +130,10 @@ class FakeHelperRunner:
         if "apt-get upgrade" in rendered:
             return helper.CommandResult(
                 self.mutation_returncode, b"", self.mutation_stderr.encode()
+            )
+        if "dpkg --audit" in rendered:
+            return helper.CommandResult(
+                self.audit_returncode, self.audit_stdout.encode(), b""
             )
         if "dpkg --print-architecture" in rendered:
             return helper.CommandResult(0, b"amd64\n", b"")
@@ -157,7 +172,7 @@ def test_helper_uses_fixed_commands_and_returns_versioned_identity() -> None:
     response = _handle(runner)
     assert response["ok"] is True
     assert response["protocol_version"] == 1
-    assert response["helper_version"] == 4
+    assert response["helper_version"] == helper.HELPER_VERSION
     assert response["operation"] == "scan_packages"
     assert response["target"] == {"node": "pve1", "vmid": 200}
     assert response["evidence"]["reboot_required"] is True
@@ -187,7 +202,7 @@ def test_probe_returns_local_node_and_never_calls_pct() -> None:
     )
     assert response == {
         "protocol_version": 1,
-        "helper_version": 4,
+        "helper_version": helper.HELPER_VERSION,
         "operation": "probe",
         "ok": True,
         "node": "pve1",
@@ -394,7 +409,8 @@ def test_fixed_upgrade_policy_keeps_held_packages_and_forbids_unsafe_apt_modes()
 
 
 @pytest.mark.parametrize(
-    "operation", ["scan_packages", "plan_packages", "update_packages"]
+    "operation",
+    ["scan_packages", "plan_packages", "update_packages", "check_health"],
 )
 def test_all_package_operations_use_same_vmid_lock(operation: str) -> None:
     """Every package operation takes the unchanged per-VMID lock boundary."""
@@ -856,3 +872,271 @@ def test_helper_source_is_python_3_11_compatible() -> None:
     aliases; this also stands as a compile-error check.
     """
     ast.parse(HELPER_PATH.read_text(), feature_version=(3, 11))
+
+
+def _health(runner: FakeHelperRunner, **kwargs):
+    """Run one ``check_health`` request through the fixed dispatch."""
+    return helper.handle_request(
+        _request(operation="check_health"),
+        runner=runner,
+        lock_factory=lambda _vmid: nullcontext(),
+        **kwargs,
+    )
+
+
+def test_check_health_happy_path_is_bounded_and_versioned() -> None:
+    """A clean, running guest returns bounded evidence with no reboot marker."""
+    runner = FakeHelperRunner(reboot_returncode=1)
+    response = _health(runner)
+    assert response["ok"] is True
+    assert response["helper_version"] == helper.HELPER_VERSION
+    assert response["operation"] == "check_health"
+    assert response["target"] == {"node": "pve1", "vmid": 200}
+    assert response["evidence"] == {
+        "guest_exec": True,
+        "guest_exec_unavailable": False,
+        "dpkg": "ok",
+        "unfinished_package_count": None,
+        "reboot_required": None,
+    }
+    # No package names, dpkg stdout, or other guest-controlled text leaks out.
+    assert "openssl" not in json.dumps(response)
+
+
+def test_check_health_identity_mismatch_is_unestablished_not_failed() -> None:
+    """A wrong local node is a classified failure, never a FAILED verdict."""
+    response = _health(FakeHelperRunner(local_node="pve2"))
+    assert response["ok"] is False
+    assert response["error"]["classification"] == "identity_mismatch"
+
+
+def test_check_health_stopped_target_is_unestablished_not_failed() -> None:
+    """A stopped/unavailable target never becomes FAILED Health evidence."""
+    runner = FakeHelperRunner(status="stopped")
+    response = _health(runner)
+    assert response["ok"] is False
+    assert response["error"]["classification"] == "guest_unavailable"
+    assert not any(call[0][-1:] == ("/bin/true",) for call in runner.calls)
+
+
+def test_check_health_exec_failure_while_still_running_is_positive_failure() -> None:
+    """A guest that answers pct status but fails /bin/true is FAILED evidence."""
+    runner = FakeHelperRunner(ping_returncode=1, status="running")
+    response = _health(runner)
+    assert response["ok"] is True
+    assert response["evidence"] == {
+        "guest_exec": False,
+        "guest_exec_unavailable": False,
+        "dpkg": None,
+        "unfinished_package_count": None,
+        "reboot_required": None,
+    }
+    # dpkg/reboot checks are skipped once guest_exec is false.
+    assert not any("dpkg" in " ".join(call[0]) for call in runner.calls)
+    assert not any(
+        "/var/run/reboot-required" in " ".join(call[0]) for call in runner.calls
+    )
+
+
+def test_check_health_exec_failure_after_guest_stops_is_unknown() -> None:
+    """A guest that stops between validation and exec is UNKNOWN, not FAILED."""
+    runner = FakeHelperRunner(
+        ping_returncode=1, status="running", status_after_exec_failure="stopped"
+    )
+    response = _health(runner)
+    assert response["ok"] is True
+    assert response["evidence"]["guest_exec"] is False
+    assert response["evidence"]["guest_exec_unavailable"] is True
+
+
+def test_check_health_exec_timeout_is_bounded_timeout_failure() -> None:
+    """A hanging fixed exec command is a bounded timeout, never a hang."""
+
+    def timeout_runner(argv, timeout, max_output):
+        if argv[-1:] == ("/bin/true",):
+            return helper.CommandResult(-9, b"", b"", timed_out=True)
+        return FakeHelperRunner()(argv, timeout, max_output)
+
+    response = _health(timeout_runner)
+    assert response["ok"] is False
+    assert response["error"]["classification"] == "timeout"
+
+
+def test_check_health_dpkg_ok_with_no_unfinished_state() -> None:
+    """A fully installed inventory is dpkg ``ok`` with no audit call at all."""
+    runner = FakeHelperRunner(inventory_outputs=(TWO_INVENTORY,))
+    response = _health(runner)
+    assert response["evidence"]["dpkg"] == "ok"
+    assert response["evidence"]["unfinished_package_count"] is None
+    assert not any("dpkg --audit" in " ".join(call[0]) for call in runner.calls)
+
+
+def test_check_health_persistent_half_state_is_interrupted() -> None:
+    """A half-installed identity that survives a second read is FAILED evidence."""
+    half = "openssl\tamd64\t3.0.11-1\thalf-installed\n"
+    runner = FakeHelperRunner(inventory_outputs=(half, half))
+    response = _health(runner)
+    assert response["evidence"]["dpkg"] == "interrupted"
+    assert response["evidence"]["unfinished_package_count"] == 1
+    audit_calls = [
+        call for call in runner.calls if "dpkg --audit" in " ".join(call[0])
+    ]
+    assert len(audit_calls) == 1
+
+
+def test_check_health_changed_identity_between_reads_is_unknown() -> None:
+    """A half-installed identity that resolved by the second read is UNKNOWN."""
+    half = "openssl\tamd64\t3.0.11-1\thalf-installed\n"
+    resolved = "openssl\tamd64\t3.0.11-1\tinstalled\n"
+    runner = FakeHelperRunner(inventory_outputs=(half, resolved))
+    response = _health(runner)
+    assert response["evidence"]["dpkg"] == "changed"
+    assert response["evidence"]["unfinished_package_count"] is None
+
+
+def test_check_health_pending_only_is_never_failed() -> None:
+    """Packages merely unpacked/triggers-pending are UNKNOWN, never FAILED.
+
+    The lock is still audited for busy/uncertain disambiguation even when
+    only pending identities exist, but a clean audit result here always
+    classifies as pending -- a P-only inventory is never a second-read
+    candidate and can never become FAILED.
+    """
+    pending = "openssl\tamd64\t3.0.11-1\tunpacked\n"
+    runner = FakeHelperRunner(inventory_outputs=(pending,))
+    response = _health(runner)
+    assert response["evidence"]["dpkg"] == "pending"
+    assert response["evidence"]["unfinished_package_count"] is None
+    assert any("dpkg --audit" in " ".join(call[0]) for call in runner.calls)
+    # Only one inventory read -- a P-only result never re-reads.
+    assert runner.inventory_reads == 1
+
+
+def test_check_health_audit_lock_notice_is_package_manager_busy() -> None:
+    """The fixed LC_ALL=C lock notice is disambiguated as busy, not FAILED."""
+    half = "openssl\tamd64\t3.0.11-1\thalf-installed\n"
+    runner = FakeHelperRunner(
+        inventory_outputs=(half,),
+        audit_stdout=(
+            "openssl:\n"
+            " Another process has locked the database for writing\n"
+        ),
+    )
+    response = _health(runner)
+    assert response["evidence"]["dpkg"] == "busy"
+
+
+def test_check_health_audit_failure_is_lock_unknown() -> None:
+    """A nonzero dpkg --audit result cannot be evaluated reliably."""
+    half = "openssl\tamd64\t3.0.11-1\thalf-installed\n"
+    runner = FakeHelperRunner(inventory_outputs=(half,), audit_returncode=2)
+    response = _health(runner)
+    assert response["evidence"]["dpkg"] == "lock_unknown"
+
+
+def test_check_health_audit_output_bound_is_tight_and_becomes_lock_unknown() -> None:
+    """Oversized dpkg --audit output is bounded and reported as lock_unknown."""
+    half = "openssl\tamd64\t3.0.11-1\thalf-installed\n"
+
+    def oversized_audit_runner(argv, timeout, max_output):
+        if "dpkg --audit" in " ".join(argv):
+            assert max_output == helper.HEALTH_AUDIT_MAX_BYTES
+            return helper.CommandResult(0, b"", b"", output_exceeded=True)
+        return FakeHelperRunner(inventory_outputs=(half,))(argv, timeout, max_output)
+
+    response = _health(oversized_audit_runner)
+    assert response["evidence"]["dpkg"] == "lock_unknown"
+
+
+def test_check_health_malformed_inventory_is_bounded_and_semantic() -> None:
+    """Unparseable dpkg-query output is Health's own malformed_evidence."""
+    runner = FakeHelperRunner(inventory_outputs=("not\ta\tvalid\tline\textra\n",))
+    response = _health(runner)
+    assert response["ok"] is False
+    assert response["error"]["classification"] == "malformed_evidence"
+
+
+def test_check_health_unsupported_dpkg_is_bounded_and_semantic() -> None:
+    """A guest without dpkg-query is unsupported_guest, not malformed."""
+
+    def no_dpkg_runner(argv, timeout, max_output):
+        if "dpkg-query" in " ".join(argv):
+            return helper.CommandResult(127, b"", b"command not found\n")
+        return FakeHelperRunner()(argv, timeout, max_output)
+
+    response = _health(no_dpkg_runner)
+    assert response["ok"] is False
+    assert response["error"]["classification"] == "unsupported_guest"
+
+
+@pytest.mark.parametrize(
+    ("returncode", "expected"), [(0, True), (1, None), (2, None)]
+)
+def test_check_health_preserves_reboot_tri_state(
+    returncode: int, expected: bool | None
+) -> None:
+    """Only the marker's presence is reliable; absence/other are unknown."""
+    response = _health(FakeHelperRunner(reboot_returncode=returncode))
+    assert response["evidence"]["reboot_required"] is expected
+
+
+def test_check_health_reboot_marker_timeout_is_bounded_unknown() -> None:
+    """A hanging reboot-marker check is a bounded timeout, never a hang."""
+
+    def timeout_runner(argv, timeout, max_output):
+        if "/var/run/reboot-required" in " ".join(argv):
+            return helper.CommandResult(-9, b"", b"", timed_out=True)
+        return FakeHelperRunner()(argv, timeout, max_output)
+
+    response = _health(timeout_runner)
+    assert response["ok"] is False
+    assert response["error"]["classification"] == "timeout"
+
+
+def test_check_health_shares_the_default_global_operation_deadline() -> None:
+    """Health uses the same shared bounded deadline as every other operation."""
+
+    class FakeClock:
+        value = 0.0
+
+        def __call__(self):
+            return self.value
+
+    clock = FakeClock()
+    base_runner = FakeHelperRunner()
+    timeouts: list[float] = []
+
+    def advancing_runner(argv, timeout, max_output):
+        timeouts.append(timeout)
+        result = base_runner(argv, timeout, max_output)
+        clock.value += 100.0 if len(timeouts) < 3 else 141.0
+        return result
+
+    response = helper.handle_request(
+        _request(operation="check_health"),
+        runner=advancing_runner,
+        clock=clock,
+        lock_factory=lambda _vmid: nullcontext(),
+    )
+    assert response["error"] == {
+        "classification": "timeout",
+        "message": "package scan operation deadline exceeded",
+    }
+
+
+def test_check_health_evidence_never_carries_package_names_or_guest_text() -> None:
+    """Health evidence stays limited to bounded enums/bools/ints only."""
+    half = "openssl\tamd64\t3.0.11-1\thalf-installed\n"
+    runner = FakeHelperRunner(
+        inventory_outputs=(half, half),
+        audit_stdout="openssl: some diagnostic line\n",
+    )
+    response = _health(runner)
+    assert set(response["evidence"]) == {
+        "guest_exec",
+        "guest_exec_unavailable",
+        "dpkg",
+        "unfinished_package_count",
+        "reboot_required",
+    }
+    assert "openssl" not in json.dumps(response["evidence"])

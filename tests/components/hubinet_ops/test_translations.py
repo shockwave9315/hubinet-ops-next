@@ -121,6 +121,7 @@ def _runtime_entity_translation_keys() -> dict[str, set[str]]:
             button.PACKAGE_APPROVE_BUTTON,
             button.PACKAGE_UPDATE_BUTTON,
             button.PACKAGE_AUTOREMOVE_BUTTON,
+            button.PACKAGE_HEALTH_BUTTON,
             snapshot_restore.SNAPSHOT_RESTORE_BUTTON,
         ),
         "select": (select.SNAPSHOT_SELECT,),
@@ -132,6 +133,7 @@ def _runtime_entity_translation_keys() -> dict[str, set[str]]:
             sensor.PACKAGE_SCAN_SENSOR,
             sensor.PACKAGE_UPDATE_SENSOR,
             sensor.UNUSED_PACKAGES_SENSOR,
+            sensor.PACKAGE_HEALTH_SENSOR,
         ),
     }
     return {

@@ -44,10 +44,10 @@ PACKAGE_SCAN_KNOWN_HOSTS = ".ssh/known_hosts"
 
 GUIDED_USERNAME = "hubinetnext@pve"
 GUIDED_TOKEN_ID = "ha"
-INTEGRATION_VERSION = "2026.9.1.9"
+INTEGRATION_VERSION = "2026.9.1.10"
 # Operator-facing full-functionality expectation only; protocol remains the
 # wire compatibility authority and supported old-helper operations stay usable.
-EXPECTED_HELPER_VERSION = 4
+EXPECTED_HELPER_VERSION = 5
 BOOTSTRAP_COMMAND = (
     "curl -fsSL "
     "https://raw.githubusercontent.com/shockwave9315/hubinet-ops-next/"

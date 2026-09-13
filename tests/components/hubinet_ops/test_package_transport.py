@@ -11,12 +11,17 @@ import asyncssh
 import pytest
 
 from custom_components.hubinet_ops.packages.models import (
+    HealthDpkgState,
+    HealthReason,
+    HealthState,
+    PackageHealthError,
     PackageScanError,
     PackageScanFailure,
     PackageUpdateError,
     PackageUpdateOutcome,
 )
 from custom_components.hubinet_ops.packages.transport import (
+    HEALTH_TRANSPORT_TIMEOUT_SECONDS,
     PROBE_TIMEOUT_SECONDS,
     TRANSPORT_TIMEOUT_SECONDS,
     UPDATE_TRANSPORT_TIMEOUT_SECONDS,
@@ -1148,3 +1153,267 @@ async def test_ping_transport_requires_exact_pong_evidence(
 def test_update_transport_timeout_exceeds_helper_deadline() -> None:
     """The helper can classify its own bounded update timeout before SSH does."""
     assert UPDATE_TRANSPORT_TIMEOUT_SECONDS > 1800
+
+
+def test_health_transport_timeout_exceeds_helper_deadline() -> None:
+    """Health reuses the scan-sized transport bound over its helper deadline."""
+    assert HEALTH_TRANSPORT_TIMEOUT_SECONDS >= TRANSPORT_TIMEOUT_SECONDS
+
+
+def _health_evidence(
+    *,
+    guest_exec: bool = True,
+    guest_exec_unavailable: bool = False,
+    dpkg: str | None = "ok",
+    unfinished_package_count: int | None = None,
+    reboot_required: bool | None = None,
+) -> dict[str, object]:
+    """Build one exact successful ``check_health`` evidence shape."""
+    return {
+        "guest_exec": guest_exec,
+        "guest_exec_unavailable": guest_exec_unavailable,
+        "dpkg": dpkg,
+        "unfinished_package_count": unfinished_package_count,
+        "reboot_required": reboot_required,
+    }
+
+
+async def test_health_transport_returns_healthy_verdict(
+    hass: HomeAssistant, tmp_path: Path
+) -> None:
+    """A clean guest with no reboot marker is classified HEALTHY."""
+    transport, _connector, connection, *_ = await _transport(
+        hass, tmp_path, _operation_response("check_health", _health_evidence())
+    )
+    outcome = await transport.async_check_health("pve1", 200)
+    assert outcome.state is HealthState.HEALTHY
+    assert outcome.reason is None
+    assert outcome.evidence is not None
+    assert outcome.evidence.dpkg is HealthDpkgState.OK
+    assert json.loads(connection.process_kwargs["input"])["operation"] == (
+        "check_health"
+    )
+
+
+async def test_health_transport_returns_degraded_verdict(
+    hass: HomeAssistant, tmp_path: Path
+) -> None:
+    """A clean dpkg state plus a positive reboot marker is DEGRADED."""
+    transport, *_ = await _transport(
+        hass,
+        tmp_path,
+        _operation_response(
+            "check_health", _health_evidence(reboot_required=True)
+        ),
+    )
+    outcome = await transport.async_check_health("pve1", 200)
+    assert outcome.state is HealthState.DEGRADED
+    assert outcome.reason is None
+
+
+@pytest.mark.parametrize(
+    ("evidence", "reason"),
+    [
+        (
+            {
+                "guest_exec": False,
+                "guest_exec_unavailable": False,
+                "dpkg": None,
+                "unfinished_package_count": None,
+                "reboot_required": None,
+            },
+            HealthReason.GUEST_EXEC_FAILED,
+        ),
+        (
+            _health_evidence(dpkg="interrupted", unfinished_package_count=1),
+            HealthReason.DPKG_INTERRUPTED,
+        ),
+    ],
+)
+async def test_health_transport_returns_failed_verdicts(
+    hass: HomeAssistant,
+    tmp_path: Path,
+    evidence: dict[str, object],
+    reason: HealthReason,
+) -> None:
+    """Only positive evidence -- exec failure or persistent half-* -- is FAILED."""
+    transport, *_ = await _transport(
+        hass, tmp_path, _operation_response("check_health", evidence)
+    )
+    outcome = await transport.async_check_health("pve1", 200)
+    assert outcome.state is HealthState.FAILED
+    assert outcome.reason is reason
+
+
+@pytest.mark.parametrize(
+    ("evidence", "reason"),
+    [
+        (
+            {
+                "guest_exec": False,
+                "guest_exec_unavailable": True,
+                "dpkg": None,
+                "unfinished_package_count": None,
+                "reboot_required": None,
+            },
+            HealthReason.GUEST_UNAVAILABLE,
+        ),
+        (_health_evidence(dpkg="pending"), HealthReason.DPKG_PENDING),
+        (_health_evidence(dpkg="busy"), HealthReason.PACKAGE_MANAGER_BUSY),
+        (_health_evidence(dpkg="lock_unknown"), HealthReason.DPKG_LOCK_UNKNOWN),
+        (_health_evidence(dpkg="changed"), HealthReason.GUEST_CHANGED),
+    ],
+)
+async def test_health_transport_returns_unknown_verdicts(
+    hass: HomeAssistant,
+    tmp_path: Path,
+    evidence: dict[str, object],
+    reason: HealthReason,
+) -> None:
+    """Every unresolved condition is UNKNOWN (``state`` is ``None``), never FAILED."""
+    transport, *_ = await _transport(
+        hass, tmp_path, _operation_response("check_health", evidence)
+    )
+    outcome = await transport.async_check_health("pve1", 200)
+    assert outcome.state is None
+    assert outcome.reason is reason
+    assert outcome.evidence is not None
+
+
+@pytest.mark.parametrize(
+    "evidence",
+    [
+        {**_health_evidence(), "extra": "x"},
+        {k: v for k, v in _health_evidence().items() if k != "dpkg"},
+        {**_health_evidence(), "guest_exec": "yes"},
+        {**_health_evidence(), "dpkg": "unknown_state"},
+        {**_health_evidence(), "unfinished_package_count": -1},
+        {**_health_evidence(), "reboot_required": False},
+        {**_health_evidence(dpkg=None), "guest_exec": True},
+    ],
+)
+async def test_health_transport_rejects_malformed_evidence(
+    hass: HomeAssistant, tmp_path: Path, evidence: dict[str, object]
+) -> None:
+    """Strict evidence validation never guesses at an out-of-contract shape."""
+    transport, *_ = await _transport(
+        hass, tmp_path, _operation_response("check_health", evidence)
+    )
+    with pytest.raises(PackageHealthError) as caught:
+        await transport.async_check_health("pve1", 200)
+    assert caught.value.reason is HealthReason.MALFORMED_EVIDENCE
+
+
+async def test_health_transport_rejects_wrong_protocol_and_operation(
+    hass: HomeAssistant, tmp_path: Path
+) -> None:
+    """A wrong operation echo or incompatible protocol is HELPER_OUTDATED."""
+    wrong_operation, *_ = await _transport(
+        hass, tmp_path, _operation_response("scan_packages", _health_evidence())
+    )
+    with pytest.raises(PackageHealthError) as caught:
+        await wrong_operation.async_check_health("pve1", 200)
+    assert caught.value.reason is HealthReason.HELPER_OUTDATED
+
+    response = _operation_response("check_health", _health_evidence())
+    response["protocol_version"] = 2
+    wrong_protocol, *_ = await _transport(hass, tmp_path, response)
+    with pytest.raises(PackageHealthError) as caught:
+        await wrong_protocol.async_check_health("pve1", 200)
+    assert caught.value.reason is HealthReason.HELPER_OUTDATED
+
+
+@pytest.mark.parametrize(
+    "response",
+    [
+        _operation_response("check_health", _health_evidence())
+        | {"target": {"node": "pve2", "vmid": 200}},
+        _operation_response("check_health", _health_evidence())
+        | {"target": {"node": "pve1", "vmid": 201}},
+    ],
+)
+async def test_health_transport_rejects_wrong_node_or_vmid_echo(
+    hass: HomeAssistant, tmp_path: Path, response: dict[str, object]
+) -> None:
+    """A successful response for the wrong target is never accepted."""
+    transport, *_ = await _transport(hass, tmp_path, response)
+    with pytest.raises(PackageHealthError) as caught:
+        await transport.async_check_health("pve1", 200)
+    assert caught.value.reason is HealthReason.GUEST_UNAVAILABLE
+
+
+@pytest.mark.parametrize(
+    ("classification", "reason"),
+    [
+        ("guest_unavailable", HealthReason.GUEST_UNAVAILABLE),
+        ("identity_mismatch", HealthReason.GUEST_UNAVAILABLE),
+        ("timeout", HealthReason.TIMEOUT),
+        ("package_manager_busy", HealthReason.PACKAGE_MANAGER_BUSY),
+        ("unsupported_guest", HealthReason.UNSUPPORTED_GUEST),
+        ("malformed_evidence", HealthReason.MALFORMED_EVIDENCE),
+        ("execution_failed", HealthReason.MALFORMED_EVIDENCE),
+    ],
+)
+async def test_health_transport_maps_helper_failure_classifications(
+    hass: HomeAssistant,
+    tmp_path: Path,
+    classification: str,
+    reason: HealthReason,
+) -> None:
+    """Every helper failure classification, including a busy flock, maps cleanly."""
+    response = {
+        "protocol_version": 1,
+        "helper_version": 5,
+        "operation": "check_health",
+        "target": {"node": "pve1", "vmid": 200},
+        "ok": False,
+        "error": {"classification": classification, "message": "failed"},
+    }
+    transport, *_ = await _transport(hass, tmp_path, response)
+    with pytest.raises(PackageHealthError) as caught:
+        await transport.async_check_health("pve1", 200)
+    assert caught.value.reason is reason
+
+
+@pytest.mark.parametrize(
+    ("ssh_error", "reason"),
+    [
+        (TimeoutError(), HealthReason.TIMEOUT),
+        (
+            asyncssh.HostKeyNotVerifiable("host key mismatch"),
+            HealthReason.TRANSPORT_FAILED,
+        ),
+        (asyncssh.PermissionDenied("denied"), HealthReason.TRANSPORT_FAILED),
+        (OSError("refused"), HealthReason.TRANSPORT_FAILED),
+    ],
+)
+async def test_health_transport_classifies_ssh_failures(
+    ssh_error: Exception, reason: HealthReason
+) -> None:
+    """Transport-level SSH/auth/host-key/timeout failures never crash the check."""
+    private_key = asyncssh.generate_private_key("ssh-ed25519")
+    host_key = asyncssh.generate_private_key("ssh-ed25519")
+    transport = AsyncSSHPackageTransport(
+        endpoint="192.0.2.10",
+        private_key=private_key.export_private_key().decode(),
+        host_key=host_key.export_public_key().decode().strip(),
+        connector=FailingConnector(ssh_error),
+    )
+    with pytest.raises(PackageHealthError) as caught:
+        await transport.async_check_health("pve1", 200)
+    assert caught.value.reason is reason
+
+
+async def test_health_transport_rejects_invalid_target_before_sending() -> None:
+    """Malformed node/VMID identity fails closed without any SSH attempt."""
+    private_key = asyncssh.generate_private_key("ssh-ed25519")
+    host_key = asyncssh.generate_private_key("ssh-ed25519")
+    transport = AsyncSSHPackageTransport(
+        endpoint="192.0.2.10",
+        private_key=private_key.export_private_key().decode(),
+        host_key=host_key.export_public_key().decode().strip(),
+        connector=FailingConnector(AssertionError("must not be called")),
+    )
+    with pytest.raises(PackageHealthError) as caught:
+        await transport.async_check_health("../pve1", 200)
+    assert caught.value.reason is HealthReason.GUEST_UNAVAILABLE

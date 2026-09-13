@@ -261,6 +261,9 @@
       "package_autoremove": {
         "name": "Usuń nieużywane pakiety"
       },
+      "package_health_check": {
+        "name": "Sprawdź stan zdrowia"
+      },
       "reset": {
         "name": "Resetuj"
       },
@@ -349,6 +352,14 @@
           "running": "W toku",
           "success": "Powodzenie",
           "failed": "Niepowodzenie"
+        }
+      },
+      "package_health": {
+        "name": "Stan zdrowia",
+        "state": {
+          "healthy": "Sprawny",
+          "degraded": "Obniżona sprawność",
+          "failed": "Niesprawny"
         }
       },
       "node_backup_duration": {
@@ -470,6 +481,9 @@
     },
     "package_autoremove_failed": {
       "message": "Nie można rozpocząć czyszczenia pakietów: {reason}"
+    },
+    "package_health_failed": {
+      "message": "Nie można rozpocząć sprawdzenia stanu: {reason}"
     },
     "snapshot_selection_invalid": {
       "message": "Wybrany natywny snapshot nie jest już dostępny. Zaktualizuj encję i wybierz go ponownie."

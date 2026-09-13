@@ -18,7 +18,7 @@ import time
 from typing import Any
 
 PROTOCOL_VERSION = 1
-HELPER_VERSION = 4
+HELPER_VERSION = 5
 OPERATION_PROBE = "probe"
 OPERATION_SCAN_PACKAGES = "scan_packages"
 OPERATION_PLAN_PACKAGES = "plan_packages"
@@ -26,6 +26,7 @@ OPERATION_UPDATE_PACKAGES = "update_packages"
 OPERATION_PLAN_AUTOREMOVE = "plan_autoremove"
 OPERATION_AUTOREMOVE_PACKAGES = "autoremove_packages"
 OPERATION_PING = "ping"
+OPERATION_CHECK_HEALTH = "check_health"
 # Retained as a compatibility alias for existing helper tests/importers.
 OPERATION = OPERATION_SCAN_PACKAGES
 
@@ -75,6 +76,16 @@ DPKG_UNFINISHED_STATUS_WORDS = frozenset(
         "triggers-pending",
     }
 )
+# Health uses its own classification semantics, distinct from Update/
+# Autoremove's fail-closed dpkg_unfinished gate: half-* states are candidate
+# FAILED evidence only once dpkg --audit disambiguates them from packages
+# legitimately mid-phase between apt steps (HEALTH_PENDING_STATUS_WORDS).
+HEALTH_HALF_STATUS_WORDS = frozenset({"half-installed", "half-configured"})
+HEALTH_PENDING_STATUS_WORDS = frozenset(
+    {"unpacked", "triggers-awaited", "triggers-pending"}
+)
+HEALTH_AUDIT_MAX_BYTES = 64 * 1024
+HEALTH_AUDIT_BUSY_NOTICE = "Another process has locked the database for writing"
 
 # Scan simulation, execution-time simulation, and mutation intentionally share
 # the same policy options. The only differences are simulation's ``-s`` and
@@ -366,6 +377,7 @@ def validate_request(payload: Any) -> tuple[str, str | None, int | None]:
         OPERATION_PLAN_AUTOREMOVE,
         OPERATION_AUTOREMOVE_PACKAGES,
         OPERATION_PING,
+        OPERATION_CHECK_HEALTH,
     }:
         raise RequestError("unknown host-control operation")
     if set(payload) != {"protocol_version", "operation", "target"}:
@@ -728,6 +740,168 @@ def _ping(
     return {"pong": True}
 
 
+def _guest_still_running(
+    vmid: int, runner: Runner, deadline: OperationDeadline
+) -> bool:
+    """Re-check native LXC runtime state after a failed exec, without pct config."""
+    status_result = _command(
+        runner, deadline, ("pct", "status", str(vmid)), max_output=64 * 1024
+    )
+    if status_result.returncode != 0:
+        return False
+    status_stdout, _ = _decode(status_result)
+    return status_stdout.strip() == "status: running"
+
+
+def _read_health_inventory(
+    runner: Runner, deadline: OperationDeadline, vmid: int
+) -> dict[tuple[str, str], str]:
+    """Read one dpkg inventory for Health, with Health's own classification.
+
+    Deliberately separate from :func:`_validate_inventory_sane`: an
+    unparseable read here is ``malformed_evidence`` and an unreadable
+    inventory is ``unsupported_guest``, not Update/Autoremove's
+    ``dpkg_sanity_failed``/``dpkg_unfinished``.
+    """
+    result = _guest_command(runner, deadline, vmid, INVENTORY_COMMAND)
+    text, _ = _decode(result)
+    if result.returncode != 0:
+        raise ScanError("unsupported_guest", "guest dpkg inventory is unavailable")
+    statuses: dict[tuple[str, str], str] = {}
+    for raw_line in text.splitlines():
+        if not raw_line:
+            continue
+        fields = raw_line.split("\t")
+        if len(fields) != 4 or fields[3] not in DPKG_STATUS_WORDS:
+            raise ScanError("malformed_evidence", "dpkg inventory is malformed")
+        name, architecture, version, status = fields
+        if (
+            not name
+            or len(name) > 300
+            or len(version) > 500
+            or not ARCHITECTURE_RE.fullmatch(architecture)
+        ):
+            raise ScanError("malformed_evidence", "dpkg inventory is malformed")
+        identity = (name, architecture)
+        if identity in statuses:
+            raise ScanError("malformed_evidence", "dpkg inventory is malformed")
+        statuses[identity] = status
+    return statuses
+
+
+def _check_dpkg_health(
+    vmid: int, runner: Runner, deadline: OperationDeadline
+) -> tuple[str, int | None]:
+    """Classify dpkg health using unfinished-state and audit-lock disambiguation.
+
+    A bare dpkg inventory alone cannot distinguish a genuinely interrupted
+    package manager from apt legitimately pausing between phases while
+    dpkg's own lock is briefly released. ``dpkg --audit`` disambiguates a
+    busy/uncertain lock; only packages that remain half-installed or
+    half-configured across two reads, with no busy/uncertain lock evidence
+    between them, are reported as an interrupted package manager.
+    """
+    statuses = _read_health_inventory(runner, deadline, vmid)
+    half = frozenset(
+        identity
+        for identity, status in statuses.items()
+        if status in HEALTH_HALF_STATUS_WORDS
+    )
+    pending = frozenset(
+        identity
+        for identity, status in statuses.items()
+        if status in HEALTH_PENDING_STATUS_WORDS
+    )
+    if not half and not pending:
+        return "ok", None
+
+    try:
+        audit = _guest_command(
+            runner,
+            deadline,
+            vmid,
+            ("env", "LC_ALL=C", "dpkg", "--audit"),
+            max_output=HEALTH_AUDIT_MAX_BYTES,
+        )
+    except ScanError as err:
+        if err.classification == "timeout":
+            raise
+        # Output exceeded its bound: the lock state cannot be evaluated.
+        return "lock_unknown", None
+    if audit.returncode != 0:
+        return "lock_unknown", None
+    audit_stdout, _ = _decode(audit)
+    if HEALTH_AUDIT_BUSY_NOTICE in audit_stdout:
+        return "busy", None
+
+    if not half:
+        # Only pending/triggers-* identities remain; never classify these
+        # as FAILED.
+        return "pending", None
+
+    second = _read_health_inventory(runner, deadline, vmid)
+    if all(second.get(identity) in HEALTH_HALF_STATUS_WORDS for identity in half):
+        return "interrupted", len(half)
+    return "changed", None
+
+
+def _check_health(
+    expected_node: str, vmid: int, runner: Runner, deadline: OperationDeadline
+) -> dict[str, Any]:
+    """Collect bounded point-in-time guest OS/package health evidence.
+
+    A stopped or unavailable target fails target validation above with its
+    normal ``guest_unavailable``/``identity_mismatch`` classification, which
+    Home Assistant treats as an unestablished (never ``FAILED``) Health
+    result. Only a positive guest-execution failure while still confirmed
+    running, or a persistently interrupted dpkg state, are ever reported as
+    a Health failure; every other unresolved condition here is diagnostic
+    evidence for an ``UNKNOWN`` verdict, classified on the Home Assistant
+    side.
+    """
+    _validate_local_node(expected_node, runner, deadline)
+    _validate_target(vmid, runner, deadline)
+
+    exec_result = _guest_command(
+        runner,
+        deadline,
+        vmid,
+        ("/bin/true",),
+        max_output=4096,
+        command_timeout=PING_COMMAND_TIMEOUT_SECONDS,
+    )
+    if exec_result.returncode != 0:
+        still_running = _guest_still_running(vmid, runner, deadline)
+        return {
+            "guest_exec": False,
+            "guest_exec_unavailable": not still_running,
+            "dpkg": None,
+            "unfinished_package_count": None,
+            "reboot_required": None,
+        }
+
+    dpkg, unfinished_count = _check_dpkg_health(vmid, runner, deadline)
+
+    reboot = _guest_command(
+        runner,
+        deadline,
+        vmid,
+        ("test", "-e", "/var/run/reboot-required"),
+        max_output=4096,
+    )
+    # Only the marker's presence is reliable evidence, matching the fixed
+    # tri-state reboot semantics used elsewhere in this helper.
+    reboot_required = True if reboot.returncode == 0 else None
+
+    return {
+        "guest_exec": True,
+        "guest_exec_unavailable": False,
+        "dpkg": dpkg,
+        "unfinished_package_count": unfinished_count,
+        "reboot_required": reboot_required,
+    }
+
+
 def _scan(
     expected_node: str, vmid: int, runner: Runner, deadline: OperationDeadline
 ) -> dict[str, Any]:
@@ -863,6 +1037,8 @@ def handle_request(
                 evidence = _plan_autoremove(expected_node, vmid, runner, deadline)
             elif operation == OPERATION_AUTOREMOVE_PACKAGES:
                 evidence = _autoremove_packages(expected_node, vmid, runner, deadline)
+            elif operation == OPERATION_CHECK_HEALTH:
+                evidence = _check_health(expected_node, vmid, runner, deadline)
             else:
                 evidence = _ping(expected_node, vmid, runner, deadline)
     except ScanError as err:
@@ -919,6 +1095,7 @@ def main() -> int:
                     OPERATION_PLAN_AUTOREMOVE,
                     OPERATION_AUTOREMOVE_PACKAGES,
                     OPERATION_PING,
+                    OPERATION_CHECK_HEALTH,
                 }:
                     failure_operation = payload["operation"]
                 response = handle_request(payload)
