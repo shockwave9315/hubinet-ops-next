@@ -243,6 +243,8 @@ async def test_lxc_restore_outcome_release_table(
     _prepare_snapshot_rows(mock_proxmox_client)
     await setup_integration(hass, mock_config_entry)
     manager = mock_config_entry.runtime_data.package_manager
+    coordinator = mock_config_entry.runtime_data
+    coordinator.async_request_refresh = AsyncMock()
     manager._records[KEY] = PackageScanRecord(  # noqa: SLF001
         status=PackageScanStatus.SUCCESS,
         result=RESULT,
@@ -267,6 +269,7 @@ async def test_lxc_restore_outcome_release_table(
     assert KEY in manager._fenced_evidence  # noqa: SLF001
     assert hass.states.get("sensor.ct_nginx_pending_package_updates").state == "unknown"
     assert hass.states.get("sensor.ct_nginx_unused_packages").state == "unknown"
+    coordinator.async_request_refresh.assert_not_awaited()
 
 
 async def test_cancellation_after_possible_submission_keeps_lxc_reservation(
@@ -278,13 +281,39 @@ async def test_cancellation_after_possible_submission_keeps_lxc_reservation(
     _prepare_snapshot_rows(mock_proxmox_client)
     await setup_integration(hass, mock_config_entry)
     await _select(hass, SELECT_LXC)
-    with patch(
-        "custom_components.hubinet_ops.snapshot_restore.async_rollback_snapshot",
-        AsyncMock(side_effect=asyncio.CancelledError),
+    coordinator = mock_config_entry.runtime_data
+    coordinator.async_request_refresh = AsyncMock()
+    created_tasks: list[asyncio.Task[None]] = []
+    create_background_task = mock_config_entry.async_create_background_task
+
+    def capture_background_task(*args, **kwargs) -> asyncio.Task[None]:
+        task = create_background_task(*args, **kwargs)
+        created_tasks.append(task)
+        return task
+
+    with (
+        patch.object(
+            mock_config_entry,
+            "async_create_background_task",
+            side_effect=capture_background_task,
+        ),
+        patch(
+            "custom_components.hubinet_ops.snapshot_restore.async_rollback_snapshot",
+            AsyncMock(side_effect=asyncio.CancelledError),
+        ),
     ):
-        await _press(hass, RESTORE_LXC)
-    assert mock_config_entry.runtime_data.package_manager.restore_reserved(*KEY)
+        await hass.services.async_call(
+            "button",
+            SERVICE_PRESS,
+            {ATTR_ENTITY_ID: RESTORE_LXC},
+            blocking=True,
+        )
+        assert len(created_tasks) == 1
+        with pytest.raises(asyncio.CancelledError):
+            await created_tasks[0]
+    assert coordinator.package_manager.restore_reserved(*KEY)
     assert hass.states.get(RESTORE_LXC).state == STATE_UNAVAILABLE
+    coordinator.async_request_refresh.assert_not_awaited()
 
 
 async def test_background_task_creation_failure_releases_lxc_reservation(

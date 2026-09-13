@@ -1,17 +1,30 @@
 """Tests for presentation-only native snapshot selection."""
 
 import asyncio
+from copy import deepcopy
 from threading import Event as ThreadEvent
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from syrupy.assertion import SnapshotAssertion
-from tests.common import MockConfigEntry, snapshot_platform  # noqa: TID251
+from tests.common import (  # noqa: TID251
+    MockConfigEntry,
+    async_fire_time_changed,
+    snapshot_platform,
+)
 
 from custom_components.hubinet_ops.select import (
     ATTR_SELECTED_SNAPSHOT,
+    PARALLEL_UPDATES,
+    SCAN_INTERVAL,
     snapshot_select_unique_id,
 )
+from custom_components.hubinet_ops.snapshots import (
+    NativeSnapshot,
+    RestoreOutcome,
+    RestoreResult,
+)
+from homeassistant.components.button import SERVICE_PRESS
 from homeassistant.components.homeassistant import (
     DOMAIN as HA_DOMAIN,
     SERVICE_UPDATE_ENTITY,
@@ -26,6 +39,7 @@ from homeassistant.const import (
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import entity_platform as ep, entity_registry as er
 from homeassistant.setup import async_setup_component
+from homeassistant.util import dt as dt_util
 
 from . import setup_integration
 
@@ -288,3 +302,120 @@ async def test_snapshot_poll_failure_isolated_from_main_entities(
     assert state.attributes["options"] == ["wanted"]
     assert hass.states.get("sensor.vm_web_cpu_usage").state != STATE_UNAVAILABLE
     coordinator.async_request_refresh.assert_not_awaited()
+
+
+async def test_native_platform_bounds_initial_and_periodic_snapshot_polling(
+    hass: HomeAssistant,
+    mock_proxmox_client: MagicMock,
+    mock_config_entry: MockConfigEntry,
+) -> None:
+    """Bound selector waves to three without blocking Restore or coordinator I/O."""
+    assert PARALLEL_UPDATES == 3
+    node = mock_proxmox_client._node_mock  # noqa: SLF001
+    template = node.qemu.get.return_value[0]
+    vms = [
+        {**deepcopy(template), "vmid": 300 + index, "name": f"hotfix-{index}"}
+        for index in range(6)
+    ]
+    node.qemu.get.return_value = vms
+    node.lxc.get.return_value = []
+    resources: dict[int, MagicMock] = {}
+
+    def qemu_resource(vmid: int) -> MagicMock:
+        resource = resources.setdefault(vmid, MagicMock())
+        resource.snapshot.get.return_value = [
+            {"name": "wanted", "snaptime": 1}
+        ]
+        return resource
+
+    node.qemu.side_effect = qemu_resource
+    expected_updates = len(vms)
+
+    def new_wave() -> dict[str, object]:
+        return {
+            "active": 0,
+            "peak": 0,
+            "completed": 0,
+            "full": asyncio.Event(),
+            "done": asyncio.Event(),
+            "release": asyncio.Event(),
+        }
+
+    wave = new_wave()
+
+    async def blocked_snapshot_list(*_args, **_kwargs) -> tuple[NativeSnapshot, ...]:
+        wave["active"] += 1
+        wave["peak"] = max(wave["peak"], wave["active"])
+        if wave["active"] == PARALLEL_UPDATES:
+            wave["full"].set()
+        await wave["release"].wait()
+        wave["active"] -= 1
+        wave["completed"] += 1
+        if wave["completed"] == expected_updates:
+            wave["done"].set()
+        return (NativeSnapshot("wanted", 1),)
+
+    mock_config_entry.add_to_hass(hass)
+    try:
+        with patch(
+            "custom_components.hubinet_ops.select.async_list_snapshots",
+            side_effect=blocked_snapshot_list,
+        ):
+            assert await asyncio.wait_for(
+                hass.config_entries.async_setup(mock_config_entry.entry_id), 1
+            )
+            await asyncio.wait_for(wave["full"].wait(), 1)
+            assert wave["peak"] == PARALLEL_UPDATES
+            wave["release"].set()
+            await asyncio.wait_for(wave["done"].wait(), 1)
+            await hass.async_block_till_done()
+
+            await hass.services.async_call(
+                "select",
+                SERVICE_SELECT_OPTION,
+                {
+                    ATTR_ENTITY_ID: "select.hotfix_5_snapshot_to_restore",
+                    ATTR_OPTION: "wanted",
+                },
+                blocking=True,
+            )
+
+            wave = new_wave()
+            async_fire_time_changed(hass, dt_util.utcnow() + SCAN_INTERVAL)
+            await asyncio.wait_for(wave["full"].wait(), 1)
+            assert wave["peak"] == PARALLEL_UPDATES
+
+            restore_started = asyncio.Event()
+
+            async def restore_while_selects_wait(
+                *_args, **_kwargs
+            ) -> RestoreResult:
+                restore_started.set()
+                return RestoreResult(RestoreOutcome.SUCCESS)
+
+            with patch(
+                "custom_components.hubinet_ops.snapshot_restore."
+                "async_rollback_snapshot",
+                side_effect=restore_while_selects_wait,
+            ):
+                await hass.services.async_call(
+                    "button",
+                    SERVICE_PRESS,
+                    {ATTR_ENTITY_ID: "button.hotfix_5_restore"},
+                    blocking=True,
+                )
+                await asyncio.wait_for(restore_started.wait(), 1)
+
+            coordinator = mock_config_entry.runtime_data
+            await asyncio.wait_for(coordinator.async_request_refresh(), 1)
+            assert wave["active"] == PARALLEL_UPDATES
+
+            wave["release"].set()
+            await asyncio.wait_for(wave["done"].wait(), 1)
+            assert wave["completed"] == expected_updates
+            assert wave["peak"] == PARALLEL_UPDATES
+    finally:
+        for event_name in ("release", "done"):
+            event = wave[event_name]
+            if isinstance(event, asyncio.Event):
+                event.set()
