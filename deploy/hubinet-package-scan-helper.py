@@ -940,22 +940,31 @@ def _check_health(
 
     dpkg, unfinished_count = _check_dpkg_health(vmid, runner, deadline)
 
-    reboot = _guest_command(
-        runner,
-        deadline,
-        vmid,
-        ("test", "-e", "/var/run/reboot-required"),
-        max_output=4096,
-        command_timeout=HEALTH_COMMAND_TIMEOUT_SECONDS,
-    )
-    if reboot.returncode == 0:
+    reboot: CommandResult | None
+    try:
+        reboot = _guest_command(
+            runner,
+            deadline,
+            vmid,
+            ("test", "-e", "/var/run/reboot-required"),
+            max_output=4096,
+            command_timeout=HEALTH_COMMAND_TIMEOUT_SECONDS,
+        )
+    except ScanError:
+        # A probe that produced no result cannot erase an established
+        # interrupted dpkg state; it is still subject to the running re-check.
+        if dpkg != "interrupted":
+            raise
+        reboot = None
+    if reboot is not None and reboot.returncode == 0:
         # Only the marker's presence is reliable evidence, matching the
         # fixed tri-state reboot semantics used elsewhere in this helper.
         reboot_required = True
     elif _guest_still_running(vmid, runner, deadline):
-        if reboot.returncode != 1:
+        if (reboot is None or reboot.returncode != 1) and dpkg != "interrupted":
             # test -e exits 1 only for "false"; any other status is a probe
             # that never ran, which must not let a clean dpkg read as HEALTHY.
+            # Interrupted dpkg is FAILED regardless of the reboot dimension.
             raise ScanError("execution_failed", "reboot-required probe failed")
         reboot_required = None
     else:

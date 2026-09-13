@@ -223,7 +223,10 @@ Only the reboot marker's positive presence is reliable evidence; its absence
 `reboot_required: false`. Any other nonzero probe result while the guest is
 still running means the probe itself did not run, so it is a bounded helper
 failure (`UNKNOWN`), never `reboot_required: null` that could read as
-`HEALTHY`.
+`HEALTHY`. The one exception is an already-established interrupted dpkg
+state: a reboot probe that fails or times out while the guest is still
+confirmed running leaves that `FAILED` evidence intact with the reboot
+dimension unestablished, because reboot evidence can never change `FAILED`.
 
 The dpkg classification reads the inventory once; a clean inventory is `ok`
 with no further dpkg command. When any identity is

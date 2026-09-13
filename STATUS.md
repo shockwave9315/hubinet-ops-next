@@ -175,7 +175,7 @@ Status date: 2026-09-13
   and owns its background-task coroutine explicitly on both the manual and
   post-operation paths. `begin_restore()` and existing Update/Autoremove
   safety checks are unchanged.
-- Validation: **724 tests and 207 snapshots passed**; repository Ruff,
+- Validation: **733 tests and 207 snapshots passed**; repository Ruff,
   translation and release-parity checks, helper SHA/protocol consistency,
   ShellCheck, and shell syntax passed.
 

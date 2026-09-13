@@ -16,7 +16,15 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from custom_components.hubinet_ops.const import EXPECTED_HELPER_VERSION
-from custom_components.hubinet_ops.packages.transport import TRANSPORT_TIMEOUT_SECONDS
+from custom_components.hubinet_ops.packages.models import (
+    HealthReason,
+    HealthState,
+    classify_health,
+)
+from custom_components.hubinet_ops.packages.transport import (
+    TRANSPORT_TIMEOUT_SECONDS,
+    _parse_health_response,
+)
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 HELPER_PATH = REPO_ROOT / "deploy/hubinet-package-scan-helper.py"
@@ -1380,6 +1388,55 @@ def test_check_health_reboot_marker_timeout_is_bounded_unknown() -> None:
     response = _health(timeout_runner)
     assert response["ok"] is False
     assert response["error"]["classification"] == "timeout"
+
+
+@pytest.mark.parametrize(
+    ("dpkg_status", "reboot", "gone_at_reboot", "expected"),
+    [
+        # Established interrupted dpkg is FAILED whatever the reboot probe does
+        # while the guest stays confirmed running.
+        ("half-installed", 2, False, HealthState.FAILED),
+        ("half-installed", 127, False, HealthState.FAILED),
+        ("half-installed", "timeout", False, HealthState.FAILED),
+        ("half-installed", 1, False, HealthState.FAILED),
+        ("half-installed", 0, False, HealthState.FAILED),
+        # Without FAILED evidence a failed probe stays fail-closed UNKNOWN.
+        ("installed", 2, False, None),
+        ("installed", "timeout", False, None),
+        # A guest gone at the reboot probe still discards everything.
+        ("half-installed", 255, True, None),
+        ("half-installed", "timeout", True, None),
+    ],
+)
+def test_check_health_reboot_probe_failure_never_erases_interrupted_dpkg(
+    dpkg_status: str, reboot: int | str, gone_at_reboot: bool, expected
+) -> None:
+    """Reboot uncertainty blocks HEALTHY/DEGRADED but never an established FAILED."""
+    line = f"openssl\tamd64\t3.0.11-1\t{dpkg_status}\n"
+    runner = FakeHelperRunner(
+        inventory_outputs=(line, line), audit_stdout=AUDIT_HALF_INSTALLED
+    )
+
+    def reboot_runner(argv, timeout, max_output):
+        if "/var/run/reboot-required" in " ".join(argv):
+            if gone_at_reboot:
+                runner.status = "stopped"
+            if reboot == "timeout":
+                return helper.CommandResult(-9, b"", b"", timed_out=True)
+            return helper.CommandResult(reboot, b"", b"")
+        return runner(argv, timeout, max_output)
+
+    response = _health(reboot_runner)
+    if response["ok"] is not True:
+        assert expected is None
+        return
+    outcome = classify_health(_parse_health_response(response, "pve1", 200))
+    assert outcome.state is expected
+    if expected is HealthState.FAILED:
+        assert outcome.reason is HealthReason.DPKG_INTERRUPTED
+        assert response["evidence"]["reboot_required"] is (
+            True if reboot == 0 else None
+        )
 
 
 def test_check_health_has_its_own_tight_timeout_model() -> None:
