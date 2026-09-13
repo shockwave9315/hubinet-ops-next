@@ -26,7 +26,6 @@ from . import AUDIT_PERMISSIONS, setup_integration
 
 BUTTON_DOMAIN = "button"
 UPID = "UPID:pve1:00000001:00000002:00000003:qmsnapshot:100:user@pam:"
-UPID = "UPID:pve1:00000001:00000002:00000003:qmsnapshot:100:user@pam:"
 
 
 @pytest.fixture(autouse=True)
