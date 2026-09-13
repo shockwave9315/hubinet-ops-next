@@ -17,12 +17,15 @@ from custom_components.hubinet_ops.select import (
     ATTR_SELECTED_SNAPSHOT,
     PARALLEL_UPDATES,
     SCAN_INTERVAL,
+    SnapshotSelectMixin,
+    snapshot_choices_refresh_signal,
     snapshot_select_unique_id,
 )
 from custom_components.hubinet_ops.snapshots import (
     NativeSnapshot,
     RestoreOutcome,
     RestoreResult,
+    SnapshotKind,
 )
 from homeassistant.components.button import SERVICE_PRESS
 from homeassistant.components.homeassistant import (
@@ -38,6 +41,7 @@ from homeassistant.const import (
 )
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import entity_platform as ep, entity_registry as er
+from homeassistant.helpers.dispatcher import async_dispatcher_send
 from homeassistant.setup import async_setup_component
 from homeassistant.util import dt as dt_util
 
@@ -419,3 +423,84 @@ async def test_native_platform_bounds_initial_and_periodic_snapshot_polling(
             event = wave[event_name]
             if isinstance(event, asyncio.Event):
                 event.set()
+
+
+async def test_targeted_refresh_waits_for_native_select_platform_slot(
+    hass: HomeAssistant,
+    mock_proxmox_client: MagicMock,
+    mock_config_entry: MockConfigEntry,
+) -> None:
+    """Route a targeted Create refresh through the existing three-slot bound."""
+    node = mock_proxmox_client._node_mock  # noqa: SLF001
+    template = node.qemu.get.return_value[0]
+    vmids = (100, 102, 103, 104)
+    node.qemu.get.return_value = [
+        {**template, "vmid": vmid, "name": f"vm-{vmid}"} for vmid in vmids
+    ]
+    node.lxc.get.return_value = []
+    resources: dict[int, MagicMock] = {}
+
+    def qemu_resource(vmid: int) -> MagicMock:
+        resource = resources.setdefault(vmid, MagicMock())
+        resource.snapshot.get.return_value = []
+        return resource
+
+    node.qemu.side_effect = qemu_resource
+    await setup_integration(hass, mock_config_entry)
+
+    select_platform = next(
+        platform
+        for platform in ep.async_get_platforms(hass, "hubinet_ops")
+        if platform.domain == "select"
+    )
+    entities = {
+        entity.device_id: entity
+        for entity in select_platform.entities.values()
+        if isinstance(entity, SnapshotSelectMixin)
+    }
+    assert entities.keys() >= set(vmids)
+
+    entered = {vmid: asyncio.Event() for vmid in vmids}
+    release = {vmid: asyncio.Event() for vmid in vmids}
+
+    async def blocked_list(_proxmox, _node, vmid, _kind, **_kwargs):
+        entered[vmid].set()
+        await release[vmid].wait()
+        return (NativeSnapshot(f"snap-{vmid}", 1),)
+
+    with patch(
+        "custom_components.hubinet_ops.select.async_list_snapshots",
+        side_effect=blocked_list,
+    ):
+        occupied_tasks = [
+            hass.async_create_task(entities[vmid].async_update_ha_state(True))
+            for vmid in vmids[:PARALLEL_UPDATES]
+        ]
+        await asyncio.gather(
+            *(entered[vmid].wait() for vmid in vmids[:PARALLEL_UPDATES])
+        )
+
+        target = entities[vmids[-1]]
+        async_dispatcher_send(
+            hass,
+            snapshot_choices_refresh_signal(
+                mock_config_entry.entry_id,
+                SnapshotKind.QEMU,
+                "pve1",
+                vmids[-1],
+            ),
+        )
+
+        assert target._update_staged is True  # noqa: SLF001
+        assert not entered[vmids[-1]].is_set()
+
+        release[vmids[0]].set()
+        await entered[vmids[-1]].wait()
+        for event in release.values():
+            event.set()
+        await asyncio.gather(*occupied_tasks)
+        await hass.async_block_till_done()
+
+    state = hass.states.get(target.entity_id)
+    assert state is not None
+    assert state.attributes["options"] == [f"snap-{vmids[-1]}"]

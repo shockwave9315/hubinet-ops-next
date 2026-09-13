@@ -1,23 +1,31 @@
 """Tests for the ProxmoxVE button platform."""
 
+import asyncio
 import re
 from unittest.mock import ANY, MagicMock, patch
 
+from proxmoxer import AuthenticationError
+from proxmoxer.core import ResourceException
 import pytest
+from requests.exceptions import ConnectTimeout, SSLError
+from syrupy.assertion import SnapshotAssertion
+from tests.common import MockConfigEntry, snapshot_platform
+
+from custom_components.hubinet_ops.snapshots import (
+    RestoreOutcome,
+    RestoreResult,
+    SnapshotKind,
+)
 from homeassistant.components.button import SERVICE_PRESS
 from homeassistant.const import ATTR_ENTITY_ID, Platform
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import entity_registry as er
-from proxmoxer import AuthenticationError
-from proxmoxer.core import ResourceException
-from requests.exceptions import ConnectTimeout, SSLError
-from syrupy.assertion import SnapshotAssertion
-from tests.common import MockConfigEntry, snapshot_platform
 
 from . import AUDIT_PERMISSIONS, setup_integration
 
 BUTTON_DOMAIN = "button"
+UPID = "UPID:pve1:00000001:00000002:00000003:qmsnapshot:100:user@pam:"
 
 
 @pytest.fixture(autouse=True)
@@ -142,10 +150,18 @@ async def test_vm_buttons(
 
 
 @pytest.mark.parametrize(
-    ("entity_id", "vmid", "guest_resource"),
+    ("entity_id", "vmid", "guest_resource", "kind"),
     [
-        pytest.param("button.vm_web_create_snapshot", 100, "qemu", id="vm"),
-        pytest.param("button.ct_nginx_create_snapshot", 200, "lxc", id="container"),
+        pytest.param(
+            "button.vm_web_create_snapshot", 100, "qemu", SnapshotKind.QEMU, id="vm"
+        ),
+        pytest.param(
+            "button.ct_nginx_create_snapshot",
+            200,
+            "lxc",
+            SnapshotKind.LXC,
+            id="container",
+        ),
     ],
 )
 async def test_snapshot_button(
@@ -155,27 +171,184 @@ async def test_snapshot_button(
     entity_id: str,
     vmid: int,
     guest_resource: str,
+    kind: SnapshotKind,
 ) -> None:
-    """Test a ProxmoxVE snapshot button triggers the correct API call."""
+    """Preserve the native Create POST and pass its UPID to the observer hook."""
     await setup_integration(hass, mock_config_entry)
 
     node = mock_proxmox_client.nodes("pve1")
     method_mock = getattr(node, guest_resource)(vmid).snapshot.post
+    method_mock.return_value = UPID
 
-    await hass.services.async_call(
-        BUTTON_DOMAIN,
-        SERVICE_PRESS,
-        {ATTR_ENTITY_ID: entity_id},
-        blocking=True,
-    )
+    with patch(
+        "custom_components.hubinet_ops.button.start_snapshot_create_observation"
+    ) as start_observation:
+        await hass.services.async_call(
+            BUTTON_DOMAIN,
+            SERVICE_PRESS,
+            {ATTR_ENTITY_ID: entity_id},
+            blocking=True,
+        )
 
     method_mock.assert_called_once_with(snapname=ANY)
+    start_observation.assert_called_once_with(
+        hass,
+        mock_config_entry.runtime_data,
+        kind,
+        "pve1",
+        vmid,
+        UPID,
+    )
 
     # Proxmox validates the name as a `pve-configid` of at most 40 characters:
     # two or more, starting with a letter, then only [A-Za-z0-9_-]
     name = method_mock.call_args.kwargs["snapname"]
     assert len(name) <= 40
     assert re.fullmatch(r"[A-Za-z][A-Za-z0-9_-]+", name)
+
+
+@pytest.mark.parametrize(
+    ("entity_id", "vmid", "guest_resource"),
+    [
+        pytest.param("button.vm_web_create_snapshot", 100, "qemu", id="vm"),
+        pytest.param("button.ct_nginx_create_snapshot", 200, "lxc", id="container"),
+    ],
+)
+async def test_create_button_returns_while_observation_remains_blocked(
+    hass: HomeAssistant,
+    mock_proxmox_client: MagicMock,
+    mock_config_entry: MockConfigEntry,
+    entity_id: str,
+    vmid: int,
+    guest_resource: str,
+) -> None:
+    """Release the button semaphore after POST, before terminal observation."""
+    await setup_integration(hass, mock_config_entry)
+    getattr(mock_proxmox_client._node_mock, guest_resource)(  # noqa: SLF001
+        vmid
+    ).snapshot.post.return_value = UPID
+    observation_entered = asyncio.Event()
+    observation_release = asyncio.Event()
+
+    async def blocked_observation(*_args, **_kwargs) -> RestoreResult:
+        observation_entered.set()
+        await observation_release.wait()
+        return RestoreResult(RestoreOutcome.SUCCESS, UPID)
+
+    with patch(
+        "custom_components.hubinet_ops.snapshot_restore.async_observe_task",
+        side_effect=blocked_observation,
+    ):
+        await asyncio.wait_for(
+            hass.services.async_call(
+                BUTTON_DOMAIN,
+                SERVICE_PRESS,
+                {ATTR_ENTITY_ID: entity_id},
+                blocking=True,
+            ),
+            1,
+        )
+        await asyncio.wait_for(observation_entered.wait(), 1)
+
+        start = mock_proxmox_client._qemu_mocks[100].status.start.post  # noqa: SLF001
+        prior_calls = start.call_count
+        await asyncio.wait_for(
+            hass.services.async_call(
+                BUTTON_DOMAIN,
+                SERVICE_PRESS,
+                {ATTR_ENTITY_ID: "button.vm_web_start"},
+                blocking=True,
+            ),
+            1,
+        )
+        assert start.call_count == prior_calls + 1
+
+        observation_release.set()
+        await hass.async_block_till_done()
+
+
+async def test_non_snapshot_native_buttons_never_start_create_observation(
+    hass: HomeAssistant,
+    mock_proxmox_client: MagicMock,
+    mock_config_entry: MockConfigEntry,
+) -> None:
+    """Keep the post-result hook exclusive to native snapshot Create."""
+    await setup_integration(hass, mock_config_entry)
+
+    with patch(
+        "custom_components.hubinet_ops.button.start_snapshot_create_observation"
+    ) as start_observation:
+        for entity_id in ("button.vm_web_start", "button.ct_nginx_start"):
+            await hass.services.async_call(
+                BUTTON_DOMAIN,
+                SERVICE_PRESS,
+                {ATTR_ENTITY_ID: entity_id},
+                blocking=True,
+            )
+
+    start_observation.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    ("entity_id", "vmid", "guest_resource"),
+    [
+        pytest.param("button.vm_web_create_snapshot", 100, "qemu", id="vm"),
+        pytest.param("button.ct_nginx_create_snapshot", 200, "lxc", id="container"),
+    ],
+)
+async def test_create_post_error_keeps_upstream_mapping_and_starts_no_observer(
+    hass: HomeAssistant,
+    mock_proxmox_client: MagicMock,
+    mock_config_entry: MockConfigEntry,
+    entity_id: str,
+    vmid: int,
+    guest_resource: str,
+) -> None:
+    """A synchronous native POST error remains a button error without observer."""
+    await setup_integration(hass, mock_config_entry)
+    getattr(mock_proxmox_client._node_mock, guest_resource)(  # noqa: SLF001
+        vmid
+    ).snapshot.post.side_effect = ResourceException(500, "error", {})
+
+    with (
+        patch(
+            "custom_components.hubinet_ops.button.start_snapshot_create_observation"
+        ) as start_observation,
+        pytest.raises(HomeAssistantError),
+    ):
+        await hass.services.async_call(
+            BUTTON_DOMAIN,
+            SERVICE_PRESS,
+            {ATTR_ENTITY_ID: entity_id},
+            blocking=True,
+        )
+
+    start_observation.assert_not_called()
+
+
+async def test_create_observer_start_failure_does_not_recast_accepted_post(
+    hass: HomeAssistant,
+    mock_proxmox_client: MagicMock,
+    mock_config_entry: MockConfigEntry,
+) -> None:
+    """Do not report a successful native POST as failed if task tracking fails."""
+    await setup_integration(hass, mock_config_entry)
+    post = mock_proxmox_client._qemu_mocks[100].snapshot.post  # noqa: SLF001
+    post.return_value = UPID
+
+    with patch.object(
+        mock_config_entry,
+        "async_create_background_task",
+        side_effect=RuntimeError("task tracking failed"),
+    ):
+        await hass.services.async_call(
+            BUTTON_DOMAIN,
+            SERVICE_PRESS,
+            {ATTR_ENTITY_ID: "button.vm_web_create_snapshot"},
+            blocking=True,
+        )
+
+    post.assert_called_once_with(snapname=ANY)
 
 
 @pytest.mark.parametrize(

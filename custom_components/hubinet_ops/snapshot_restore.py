@@ -25,6 +25,7 @@ from .packages.models import PackageUpdateError
 from .select import (
     ATTR_SELECTED_SNAPSHOT,
     has_restore_permissions,
+    snapshot_choices_refresh_signal,
     snapshot_select_unique_id,
     snapshot_selection_signal,
 )
@@ -33,6 +34,7 @@ from .snapshots import (
     RestoreResult,
     SnapshotKind,
     SnapshotListError,
+    async_observe_task,
     async_rollback_snapshot,
     async_validate_snapshot,
     snapshot_name_is_eligible,
@@ -127,6 +129,171 @@ def snapshot_restore_notification_id(
         f"snapshot_restore_{_safe_restore_component(entry_id)}_{kind}_"
         f"{_safe_restore_component(node)}_{vmid}_{digest}"
     )
+
+
+def snapshot_create_notification_id(
+    entry_id: str,
+    kind: SnapshotKind,
+    node: str,
+    vmid: int,
+    upid: str | None = None,
+) -> str:
+    """Return a collision-resistant per-entry, per-guest, per-task Create ID.
+
+    Concurrent Create tasks for the same guest can complete out of submission
+    order. Folding the observed task UPID into the hashed identity keeps each
+    task's terminal notification distinct instead of one overwriting another;
+    the raw UPID itself is never exposed in the returned ID.
+    """
+    identity = f"{entry_id}\0{kind}\0{node}\0{vmid}\0{upid or ''}"
+    digest = sha256(identity.encode()).hexdigest()[:12]
+    return (
+        f"snapshot_create_{_safe_restore_component(entry_id)}_{kind}_"
+        f"{_safe_restore_component(node)}_{vmid}_{digest}"
+    )
+
+
+def _notify_snapshot_create(
+    hass: HomeAssistant,
+    entry_id: str,
+    kind: SnapshotKind,
+    node: str,
+    vmid: int,
+    result: RestoreResult,
+) -> None:
+    """Publish one replaceable, localized native Create result."""
+    target_type = _translate_restore(
+        hass,
+        "snapshot_restore_target_qemu"
+        if kind is SnapshotKind.QEMU
+        else "snapshot_restore_target_lxc",
+    )
+    placeholders = {
+        "target_type": target_type,
+        "node": escape(node),
+        "vmid": str(vmid),
+        "timestamp": dt_util.utcnow().isoformat(),
+    }
+    key = (
+        "snapshot_create_success_notification"
+        if result.outcome is RestoreOutcome.SUCCESS
+        else "snapshot_create_failed_notification"
+        if result.outcome is RestoreOutcome.FAILED
+        else "snapshot_create_uncertain_notification"
+    )
+    message = _translate_restore(hass, key, **placeholders)
+    if result.upid is not None:
+        message += "\n\n" + _translate_restore(
+            hass, "snapshot_restore_upid_detail", upid=escape(result.upid)
+        )
+    if result.reason:
+        message += "\n\n" + _translate_restore(
+            hass,
+            "snapshot_restore_reason_detail",
+            reason=escape(result.reason),
+        )
+    persistent_notification.async_create(
+        hass,
+        message,
+        _translate_restore(hass, "snapshot_create_notification_title"),
+        snapshot_create_notification_id(entry_id, kind, node, vmid, result.upid),
+    )
+
+
+async def _async_observe_snapshot_create(
+    hass: HomeAssistant,
+    coordinator: ProxmoxCoordinator,
+    kind: SnapshotKind,
+    node: str,
+    vmid: int,
+    raw_upid: object,
+) -> None:
+    """Observe one accepted native Create task and publish its result."""
+    cancelled = False
+    try:
+        result = await async_observe_task(
+            coordinator.proxmox,
+            node,
+            raw_upid,
+            executor=hass.async_add_executor_job,
+        )
+    except asyncio.CancelledError:
+        cancelled = True
+        result = RestoreResult(
+            RestoreOutcome.UNCERTAIN,
+            raw_upid if isinstance(raw_upid, str) and len(raw_upid) <= 1024 else None,
+            "snapshot Create observation was interrupted",
+        )
+    except Exception:
+        _LOGGER.exception(
+            "Unexpected native snapshot Create observation failure for %s/%s",
+            node,
+            vmid,
+        )
+        result = RestoreResult(
+            RestoreOutcome.UNCERTAIN,
+            raw_upid if isinstance(raw_upid, str) and len(raw_upid) <= 1024 else None,
+            "unexpected snapshot Create observation failure",
+        )
+
+    try:
+        _notify_snapshot_create(
+            hass,
+            coordinator.config_entry.entry_id,
+            kind,
+            node,
+            vmid,
+            result,
+        )
+    except Exception:
+        _LOGGER.exception(
+            "Could not publish snapshot Create result for %s/%s", node, vmid
+        )
+
+    if result.outcome is RestoreOutcome.SUCCESS:
+        try:
+            async_dispatcher_send(
+                hass,
+                snapshot_choices_refresh_signal(
+                    coordinator.config_entry.entry_id,
+                    kind,
+                    node,
+                    vmid,
+                ),
+            )
+        except Exception:
+            _LOGGER.exception(
+                "Could not refresh snapshot choices after Create for %s/%s",
+                node,
+                vmid,
+            )
+    if cancelled:
+        raise asyncio.CancelledError
+
+
+def start_snapshot_create_observation(
+    hass: HomeAssistant,
+    coordinator: ProxmoxCoordinator,
+    kind: SnapshotKind,
+    node: str,
+    vmid: int,
+    raw_upid: object,
+) -> None:
+    """Start config-entry-tracked observation without holding button service."""
+    operation = _async_observe_snapshot_create(
+        hass, coordinator, kind, node, vmid, raw_upid
+    )
+    try:
+        coordinator.config_entry.async_create_background_task(
+            hass,
+            operation,
+            f"snapshot Create observation {node}/{vmid}",
+        )
+    except Exception:
+        operation.close()
+        _LOGGER.exception(
+            "Could not start snapshot Create observation for %s/%s", node, vmid
+        )
 
 
 def _notify_snapshot_restore(

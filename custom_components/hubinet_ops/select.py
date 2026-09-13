@@ -42,6 +42,13 @@ def snapshot_selection_signal(
     return f"{DOMAIN}_snapshot_selection_clear_{entry_id}_{kind}_{node}_{vmid}"
 
 
+def snapshot_choices_refresh_signal(
+    entry_id: str, kind: SnapshotKind, node: str, vmid: int
+) -> str:
+    """Return an entry-and-target-scoped snapshot choices refresh signal."""
+    return f"{DOMAIN}_snapshot_choices_refresh_{entry_id}_{kind}_{node}_{vmid}"
+
+
 def has_restore_permissions(
     coordinator: ProxmoxCoordinator, vmid: int
 ) -> bool:
@@ -137,7 +144,7 @@ class SnapshotSelectMixin(SelectEntity):
         return True
 
     async def async_added_to_hass(self) -> None:
-        """Listen only for this selector's accepted Restore consumption."""
+        """Listen only for this selector's scoped snapshot signals."""
         await super().async_added_to_hass()
         self.async_on_remove(
             async_dispatcher_connect(
@@ -151,6 +158,18 @@ class SnapshotSelectMixin(SelectEntity):
                 self._async_clear_selection,
             )
         )
+        self.async_on_remove(
+            async_dispatcher_connect(
+                self.hass,
+                snapshot_choices_refresh_signal(
+                    self.coordinator.config_entry.entry_id,
+                    self._kind,
+                    self._node_name,
+                    self.device_id,
+                ),
+                self._async_refresh_choices,
+            )
+        )
         self.async_schedule_update_ha_state(True)
 
     @callback
@@ -158,6 +177,11 @@ class SnapshotSelectMixin(SelectEntity):
         """Consume the presentation choice without touching native PVE state."""
         self._attr_current_option = None
         self.async_write_ha_state()
+
+    @callback
+    def _async_refresh_choices(self) -> None:
+        """Schedule one normal entity update for this exact selector."""
+        self.async_schedule_update_ha_state(True)
 
     @property
     @override
