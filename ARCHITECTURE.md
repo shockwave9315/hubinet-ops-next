@@ -93,8 +93,9 @@ restore** select and one separate explicit **Restore** button. Select options
 are exact native snapshot names ordered newest-first, excluding `current`,
 `vzdump`, malformed names, and rows with active or incomplete `snapstate`.
 Nothing is selected by default. The select polls only its native snapshot
-endpoint, approximately every 300 seconds, and snapshot enumeration is not
-added to the normal upstream-derived coordinator or another
+endpoint, approximately every 300 seconds, with Home Assistant's native entity
+platform limiting snapshot polling to three concurrent updates. Snapshot
+enumeration is not added to the normal upstream-derived coordinator or another
 `DataUpdateCoordinator`. Restore reads only the select's explicit
 `selected_snapshot` attribute, consumes an accepted choice through an
 entry-and-target-scoped dispatcher signal, performs a fresh native snapshot
@@ -104,9 +105,9 @@ Rollback completion is classified through bounded observation of the native
 PVE UPID as `NOT_STARTED`, `SUCCESS`, `FAILED`, or `UNCERTAIN`. An absolute
 observation deadline is shared across a small bounded number of transient-read
 retries. Unknown or uncertain evidence fails closed; no timer assumes a task
-finished, and no persistent recovery or reconciliation is introduced. A
-normal upstream coordinator refresh follows each Restore attempt so native
-guest state converges.
+finished, and no persistent recovery or reconciliation is introduced. Restore
+does not force an immediate coordinator refresh; native guest state converges
+through the normal upstream coordinator poll.
 
 LXC Restore and package operations share one minimal ephemeral exclusion rule
 owned by `PackageManager`, conceptually `_restore_reserved: set[(node, vmid)]`.

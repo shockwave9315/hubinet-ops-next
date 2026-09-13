@@ -18,6 +18,7 @@ from .helpers import is_granted
 from .snapshots import SnapshotKind, SnapshotListError, async_list_snapshots
 
 SCAN_INTERVAL = timedelta(seconds=300)
+PARALLEL_UPDATES = 3
 ATTR_SELECTED_SNAPSHOT = "selected_snapshot"
 
 SNAPSHOT_SELECT = SelectEntityDescription(

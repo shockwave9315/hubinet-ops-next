@@ -292,7 +292,7 @@ class SnapshotRestoreButtonMixin(ButtonEntity):
     async def _async_run_restore(
         self, snapshot_name: str, *, reserved: bool
     ) -> None:
-        """Run fresh validation, native submission, observation, and refresh."""
+        """Run fresh validation, native submission, and observation."""
         result = RestoreResult(RestoreOutcome.NOT_STARTED)
         submission_may_have_started = False
         package_truth_invalidated = False
@@ -373,12 +373,7 @@ class SnapshotRestoreButtonMixin(ButtonEntity):
                 self.device_id,
             )
         if cancelled:
-            self.hass.async_create_task(
-                self.coordinator.async_request_refresh(),
-                f"snapshot Restore refresh {self._node_name}/{self.device_id}",
-            )
             raise asyncio.CancelledError
-        await self.coordinator.async_request_refresh()
 
     @property
     @override
