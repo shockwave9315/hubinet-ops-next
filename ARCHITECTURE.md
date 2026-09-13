@@ -139,6 +139,28 @@ leave package evidence stale; detecting external rollback is out of scope.
 Reload or restart loses ephemeral package/Restore operation ownership;
 persistent recovery is also out of scope.
 
+### Native snapshot Create task observation
+
+On 2026-09-13, before implementation, the maintainer accepted the native
+snapshot Create observation architecture for release 2026.9.1.9. Native Create
+remains the upstream-derived native PVE snapshot POST. After that POST returns
+a UPID, Hubinet observes the exact native task in a config-entry-tracked
+background task so the button press is not held for task completion. A terminal
+`SUCCESS`, `FAILED`, or `UNCERTAIN` result is reported through a persistent
+notification. Only confirmed `SUCCESS` asks the exact guest's presentation-only
+snapshot selector to refresh through Home Assistant's normal entity update
+path; the main coordinator remains uninvolved.
+
+Two residuals are accepted for this behavior. If the exact selector already
+has an entity update in flight from before the PVE commit, Home Assistant may
+collapse the targeted refresh into that update; normal polling self-heals
+within approximately 300 seconds, without delay or retry machinery. An
+ambiguous upstream POST transport or server failure can occur after PVE has
+accepted the task but before Hubinet receives a usable UPID; existing button
+error behavior remains authoritative and normal selector polling may later
+reveal the created snapshot, without task reconstruction or transport
+ownership.
+
 ### Helper repair and explicit package cleanup boundary
 
 On 2026-09-10, before implementation, the maintainer accepted helper-upgrade

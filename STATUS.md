@@ -11,10 +11,10 @@ Status date: 2026-09-13
   Core `proxmoxve`, plus the package scan, review, and update subsystem and
   guided fresh-install enrollment and native snapshot Restore documented in
   [ARCHITECTURE.md](ARCHITECTURE.md).
-- Current release: integration `2026.9.1.7`, helper v4, protocol v1.
+- Current release: integration `2026.9.1.8`, helper v4, protocol v1.
 - Merged baseline commit:
-  `27eb9c49ce24f97a4b777eeea69ac52185cabd50`.
-- Baseline validation: **563 tests and 207 snapshots passed**; repository Ruff
+  `c699f3e75ff3c94ae34b22de44a276b8ab9b88a7`.
+- Baseline validation: **564 tests and 207 snapshots passed**; repository Ruff
   passed.
 
 ## Merged
@@ -118,21 +118,36 @@ Status date: 2026-09-13
 
 ## 2026.9.1.8 Restore polling hotfix
 
-- Hotfix: **IMPLEMENTED / READY FOR REVIEW** within the accepted PR #12
+- Hotfix: **MERGED / RELEASED** within the accepted PR #12
   architecture.
 - Restore no longer forces an immediate full coordinator refresh; native guest
   state converges through the normal coordinator poll.
 - Snapshot selector initial, periodic, and manual updates use Home Assistant's
   native entity-platform concurrency limit of three.
-- Release target: integration `2026.9.1.8`, helper v4, protocol v1 unchanged.
+- Release: integration `2026.9.1.8`, helper v4, protocol v1 unchanged.
 - Validation: **564 tests and 207 snapshots passed**; repository Ruff,
   translation and release-parity checks, helper SHA/protocol consistency,
   ShellCheck, and shell syntax passed.
 
+## 2026.9.1.9 native snapshot Create observation
+
+- Architecture: **ACCEPTED BY MAINTAINER on 2026-09-13**; see the durable
+  boundary in [ARCHITECTURE.md](ARCHITECTURE.md).
+- Implementation: **NOT STARTED** at this checkpoint.
+- Accepted behavior: observe the exact native Create UPID in the background,
+  publish a terminal result notification, and refresh only the exact guest's
+  snapshot selector after confirmed success. The main coordinator remains
+  uninvolved.
+- Accepted residuals: an already-running selector update can rarely absorb the
+  targeted refresh and then self-heal through normal polling within about 300
+  seconds; an ambiguous upstream POST failure without a returned UPID retains
+  existing button-error behavior and relies on normal selector polling.
+- Release target: integration `2026.9.1.9`, helper v4, protocol v1 unchanged.
+
 ## Next
 
-Review and release the `2026.9.1.8` Restore polling hotfix. Post-update Health
-remains separate future work.
+Implement and review the accepted `2026.9.1.9` native snapshot Create
+observation release. Post-update Health remains separate future work.
 
 ## Explicitly not started
 

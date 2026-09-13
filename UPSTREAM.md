@@ -35,6 +35,12 @@ by Restore exclusion. The package-specific LXC invalidation and Restore
 reservation are Hubinet-owned glue around the package extension, not a
 replacement for native PVE ownership.
 
+For native snapshot Create, the upstream-derived POST shape remains intact.
+Hubinet adds only a narrow post-POST hook in `button.py` that passes the returned
+UPID to fork-owned background task observation, terminal notification, and a
+confirmed-success signal for the exact guest's snapshot selector. This adds no
+snapshot inventory or main-coordinator refresh.
+
 The fork-owned package-scan extension is isolated under
 `custom_components/hubinet_ops/packages` with a separately deployed forced-
 command helper. Its composition changes to the upstream-derived coordinator,
