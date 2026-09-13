@@ -95,7 +95,7 @@ async def test_create_success_notifies_and_refreshes_only_exact_selector(
 
     notification = pn._async_get_or_create_notifications(hass)[  # noqa: SLF001
         snapshot_create_notification_id(
-            mock_config_entry.entry_id, SnapshotKind.QEMU, "pve1", 100
+            mock_config_entry.entry_id, SnapshotKind.QEMU, "pve1", 100, UPID
         )
     ]
     assert "completed successfully" in notification["message"]
@@ -151,7 +151,7 @@ async def test_create_non_success_notifies_without_any_refresh(
     coordinator.async_request_refresh.assert_not_awaited()
     notification = pn._async_get_or_create_notifications(hass)[  # noqa: SLF001
         snapshot_create_notification_id(
-            mock_config_entry.entry_id, SnapshotKind.QEMU, "pve1", 100
+            mock_config_entry.entry_id, SnapshotKind.QEMU, "pve1", 100, UPID
         )
     ]
     assert expected_text in notification["message"]
@@ -208,7 +208,7 @@ async def test_create_observation_cancellation_notifies_uncertain_and_propagates
     coordinator.async_request_refresh.assert_not_awaited()
     notification = pn._async_get_or_create_notifications(hass)[  # noqa: SLF001
         snapshot_create_notification_id(
-            mock_config_entry.entry_id, SnapshotKind.QEMU, "pve1", 100
+            mock_config_entry.entry_id, SnapshotKind.QEMU, "pve1", 100, UPID
         )
     ]
     assert "could not be confirmed" in notification["message"]
@@ -218,7 +218,7 @@ async def test_create_observation_cancellation_notifies_uncertain_and_propagates
 def test_create_notification_ids_are_scoped_to_entry_kind_and_guest() -> None:
     """Create result notifications cannot collide across accepted identities."""
     identities = {
-        snapshot_create_notification_id(entry, kind, "pve1", vmid)
+        snapshot_create_notification_id(entry, kind, "pve1", vmid, UPID)
         for entry, kind, vmid in (
             ("entry-a", SnapshotKind.QEMU, 100),
             ("entry-b", SnapshotKind.QEMU, 100),
@@ -227,6 +227,21 @@ def test_create_notification_ids_are_scoped_to_entry_kind_and_guest() -> None:
         )
     }
     assert len(identities) == 4
+
+
+def test_create_notification_ids_are_scoped_to_task_upid() -> None:
+    """Concurrent Create tasks for the same guest get distinct notifications."""
+    other_upid = "UPID:pve1:00000004:00000005:00000006:qmsnapshot:100:user@pam:"
+    same_guest = snapshot_create_notification_id(
+        "entry-a", SnapshotKind.QEMU, "pve1", 100, UPID
+    )
+    different_task = snapshot_create_notification_id(
+        "entry-a", SnapshotKind.QEMU, "pve1", 100, other_upid
+    )
+    no_upid = snapshot_create_notification_id(
+        "entry-a", SnapshotKind.QEMU, "pve1", 100
+    )
+    assert len({same_guest, different_task, no_upid}) == 3
 
 
 async def test_polish_create_notification_path_is_localized(
@@ -256,7 +271,7 @@ async def test_polish_create_notification_path_is_localized(
 
     notification = pn._async_get_or_create_notifications(hass)[  # noqa: SLF001
         snapshot_create_notification_id(
-            mock_config_entry.entry_id, SnapshotKind.QEMU, "pve1", 100
+            mock_config_entry.entry_id, SnapshotKind.QEMU, "pve1", 100, UPID
         )
     ]
     assert "zakończyło się pomyślnie" in notification["message"]

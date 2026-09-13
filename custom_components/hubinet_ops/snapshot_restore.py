@@ -132,10 +132,20 @@ def snapshot_restore_notification_id(
 
 
 def snapshot_create_notification_id(
-    entry_id: str, kind: SnapshotKind, node: str, vmid: int
+    entry_id: str,
+    kind: SnapshotKind,
+    node: str,
+    vmid: int,
+    upid: str | None = None,
 ) -> str:
-    """Return a collision-resistant per-entry, per-guest Create result ID."""
-    identity = f"{entry_id}\0{kind}\0{node}\0{vmid}"
+    """Return a collision-resistant per-entry, per-guest, per-task Create ID.
+
+    Concurrent Create tasks for the same guest can complete out of submission
+    order. Folding the observed task UPID into the hashed identity keeps each
+    task's terminal notification distinct instead of one overwriting another;
+    the raw UPID itself is never exposed in the returned ID.
+    """
+    identity = f"{entry_id}\0{kind}\0{node}\0{vmid}\0{upid or ''}"
     digest = sha256(identity.encode()).hexdigest()[:12]
     return (
         f"snapshot_create_{_safe_restore_component(entry_id)}_{kind}_"
@@ -186,7 +196,7 @@ def _notify_snapshot_create(
         hass,
         message,
         _translate_restore(hass, "snapshot_create_notification_title"),
-        snapshot_create_notification_id(entry_id, kind, node, vmid),
+        snapshot_create_notification_id(entry_id, kind, node, vmid, result.upid),
     )
 
 
