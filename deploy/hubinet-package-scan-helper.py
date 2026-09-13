@@ -79,25 +79,27 @@ DPKG_UNFINISHED_STATUS_WORDS = frozenset(
     }
 )
 # Health uses its own classification semantics, distinct from Update/
-# Autoremove's fail-closed dpkg_unfinished gate: half-* states are candidate
-# FAILED evidence only once dpkg --audit disambiguates them from packages
-# legitimately mid-phase between apt steps (HEALTH_PENDING_STATUS_WORDS).
-HEALTH_HALF_STATUS_WORDS = frozenset({"half-installed", "half-configured"})
+# Autoremove's fail-closed dpkg_unfinished gate: half-installed is candidate
+# FAILED evidence only once dpkg --audit disambiguates it from a package
+# legitimately mid-phase. half-configured is never FAILED: apt's
+# ``--unpack --auto-deconfigure`` legitimately leaves a deconfigured package
+# half-configured between successful dpkg runs, while only apt's frontend
+# lock (which dpkg --audit never tests) is held.
+HEALTH_HALF_STATUS_WORDS = frozenset({"half-installed"})
 HEALTH_PENDING_STATUS_WORDS = frozenset(
-    {"unpacked", "triggers-awaited", "triggers-pending"}
+    {"half-configured", "unpacked", "triggers-awaited", "triggers-pending"}
 )
 HEALTH_AUDIT_MAX_BYTES = 64 * 1024
 HEALTH_AUDIT_BUSY_NOTICE = "Another process has locked the database for writing"
 # dpkg --audit takes no lock and exits 0 regardless; it tests the database
 # lock (fcntl F_GETLK) only once the database it read shows a problem. A missing
 # busy notice therefore proves a clear lock only alongside audit's own report
-# of each persisted half-* state.
+# of each persisted half-installed state.
 HEALTH_AUDIT_HALF_HEADERS = {
     "half-installed": "The following packages are only half installed",
-    "half-configured": "The following packages are only half configured",
 }
-# dpkg --audit lists a reinst-required half-* package (for example an unpack
-# killed mid-way) only under this section, never under its half-* header.
+# dpkg --audit lists a reinst-required half-installed package (for example an
+# unpack killed mid-way) only under this section, never under its own header.
 HEALTH_AUDIT_REINSTREQ_HEADER = "The following packages are in a mess"
 
 # Scan simulation, execution-time simulation, and mutation intentionally share
@@ -856,9 +858,9 @@ def _check_dpkg_health(
     (re-)read, then audit: auditing before the second read would let a
     dpkg run that starts after the audit but finishes before that second
     read masquerade as a persistent failure. Only packages whose exact
-    half-installed/half-configured status is unchanged across both reads,
-    still reported by the audit itself with the lock clear, are reported as
-    an interrupted package manager.
+    half-installed status is unchanged across both reads, still reported by
+    the audit itself with the lock clear, are reported as an interrupted
+    package manager; half-configured is pending, never FAILED.
     """
     first = _read_health_inventory(runner, deadline, vmid)
     half_status: dict[tuple[str, str], str] = {

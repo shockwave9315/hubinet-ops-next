@@ -158,9 +158,12 @@ Status date: 2026-09-13
   lifecycle, evidence, and availability correction commits. A subsequent
   full independent architecture review judged the architecture sound and
   required only small fixes, applied in a final correction: a reinst-required
-  half-installed/half-configured package, which `dpkg --audit` lists only
-  under its "in a mess" section, is now recognized as persistent interrupted
-  dpkg state instead of `changed`, and this status record was refreshed.
+  half-installed package, which `dpkg --audit` lists only under its "in a
+  mess" section, is recognized as persistent interrupted dpkg state. Later
+  adjudication preserved an established dpkg `FAILED` over reboot-probe
+  uncertainty and narrowed dpkg `FAILED` evidence to half-installed only:
+  half-configured is `pending` (`UNKNOWN`), because apt legitimately leaves
+  deconfigured packages half-configured between successful dpkg runs.
 - Accepted scope: generic point-in-time OS/package Health for package-eligible
   LXCs, manually runnable and automatically run immediately after a
   successful Update or Autoremove, through one new helper v5 `check_health`
@@ -175,7 +178,7 @@ Status date: 2026-09-13
   and owns its background-task coroutine explicitly on both the manual and
   post-operation paths. `begin_restore()` and existing Update/Autoremove
   safety checks are unchanged.
-- Validation: **733 tests and 207 snapshots passed**; repository Ruff,
+- Validation: **738 tests and 207 snapshots passed**; repository Ruff,
   translation and release-parity checks, helper SHA/protocol consistency,
   ShellCheck, and shell syntax passed.
 

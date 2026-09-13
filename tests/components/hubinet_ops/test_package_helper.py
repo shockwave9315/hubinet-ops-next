@@ -1028,15 +1028,19 @@ def test_check_health_changed_identity_between_reads_is_unknown() -> None:
     assert response["evidence"]["unfinished_package_count"] is None
 
 
-def test_check_health_pending_only_is_never_failed() -> None:
-    """Packages merely unpacked/triggers-pending are UNKNOWN, never FAILED.
+@pytest.mark.parametrize(
+    "status",
+    ["unpacked", "triggers-awaited", "triggers-pending", "half-configured"],
+)
+def test_check_health_pending_only_is_never_failed(status: str) -> None:
+    """Packages merely pending (including half-configured) are UNKNOWN, never FAILED.
 
     The lock is still audited for busy/uncertain disambiguation even when
     only pending identities exist, but a clean audit result here always
     classifies as pending -- a P-only inventory is never a second-read
     candidate and can never become FAILED.
     """
-    pending = "openssl\tamd64\t3.0.11-1\tunpacked\n"
+    pending = f"openssl\tamd64\t3.0.11-1\t{status}\n"
     runner = FakeHelperRunner(inventory_outputs=(pending,))
     response = _health(runner)
     assert response["evidence"]["dpkg"] == "pending"
@@ -1118,13 +1122,23 @@ def test_check_health_progressed_half_state_is_changed_not_interrupted() -> None
     assert response["evidence"]["unfinished_package_count"] is None
 
 
-def test_check_health_resolved_half_configured_state_is_changed() -> None:
-    """A half-configured identity that resolves by the second read is CHANGED."""
+def test_check_health_persisted_half_configured_with_clear_audit_is_pending() -> None:
+    """half-configured is never FAILED, even persisted with a clear audit.
+
+    Reproduced with real apt 3.0.3 / dpkg 1.22.22: a successful
+    ``dpkg --unpack --auto-deconfigure`` leaves a Breaks-deconfigured package
+    half-configured across later successful dpkg runs, and in the gaps between
+    them only apt's frontend lock is held, so audit reports it under this
+    section with no busy notice.
+    """
     half_configured = "openssl\tamd64\t3.0.11-1\thalf-configured\n"
-    installed = "openssl\tamd64\t3.0.11-1\tinstalled\n"
-    runner = FakeHelperRunner(inventory_outputs=(half_configured, installed))
+    runner = FakeHelperRunner(
+        inventory_outputs=(half_configured, half_configured),
+        audit_stdout=AUDIT_HALF_CONFIGURED,
+    )
     response = _health(runner)
-    assert response["evidence"]["dpkg"] == "changed"
+    assert response["evidence"]["dpkg"] == "pending"
+    assert response["evidence"]["unfinished_package_count"] is None
 
 
 def test_check_health_second_read_precedes_audit_so_busy_wins_over_persisted() -> None:
@@ -1167,7 +1181,8 @@ def test_check_health_second_read_precedes_audit_so_busy_wins_over_persisted() -
         ("half-configured", AUDIT_LOCKED_PREFIX + AUDIT_HALF_CONFIGURED, "busy"),
         # Lock tested and clear: audit itself still reports the same state.
         ("half-installed", AUDIT_HALF_INSTALLED, "interrupted"),
-        ("half-configured", AUDIT_HALF_CONFIGURED, "interrupted"),
+        # half-configured is pending even then (apt deconfigure between runs).
+        ("half-configured", AUDIT_HALF_CONFIGURED, "pending"),
         # Audit's snapshot has no problem, so dpkg never tested the lock; a
         # live writer may hold it (reproduced with a real fcntl lock + rc 0).
         ("half-installed", "", "changed"),
@@ -1198,7 +1213,7 @@ def test_check_health_clear_lock_requires_audit_to_report_the_half_state(
 # half-* package (half-installed reproduced by SIGKILLing a real ``dpkg
 # --unpack``; half-configured confirmed against a reinst-required status
 # database): dpkg lists it only under this section, never under its half-*
-# header.
+# header. Only half-installed can become FAILED through it.
 AUDIT_REINSTREQ = (
     "The following packages are in a mess due to serious problems during\n"
     "installation.  They must be reinstalled for them (and any packages\n"
@@ -1211,14 +1226,14 @@ AUDIT_REINSTREQ = (
     ("half_status", "audit_stdout", "expected"),
     [
         ("half-installed", AUDIT_REINSTREQ, "interrupted"),
-        ("half-configured", AUDIT_REINSTREQ, "interrupted"),
+        ("half-configured", AUDIT_REINSTREQ, "pending"),
         ("half-installed", AUDIT_LOCKED_PREFIX + AUDIT_REINSTREQ, "busy"),
     ],
 )
 def test_check_health_reinst_required_audit_section_confirms_persisted_half_state(
     half_status: str, audit_stdout: str, expected: str
 ) -> None:
-    """A persisted reinst-required half-* state is interrupted, not changed."""
+    """A persisted reinst-required half-installed state is interrupted."""
     half = f"openssl\tamd64\t3.0.11-1\t{half_status}\n"
     runner = FakeHelperRunner(inventory_outputs=(half, half), audit_stdout=audit_stdout)
     response = _health(runner)
@@ -1226,6 +1241,42 @@ def test_check_health_reinst_required_audit_section_confirms_persisted_half_stat
     assert response["evidence"]["unfinished_package_count"] == (
         1 if expected == "interrupted" else None
     )
+
+
+def test_check_health_mixed_half_states_count_only_half_installed() -> None:
+    """A half-configured neighbour neither blocks nor inflates FAILED evidence."""
+    mixed = (
+        "openssl\tamd64\t3.0.11-1\thalf-installed\n"
+        "libssl3\tamd64\t3.0.11-1\thalf-configured\n"
+    )
+    runner = FakeHelperRunner(
+        inventory_outputs=(mixed, mixed),
+        audit_stdout=AUDIT_HALF_CONFIGURED + AUDIT_HALF_INSTALLED,
+    )
+    response = _health(runner)
+    assert response["evidence"]["dpkg"] == "interrupted"
+    assert response["evidence"]["unfinished_package_count"] == 1
+
+
+def test_check_health_audit_half_installed_evidence_is_not_identity_matched() -> None:
+    """Audit's own half-installed report with a clear lock is the FAILED evidence.
+
+    Deliberately no identity parsing: outside a running dpkg (which would hold
+    the database lock) a half-installed package exists only after a failed or
+    killed run, so a different package in audit's section is still truthful.
+    """
+    persisted = "openssl\tamd64\t3.0.11-1\thalf-installed\n"
+    other_package_audit = AUDIT_HALF_INSTALLED.replace(
+        " openssl              Secure Sockets Layer toolkit",
+        " libssl3              Secure Sockets Layer toolkit",
+    )
+    assert "openssl" not in other_package_audit
+    runner = FakeHelperRunner(
+        inventory_outputs=(persisted, persisted), audit_stdout=other_package_audit
+    )
+    response = _health(runner)
+    assert response["evidence"]["dpkg"] == "interrupted"
+    assert response["evidence"]["unfinished_package_count"] == 1
 
 
 def test_check_health_changed_between_reads_is_changed_regardless_of_audit() -> None:

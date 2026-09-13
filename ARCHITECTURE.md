@@ -229,32 +229,43 @@ confirmed running leaves that `FAILED` evidence intact with the reboot
 dimension unestablished, because reboot evidence can never change `FAILED`.
 
 The dpkg classification reads the inventory once; a clean inventory is `ok`
-with no further dpkg command. When any identity is
-half-installed/half-configured -- the only states that can become positive
-`FAILED` evidence -- it re-reads the inventory a second time before auditing
-the lock with `dpkg --audit` -- in that order, not audit-then-reread -- so a
-dpkg run that starts after the audit but finishes before a stale ordering's
-second read could never masquerade as a persistent failure. When the first
-read shows only unpacked/triggers-awaited/triggers-pending identities, there
-is no second read: those states are never `FAILED`, so the lock is audited
-directly and a clear lock is `pending` (`UNKNOWN`), a point-in-time
-observation of the first read that may already have resolved by the time it
-is reported. A busy or otherwise uncertain lock at audit time (nonzero exit,
-oversized or non-UTF8 output) always wins over the read comparison and over
-`pending`. `dpkg --audit` is not itself a lock probe: it takes no lock,
-exits 0, and tests the dpkg database lock (`fcntl` `F_GETLK` on
-`/var/lib/dpkg/lock`) only once the database it read shows a problem, so a
-missing busy notice proves a clear lock only when the audit output itself
-reports each persisted half-installed/half-configured state -- either under
-its "only half installed"/"only half configured" section or, for a
-reinst-required package (such as an unpack killed mid-way), under dpkg's
-"in a mess" section, which is the only place audit lists such a package;
-otherwise the result is `changed` (`UNKNOWN`). Only when the lock is clear in
-that sense and every original half-installed/half-configured identity's status is *exactly*
-unchanged across both reads -- not merely "still somewhere in the half-* set",
-so half-installed progressing to half-configured is not mistaken for a stuck
-state -- is that reported as an interrupted package manager. The helper
-returns only bounded booleans/enums/ints -- never package names, dpkg stdout,
+with no further dpkg command. `half-installed` is the only dpkg state that can
+become positive `FAILED` evidence. `half-configured` is deliberately
+classified like `unpacked`/`triggers-awaited`/`triggers-pending` as
+`pending` (`UNKNOWN`), never `FAILED`: apt's `dpkg --unpack
+--auto-deconfigure` legitimately leaves a Breaks-deconfigured package
+half-configured across later successful dpkg runs, and between those runs
+apt holds only its frontend lock, so a clear dpkg database lock does not mean
+the apt frontend is inactive (reproduced with real apt 3.0.3 and dpkg
+1.22.22). A genuinely failed configuration is therefore reported as
+`UNKNOWN` rather than risking a false `FAILED`. When any identity is
+half-installed, the helper re-reads the inventory a second time before
+auditing the lock with `dpkg --audit` -- in that order, not
+audit-then-reread -- so a dpkg run that starts after the audit but finishes
+before a stale ordering's second read could never masquerade as a persistent
+failure. When the first read shows only pending identities, there is no
+second read: the lock is audited directly and a clear lock is `pending`, a
+point-in-time observation of the first read that may already have resolved by
+the time it is reported. A busy or otherwise uncertain lock at audit time
+(nonzero exit, oversized or non-UTF8 output) always wins over the read
+comparison and over `pending`. `dpkg --audit` is not itself a lock probe: it
+takes no lock, exits 0, and tests the dpkg database lock (`fcntl` `F_GETLK`
+on `/var/lib/dpkg/lock`, never apt's frontend lock) only once the database
+it read shows a problem, so a missing busy notice proves a clear database
+lock only when the audit output itself reports a half-installed package --
+either under its "only half installed" section or, for a reinst-required
+package (such as an unpack killed mid-way), under dpkg's "in a mess"
+section, which is the only place audit lists such a package; otherwise the
+result is `changed` (`UNKNOWN`). Only when the lock is clear in that sense
+and every original half-installed identity's status is *exactly* unchanged
+across both reads -- so half-installed progressing to half-configured is not
+mistaken for a stuck state -- is that reported as an interrupted package
+manager. Audit's report is not matched to package identities and no further
+read follows it: outside a running dpkg, which holds the database lock, a
+half-installed package exists only after a failed or killed dpkg run, so
+audit's own half-installed report with a clear database lock is the positive
+evidence even if it names a different package than the persisted reads. The
+helper returns only bounded booleans/enums/ints -- never package names, dpkg stdout,
 or other guest text -- and Home Assistant strictly validates both the exact
 evidence shape and its logical consistency (for example, `guest_exec: true`
 requires a non-null `dpkg`; `guest_exec: false` requires every other field be
