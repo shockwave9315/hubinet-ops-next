@@ -147,11 +147,26 @@ Status date: 2026-09-13
   translation and release-parity checks, helper SHA/protocol consistency,
   ShellCheck, and shell syntax passed.
 
+## 2026.9.1.10 LXC Health
+
+- Architecture: **ACCEPTED BY MAINTAINER on 2026-09-13**, before runtime
+  implementation; see the durable boundary in
+  [ARCHITECTURE.md](ARCHITECTURE.md#lxc-health).
+- Implementation: **NOT STARTED**.
+- Accepted scope: generic point-in-time OS/package Health for package-eligible
+  LXCs, manually runnable and automatically run immediately after a
+  successful Update or Autoremove, through one new helper v5 `check_health`
+  operation under unchanged protocol v1. `healthy`/`degraded`/`failed`/native
+  `unknown` classification, no notifications, no systemd/CPU/RAM/uptime or
+  application-specific checks, and no change to Update/Autoremove/Restore
+  safety semantics.
+- Release target: integration `2026.9.1.10`, helper v5, protocol v1 unchanged.
+
 ## Next
 
-Review and release the accepted `2026.9.1.9` native snapshot Create observation
-release. Post-update Health remains separate future work.
+Implement the accepted `2026.9.1.10` LXC Health architecture.
 
 ## Explicitly not started
 
-- Post-update health: **NOT DESIGNED / NOT STARTED**.
+- LXC Health implementation: **ACCEPTED, NOT STARTED**; see
+  [2026.9.1.10 LXC Health](#2026910-lxc-health).

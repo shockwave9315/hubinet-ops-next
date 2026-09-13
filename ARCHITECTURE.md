@@ -182,7 +182,98 @@ sanity, liveness, and exact snapshot-cleanup path. This adds no CleanupManager,
 database, persistence, scheduler, recovery or workflow framework, automatic
 autoremove, or Post-update Health.
 
-## Guided fresh-install enrollment
+### LXC Health
+
+On 2026-09-13, before implementation, the maintainer accepted generic
+point-in-time LXC Health for package-eligible containers, for release
+2026.9.1.10. Health answers only "does this LXC look technically healthy at
+the guest OS/package level?", never "is the application inside the LXC
+functionally healthy?". It is diagnostic, ephemeral, `PackageManager`-owned,
+helper-backed, manually runnable, and automatically run immediately after a
+successful Update or Autoremove. It is explicitly separate from package
+mutation truth: a successful Update or Autoremove remains successful
+regardless of the subsequent Health outcome, and Health evidence never
+retroactively changes Update outcome, Autoremove outcome, the snapshot
+deletion decision, package evidence, scan tokens, Restore
+reservation/fencing, or cleanup evidence.
+
+Health is point-in-time only, not periodic monitoring: there is no scheduler,
+poller, TTL, or staleness timer. It uses helper v5 under the unchanged
+protocol v1, through one new fixed typed helper operation, `check_health`,
+validated and executed through the existing exact request-shape validation,
+`_validate_local_node`, `_validate_target`, `_guest_command`, `_run_bounded`,
+per-VMID `flock`, deadline handling, and bounded-output handling. No native
+PVE `lxc(vmid).status.current` call is added for Health, and Health never
+triggers a coordinator refresh; helper-side `pct config`/`pct status` remain
+execution-time authoritative, and HA-side coordinator data is used only for
+button availability gating.
+
+The helper performs, in order: local-node and target validation (a stopped or
+unavailable target yields an unestablished, never `FAILED`, Health result);
+one minimal fixed `pct exec <vmid> -- /bin/true` guest-execution check;
+fixed `dpkg-query`-based inventory classification with `dpkg --audit` used
+only to disambiguate a genuinely interrupted package manager from packages
+legitimately mid-phase between apt steps; and a fixed
+`test -e /var/run/reboot-required` check. Only the marker's positive presence
+is reliable evidence; its absence is only a lack of positive evidence, never
+exposed as `reboot_required: false`. The helper returns only bounded
+booleans/enums/ints -- never package names, dpkg stdout, or other guest text
+-- and Home Assistant strictly validates the exact evidence shape.
+
+Top-level Health state is `healthy`, `degraded`, `failed`, or Home Assistant's
+native `unknown`, represented as the sensor's `native_value` being `None`
+(never a literal `"unknown"` enum option). `FAILED` requires positive
+evidence only -- a guest-execution failure while the guest is still confirmed
+running, or a package identity set that remains half-installed/
+half-configured across two reads with no busy/lock evidence in between.
+`DEGRADED` requires a clean dpkg state plus a positive reboot-required
+marker. Every other unresolved condition -- a stopped or vanished guest,
+timeout, helper-outdated, protocol mismatch, transport/auth/host-key failure,
+malformed evidence, an unsupported guest, a busy package manager, packages
+merely pending/triggers-pending, or inventory that changed between the two
+reads -- is `UNKNOWN`. `FAILED` takes precedence over `DEGRADED`, and any
+required-check `UNKNOWN` prevents both `HEALTHY` and `DEGRADED`. This
+explicitly excludes `systemctl --failed`/failed-unit checks, CPU/RAM/uptime
+verdicts, and any application-specific probe.
+
+`PackageManager` owns `_health_records[(node, vmid)]` and
+`_health_tasks[(node, vmid)]` as small ephemeral records, the same shape of
+state as existing scan/update/cleanup records; there is no second manager,
+coordinator, database, or persistent health history, and nothing survives a
+Home Assistant restart or reload -- a fresh sensor reads `native_value: None`
+with `check_status: never`. Health RUNNING joins the existing same-VMID
+`PackageManager` busy model: while Health is RUNNING for a VMID, Scan,
+Update, Autoremove, and another Health start are all rejected for that VMID,
+and Health itself is rejected while Scan, Update, Autoremove, or a Restore
+reservation is active for that VMID. Manual Restore may still begin while
+Health runs; Restore's existing invalidation path additionally discards and
+cancels any Health evidence/task for that target, and `begin_restore` itself
+is unchanged. Health evidence is likewise invalidated and its task cancelled
+on a non-running observation, on Restore invalidation, when a new Update or
+Autoremove is accepted, and on target pruning, using the same
+identity-guarded late-result-discard pattern already used for scan/update/
+cleanup records so a stale completion can never republish over newer state.
+
+Automatic post-operation Health is an atomic, synchronous hand-off inside
+`PackageManager` with no `await` between publishing a terminal Update or
+Autoremove `SUCCESS` and claiming Health `RUNNING`: the package mutation
+becomes fully terminal first, its existing result notification is
+unaffected, and only then does a separate config-entry-tracked background
+task begin the Health check. A failed Update or Autoremove never starts
+Health. If the background task cannot be created, the just-claimed Health
+`RUNNING` record is removed and the failure is logged, without touching the
+already-published Update/Autoremove outcome.
+
+Presentation is `button.<lxc>_health_check` (available only when transport is
+configured, the coordinator reports the guest running, and no same-VMID
+Scan/Update/Autoremove/Restore/Health is active) and `sensor.<lxc>_health`,
+whose bounded attributes include check status, timestamp, source
+(manual/update/autoremove), reason, and the same raw evidence fields the
+helper returned. There are no Health notifications in v1 -- the sensor is the
+single source of truth, and operators may build their own automations on it
+-- and `packages/presentation.py` is unchanged.
+
+
 
 The default config-flow path is a guided setup layered beside the preserved
 upstream-compatible existing-credentials path. It first collects only the
