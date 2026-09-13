@@ -976,10 +976,31 @@ def test_check_health_dpkg_ok_with_no_unfinished_state() -> None:
     assert not any("dpkg --audit" in " ".join(call[0]) for call in runner.calls)
 
 
+# Verbatim LC_ALL=C ``dpkg --audit`` output (dpkg 1.22) for a half-* database.
+AUDIT_HALF_INSTALLED = (
+    "The following packages are only half installed, due to problems during\n"
+    "installation.  The installation can probably be completed by retrying it;\n"
+    "the packages can be removed using dselect or dpkg --remove:\n"
+    " openssl              Secure Sockets Layer toolkit\n\n"
+)
+AUDIT_HALF_CONFIGURED = (
+    "The following packages are only half configured, probably due to problems\n"
+    "configuring them the first time.  The configuration should be retried using\n"
+    "dpkg --configure <package> or the configure menu option in dselect:\n"
+    " openssl              Secure Sockets Layer toolkit\n\n"
+)
+AUDIT_LOCKED_PREFIX = (
+    "Another process has locked the database for writing, and might currently be\n"
+    "modifying it, some of the following problems might just be due to that.\n\n"
+)
+
+
 def test_check_health_persistent_half_state_is_interrupted() -> None:
     """A half-installed identity that survives a second read is FAILED evidence."""
     half = "openssl\tamd64\t3.0.11-1\thalf-installed\n"
-    runner = FakeHelperRunner(inventory_outputs=(half, half))
+    runner = FakeHelperRunner(
+        inventory_outputs=(half, half), audit_stdout=AUDIT_HALF_INSTALLED
+    )
     response = _health(runner)
     assert response["evidence"]["dpkg"] == "interrupted"
     assert response["evidence"]["unfinished_package_count"] == 1
@@ -1130,6 +1151,69 @@ def test_check_health_second_read_precedes_audit_so_busy_wins_over_persisted() -
     assert max(dpkg_query_indices) < audit_index
 
 
+@pytest.mark.parametrize(
+    ("half_status", "audit_stdout", "expected"),
+    [
+        # Lock held: dpkg's own notice precedes its half-* report.
+        ("half-installed", AUDIT_LOCKED_PREFIX + AUDIT_HALF_INSTALLED, "busy"),
+        ("half-configured", AUDIT_LOCKED_PREFIX + AUDIT_HALF_CONFIGURED, "busy"),
+        # Lock tested and clear: audit itself still reports the same state.
+        ("half-installed", AUDIT_HALF_INSTALLED, "interrupted"),
+        ("half-configured", AUDIT_HALF_CONFIGURED, "interrupted"),
+        # Audit's snapshot has no problem, so dpkg never tested the lock; a
+        # live writer may hold it (reproduced with a real fcntl lock + rc 0).
+        ("half-installed", "", "changed"),
+        # A different half-* state is not audit's report of the persisted one.
+        ("half-installed", AUDIT_HALF_CONFIGURED, "changed"),
+    ],
+)
+def test_check_health_clear_lock_requires_audit_to_report_the_half_state(
+    half_status: str, audit_stdout: str, expected: str
+) -> None:
+    """dpkg --audit is not a lock probe: a missing busy notice alone is not FAILED.
+
+    ``dpkg --audit`` opens the database read-only, always exits 0, and runs
+    its fcntl F_GETLK check on the database lock only after its own
+    snapshot finds a problem. Identical reads plus a silent audit therefore
+    cannot prove that no writer still holds the lock.
+    """
+    half = f"openssl\tamd64\t3.0.11-1\t{half_status}\n"
+    runner = FakeHelperRunner(inventory_outputs=(half, half), audit_stdout=audit_stdout)
+    response = _health(runner)
+    assert response["evidence"]["dpkg"] == expected
+    assert response["evidence"]["unfinished_package_count"] == (
+        1 if expected == "interrupted" else None
+    )
+
+
+def test_check_health_changed_between_reads_is_changed_regardless_of_audit() -> None:
+    """A half-* state that moved between reads is never FAILED, even if audit agrees."""
+    half = "openssl\tamd64\t3.0.11-1\thalf-installed\n"
+    resolved = "openssl\tamd64\t3.0.11-1\tinstalled\n"
+    runner = FakeHelperRunner(
+        inventory_outputs=(half, resolved), audit_stdout=AUDIT_HALF_INSTALLED
+    )
+    response = _health(runner)
+    assert response["evidence"]["dpkg"] == "changed"
+
+
+@pytest.mark.parametrize(
+    "audit",
+    [
+        {"audit_returncode": 2, "audit_stdout": AUDIT_HALF_INSTALLED},
+        {"audit_stdout_bytes": b"\xff\xfe not utf-8"},
+    ],
+)
+def test_check_health_audit_error_with_persisted_half_state_is_never_failed(
+    audit: dict[str, object],
+) -> None:
+    """An unusable audit is lock_unknown even when both reads are identical."""
+    half = "openssl\tamd64\t3.0.11-1\thalf-installed\n"
+    runner = FakeHelperRunner(inventory_outputs=(half, half), **audit)
+    response = _health(runner)
+    assert response["evidence"]["dpkg"] == "lock_unknown"
+
+
 def test_check_health_audit_non_utf8_output_is_lock_unknown() -> None:
     """Non-UTF8 dpkg --audit output cannot prove the lock is clear either."""
     half = "openssl\tamd64\t3.0.11-1\thalf-installed\n"
@@ -1176,15 +1260,52 @@ def test_check_health_unsupported_dpkg_is_bounded_and_semantic() -> None:
     assert response["error"]["classification"] == "unsupported_guest"
 
 
-@pytest.mark.parametrize(
-    ("returncode", "expected"), [(0, True), (1, None), (2, None)]
-)
+@pytest.mark.parametrize(("returncode", "expected"), [(0, True), (1, None)])
 def test_check_health_preserves_reboot_tri_state(
     returncode: int, expected: bool | None
 ) -> None:
-    """Only the marker's presence is reliable; absence/other are unknown."""
+    """Only the marker's presence is reliable; absence is never ``false``."""
     response = _health(FakeHelperRunner(reboot_returncode=returncode))
+    assert response["evidence"]["dpkg"] == "ok"
     assert response["evidence"]["reboot_required"] is expected
+
+
+@pytest.mark.parametrize("returncode", [2, 126, 127, 255])
+def test_check_health_reboot_probe_error_while_running_is_not_healthy_evidence(
+    returncode: int,
+) -> None:
+    """``test -e`` exits 1 for an absent marker; any other failure is no evidence.
+
+    Collapsing a failed probe into ``reboot_required: null`` would let a
+    clean dpkg state classify as HEALTHY, so it is a bounded helper failure
+    (UNKNOWN in Home Assistant) instead.
+    """
+    runner = FakeHelperRunner(reboot_returncode=returncode)
+    response = _health(runner)
+    assert response["ok"] is False
+    assert response["error"] == {
+        "classification": "execution_failed",
+        "message": "reboot-required probe failed",
+    }
+    assert "evidence" not in response
+    # The guest was re-confirmed running before this was treated as a failure.
+    assert runner.status_calls == 2
+
+
+def test_check_health_reboot_probe_error_after_guest_gone_is_still_unavailable() -> None:
+    """A non-1 reboot probe result from a vanished guest keeps its existing shape."""
+    runner = FakeHelperRunner(reboot_returncode=255)
+
+    def gone_at_reboot_runner(argv, timeout, max_output):
+        if "/var/run/reboot-required" in " ".join(argv):
+            runner.status = "stopped"
+            return helper.CommandResult(255, b"", b"")
+        return runner(argv, timeout, max_output)
+
+    response = _health(gone_at_reboot_runner)
+    assert response["ok"] is True
+    assert response["evidence"]["guest_exec"] is False
+    assert response["evidence"]["guest_exec_unavailable"] is True
 
 
 def test_check_health_reboot_probe_guest_gone_is_unknown_not_stale() -> None:

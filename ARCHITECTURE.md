@@ -219,8 +219,11 @@ helper re-checks native status: still running is a positive `FAILED`
 mixing it with a stale result. When the exec check succeeds but the reboot
 probe itself later finds the guest gone, the same discard-to-UNKNOWN applies.
 Only the reboot marker's positive presence is reliable evidence; its absence
-is only a lack of positive evidence, never exposed as `reboot_required:
-false`.
+(`test -e` exit 1) is only a lack of positive evidence, never exposed as
+`reboot_required: false`. Any other nonzero probe result while the guest is
+still running means the probe itself did not run, so it is a bounded helper
+failure (`UNKNOWN`), never `reboot_required: null` that could read as
+`HEALTHY`.
 
 The dpkg classification reads the inventory once; a clean inventory is `ok`
 with no further dpkg command. When any identity is
@@ -235,10 +238,15 @@ directly and a clear lock is `pending` (`UNKNOWN`), a point-in-time
 observation of the first read that may already have resolved by the time it
 is reported. A busy or otherwise uncertain lock at audit time (nonzero exit,
 oversized or non-UTF8 output) always wins over the read comparison and over
-`pending`. Only when the lock is clear and every original
-half-installed/half-configured identity's status is *exactly* unchanged
-across both reads -- not merely "still somewhere in the half-* set", so
-half-installed progressing to half-configured is not mistaken for a stuck
+`pending`. `dpkg --audit` is not itself a lock probe: it takes no lock,
+exits 0, and tests the dpkg database lock (`fcntl` `F_GETLK` on
+`/var/lib/dpkg/lock`) only once the database it read shows a problem, so a
+missing busy notice proves a clear lock only when the audit output itself
+reports each persisted half-installed/half-configured state; otherwise the
+result is `changed` (`UNKNOWN`). Only when the lock is clear in that sense and
+every original half-installed/half-configured identity's status is *exactly*
+unchanged across both reads -- not merely "still somewhere in the half-* set",
+so half-installed progressing to half-configured is not mistaken for a stuck
 state -- is that reported as an interrupted package manager. The helper
 returns only bounded booleans/enums/ints -- never package names, dpkg stdout,
 or other guest text -- and Home Assistant strictly validates both the exact
@@ -261,7 +269,8 @@ marker. Every other unresolved condition -- a stopped or vanished guest,
 timeout, helper-outdated, protocol mismatch, transport/auth/host-key failure,
 malformed or contradictory evidence, an unsupported guest, a busy or
 uncertain package manager lock, packages merely pending/triggers-pending, or
-inventory that changed between the two reads -- is `UNKNOWN`. `FAILED` takes
+inventory that changed between the two reads or before the audit, or a
+reboot-required probe that could not run -- is `UNKNOWN`. `FAILED` takes
 precedence over `DEGRADED`, and any required-check `UNKNOWN` prevents both
 `HEALTHY` and `DEGRADED`. This explicitly excludes `systemctl --failed`/
 failed-unit checks, CPU/RAM/uptime verdicts, and any application-specific

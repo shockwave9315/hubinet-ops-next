@@ -88,6 +88,14 @@ HEALTH_PENDING_STATUS_WORDS = frozenset(
 )
 HEALTH_AUDIT_MAX_BYTES = 64 * 1024
 HEALTH_AUDIT_BUSY_NOTICE = "Another process has locked the database for writing"
+# dpkg --audit takes no lock and exits 0 regardless; it tests the database
+# lock (fcntl F_GETLK) only once the database it read shows a problem. A missing
+# busy notice therefore proves a clear lock only alongside audit's own report
+# of each persisted half-* state.
+HEALTH_AUDIT_HALF_HEADERS = {
+    "half-installed": "The following packages are only half installed",
+    "half-configured": "The following packages are only half configured",
+}
 
 # Scan simulation, execution-time simulation, and mutation intentionally share
 # the same policy options. The only differences are simulation's ``-s`` and
@@ -799,13 +807,14 @@ def _read_health_inventory(
 
 def _audit_dpkg_lock(
     runner: Runner, deadline: OperationDeadline, vmid: int
-) -> str | None:
-    """Return a lock-uncertainty classification, or ``None`` when it is clear.
+) -> tuple[str | None, str]:
+    """Return a lock-uncertainty classification (or ``None``) and audit stdout.
 
     A nonzero result, oversized output, or output that cannot even be
     decoded all mean the same thing here: the lock state could not be
     reliably established, so this is uncertainty (``lock_unknown``), not a
-    positive failure.
+    positive failure. ``None`` only means no busy notice was printed; see
+    :data:`HEALTH_AUDIT_HALF_HEADERS` for when that proves a clear lock.
     """
     try:
         audit = _guest_command(
@@ -820,17 +829,17 @@ def _audit_dpkg_lock(
         if err.classification == "timeout":
             raise
         # Output exceeded its bound: the lock state cannot be evaluated.
-        return "lock_unknown"
+        return "lock_unknown", ""
     if audit.returncode != 0:
-        return "lock_unknown"
+        return "lock_unknown", ""
     try:
         audit_stdout, _ = _decode(audit)
     except ScanError:
         # Non-UTF8 output is equally unable to prove the lock state.
-        return "lock_unknown"
+        return "lock_unknown", ""
     if HEALTH_AUDIT_BUSY_NOTICE in audit_stdout:
-        return "busy"
-    return None
+        return "busy", audit_stdout
+    return None, audit_stdout
 
 
 def _check_dpkg_health(
@@ -845,8 +854,8 @@ def _check_dpkg_health(
     dpkg run that starts after the audit but finishes before that second
     read masquerade as a persistent failure. Only packages whose exact
     half-installed/half-configured status is unchanged across both reads,
-    with the lock clear at audit time, are reported as an interrupted
-    package manager.
+    still reported by the audit itself with the lock clear, are reported as
+    an interrupted package manager.
     """
     first = _read_health_inventory(runner, deadline, vmid)
     half_status: dict[tuple[str, str], str] = {
@@ -869,7 +878,7 @@ def _check_dpkg_health(
             second.get(identity) == status for identity, status in half_status.items()
         )
 
-    audit_state = _audit_dpkg_lock(runner, deadline, vmid)
+    audit_state, audit_stdout = _audit_dpkg_lock(runner, deadline, vmid)
     if audit_state is not None:
         # The lock is busy or uncertain at audit time (after the second
         # read); that uncertainty always takes precedence over whatever
@@ -880,8 +889,13 @@ def _check_dpkg_health(
         # Only pending/triggers-* identities remain; never classify these
         # as FAILED.
         return "pending", None
-    if persisted:
+    if persisted and all(
+        HEALTH_AUDIT_HALF_HEADERS[status] in audit_stdout
+        for status in set(half_status.values())
+    ):
         return "interrupted", len(half_status)
+    # Without audit's own half-* report its lock was never tested, so a
+    # writer may still hold it: the state is unestablished, not FAILED.
     return "changed", None
 
 
@@ -935,6 +949,10 @@ def _check_health(
         # fixed tri-state reboot semantics used elsewhere in this helper.
         reboot_required = True
     elif _guest_still_running(vmid, runner, deadline):
+        if reboot.returncode != 1:
+            # test -e exits 1 only for "false"; any other status is a probe
+            # that never ran, which must not let a clean dpkg read as HEALTHY.
+            raise ScanError("execution_failed", "reboot-required probe failed")
         reboot_required = None
     else:
         # The guest disappeared between the exec check and this probe;
