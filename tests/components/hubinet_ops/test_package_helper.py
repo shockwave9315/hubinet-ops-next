@@ -1017,6 +1017,40 @@ def test_check_health_pending_only_is_never_failed() -> None:
     assert runner.inventory_reads == 1
 
 
+@pytest.mark.parametrize(
+    ("audit", "expected"),
+    [
+        ({}, "pending"),
+        (
+            {
+                "audit_stdout": (
+                    "openssl:\n Another process has locked the database for writing\n"
+                )
+            },
+            "busy",
+        ),
+        ({"audit_returncode": 2}, "lock_unknown"),
+        ({"audit_stdout_bytes": b"\xff\xfe not utf-8"}, "lock_unknown"),
+    ],
+)
+def test_check_health_pending_only_is_one_read_and_audit_uncertainty_wins(
+    audit: dict[str, object], expected: str
+) -> None:
+    """A P-only inventory is read once; busy/uncertain audit wins over pending.
+
+    Even if the guest would have finished the package by a hypothetical
+    second read, the result stays an UNKNOWN-only classification: P-only
+    evidence can never become FAILED or a false HEALTHY ``ok``.
+    """
+    pending = "openssl\tamd64\t3.0.11-1\ttriggers-pending\n"
+    resolved = "openssl\tamd64\t3.0.11-1\tinstalled\n"
+    runner = FakeHelperRunner(inventory_outputs=(pending, resolved), **audit)
+    response = _health(runner)
+    assert response["evidence"]["dpkg"] == expected
+    assert response["evidence"]["unfinished_package_count"] is None
+    assert runner.inventory_reads == 1
+
+
 def test_check_health_audit_lock_notice_is_package_manager_busy() -> None:
     """The fixed LC_ALL=C lock notice is disambiguated as busy, not FAILED."""
     half = "openssl\tamd64\t3.0.11-1\thalf-installed\n"

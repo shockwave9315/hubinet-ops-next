@@ -222,14 +222,20 @@ Only the reboot marker's positive presence is reliable evidence; its absence
 is only a lack of positive evidence, never exposed as `reboot_required:
 false`.
 
-The dpkg classification reads the inventory, and when any identity is
-half-installed/half-configured or unpacked/triggers-awaited/
-triggers-pending, re-reads it a second time before auditing the lock with
-`dpkg --audit` -- in that order, not audit-then-reread -- so a dpkg run that
-starts after the audit but finishes before a stale ordering's second read
-could never masquerade as a persistent failure. A busy or otherwise uncertain
-lock at audit time (nonzero exit, oversized or non-UTF8 output) always wins
-over the read comparison. Only when the lock is clear and every original
+The dpkg classification reads the inventory once; a clean inventory is `ok`
+with no further dpkg command. When any identity is
+half-installed/half-configured -- the only states that can become positive
+`FAILED` evidence -- it re-reads the inventory a second time before auditing
+the lock with `dpkg --audit` -- in that order, not audit-then-reread -- so a
+dpkg run that starts after the audit but finishes before a stale ordering's
+second read could never masquerade as a persistent failure. When the first
+read shows only unpacked/triggers-awaited/triggers-pending identities, there
+is no second read: those states are never `FAILED`, so the lock is audited
+directly and a clear lock is `pending` (`UNKNOWN`), a point-in-time
+observation of the first read that may already have resolved by the time it
+is reported. A busy or otherwise uncertain lock at audit time (nonzero exit,
+oversized or non-UTF8 output) always wins over the read comparison and over
+`pending`. Only when the lock is clear and every original
 half-installed/half-configured identity's status is *exactly* unchanged
 across both reads -- not merely "still somewhere in the half-* set", so
 half-installed progressing to half-configured is not mistaken for a stuck
@@ -270,8 +276,10 @@ with `check_status: never`. Health RUNNING joins the existing same-VMID
 `PackageManager` busy model: while Health is RUNNING for a VMID, Scan,
 Update, Autoremove, and another Health start are all rejected for that VMID,
 and Health itself is rejected while Scan, Update, Autoremove, or a Restore
-reservation is active for that VMID. Manual Restore may still begin while
-Health runs; Restore's existing invalidation path additionally discards and
+reservation is active for that VMID. The Scan, Update, and Autoremove buttons
+mirror a same-target Health RUNNING record as unavailable; that is
+presentation only, and the manager's busy checks remain authoritative. Manual
+Restore may still begin while Health runs; Restore's existing invalidation path additionally discards and
 cancels any Health evidence/task for that target, and `begin_restore` itself
 is unchanged. Health evidence is likewise invalidated and its task cancelled
 on a non-running observation, on Restore invalidation, when a new Update or

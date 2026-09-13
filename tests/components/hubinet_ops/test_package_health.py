@@ -56,6 +56,10 @@ from .test_packages import (
 HEALTH_BUTTON = "button.ct_nginx_health_check"
 HEALTH_SENSOR = "sensor.ct_nginx_health"
 SCAN_BUTTON = "button.ct_nginx_scan_pending_packages"
+REVIEW_BUTTON = "button.ct_nginx_review_package_update"
+APPROVE_BUTTON = "button.ct_nginx_approve_reviewed_plan"
+UPDATE_BUTTON = "button.ct_nginx_update_packages"
+AUTOREMOVE_BUTTON = "button.ct_nginx_autoremove_unused_packages"
 
 # ---------------------------------------------------------------------------
 # CLASSIFIER
@@ -1091,6 +1095,72 @@ async def test_health_button_unavailable_while_scan_is_running(
         assert hass.states.get(HEALTH_BUTTON).state == STATE_UNAVAILABLE
         release.set()
         await hass.async_block_till_done()
+
+
+async def test_package_action_buttons_unavailable_while_health_is_running(
+    hass: HomeAssistant,
+    mock_proxmox_client: MagicMock,
+    mock_config_entry: MockConfigEntry,
+    package_transport_material: None,
+) -> None:
+    """Scan/Update/Autoremove mirror the backend Health busy rejection.
+
+    Presentation only: the manager's own busy checks stay authoritative.
+    A Health attempt for a different VMID leaves these buttons unaffected.
+    """
+    entered = asyncio.Event()
+    release = asyncio.Event()
+
+    async def gated_health(_self, _node, _vmid):
+        entered.set()
+        await release.wait()
+        return _default_health_outcome()
+
+    actions = (SCAN_BUTTON, UPDATE_BUTTON, AUTOREMOVE_BUTTON)
+    with (
+        patch(
+            "custom_components.hubinet_ops.packages.transport."
+            "AsyncSSHPackageTransport.async_scan",
+            AsyncMock(return_value=RESULT),
+        ),
+        patch(
+            "custom_components.hubinet_ops.packages.transport."
+            "AsyncSSHPackageTransport.async_plan_autoremove",
+            AsyncMock(return_value=_parsed(_candidates(1))),
+        ),
+        patch(
+            "custom_components.hubinet_ops.packages.transport."
+            "AsyncSSHPackageTransport.async_check_health",
+            new=gated_health,
+        ),
+    ):
+        await setup_integration(hass, mock_config_entry)
+        await _press(hass, SCAN_BUTTON)
+        await hass.async_block_till_done()
+        await _press(hass, REVIEW_BUTTON)
+        await _press(hass, APPROVE_BUTTON)
+        for entity_id in (*actions, HEALTH_BUTTON):
+            assert hass.states.get(entity_id).state != STATE_UNAVAILABLE
+
+        manager = mock_config_entry.runtime_data.package_manager
+        manager._health_records[("pve1", 201)] = PackageHealthRecord(  # noqa: SLF001
+            check_status=HealthCheckStatus.RUNNING
+        )
+        manager._on_state_change()  # noqa: SLF001
+        await hass.async_block_till_done()
+        for entity_id in (*actions, HEALTH_BUTTON):
+            assert hass.states.get(entity_id).state != STATE_UNAVAILABLE
+        manager._health_records.pop(("pve1", 201))  # noqa: SLF001
+
+        await _press(hass, HEALTH_BUTTON)
+        await entered.wait()
+        for entity_id in (*actions, HEALTH_BUTTON):
+            assert hass.states.get(entity_id).state == STATE_UNAVAILABLE
+
+        release.set()
+        await hass.async_block_till_done()
+        for entity_id in (*actions, HEALTH_BUTTON):
+            assert hass.states.get(entity_id).state != STATE_UNAVAILABLE
 
 
 async def test_manual_health_press_returns_while_check_runs_in_background(

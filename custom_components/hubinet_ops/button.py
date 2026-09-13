@@ -533,6 +533,7 @@ class PackageScanButtonEntity(ProxmoxContainerEntity, ProxmoxBaseButton):
         scan = manager.record(self._node_name, self.device_id)
         update = manager.update_record(self._node_name, self.device_id)
         cleanup = manager.cleanup_record(self._node_name, self.device_id)
+        health = manager.health_record(self._node_name, self.device_id)
         return (
             super().available
             and self.container_data.get("status") == VM_CONTAINER_RUNNING
@@ -540,6 +541,7 @@ class PackageScanButtonEntity(ProxmoxContainerEntity, ProxmoxBaseButton):
             and scan.status is not PackageScanStatus.RUNNING
             and update.status is not PackageUpdateStatus.RUNNING
             and cleanup.status is not PackageUpdateStatus.RUNNING
+            and health.check_status is not HealthCheckStatus.RUNNING
         )
 
 
@@ -697,12 +699,14 @@ class PackageUpdateButtonEntity(ProxmoxContainerEntity, ButtonEntity):
         record = manager.record(self._node_name, self.device_id)
         update = manager.update_record(self._node_name, self.device_id)
         cleanup = manager.cleanup_record(self._node_name, self.device_id)
+        health = manager.health_record(self._node_name, self.device_id)
         return (
             super().available
             and self.container_data.get("status") == VM_CONTAINER_RUNNING
             and not manager.restore_reserved(self._node_name, self.device_id)
             and update.status is not PackageUpdateStatus.RUNNING
             and cleanup.status is not PackageUpdateStatus.RUNNING
+            and health.check_status is not HealthCheckStatus.RUNNING
             and record.status is PackageScanStatus.SUCCESS
             and record.result is not None
             and bool(record.result.packages)
@@ -768,6 +772,7 @@ class PackageAutoremoveButtonEntity(ProxmoxContainerEntity, ButtonEntity):
         update = manager.update_record(self._node_name, self.device_id)
         cleanup = manager.cleanup_record(self._node_name, self.device_id)
         evidence = manager.cleanup_evidence(self._node_name, self.device_id)
+        health = manager.health_record(self._node_name, self.device_id)
         return (
             super().available
             and self.container_data.get("status") == VM_CONTAINER_RUNNING
@@ -775,6 +780,7 @@ class PackageAutoremoveButtonEntity(ProxmoxContainerEntity, ButtonEntity):
             and scan.status is not PackageScanStatus.RUNNING
             and update.status is not PackageUpdateStatus.RUNNING
             and cleanup.status is not PackageUpdateStatus.RUNNING
+            and health.check_status is not HealthCheckStatus.RUNNING
             and evidence is not None
             and bool(evidence.candidates)
             and is_granted(
