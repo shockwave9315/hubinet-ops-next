@@ -8,14 +8,15 @@ Status date: 2026-09-13
   `fc034572d0216a04ed40a07154394908a594dfed`.
 - Baseline tag: `baseline-ha-2026.9.1`.
 - Merged runtime: a domain-isolated custom-integration fork of Home Assistant
-  Core `proxmoxve`, plus the package scan, review, and update subsystem and
-  guided fresh-install enrollment and native snapshot Restore documented in
-  [ARCHITECTURE.md](ARCHITECTURE.md).
-- Current release: integration `2026.9.1.8`, helper v4, protocol v1.
+  Core `proxmoxve`, plus the package scan, review, and update subsystem,
+  guided fresh-install enrollment, native snapshot Restore, and native
+  snapshot Create observation documented in [ARCHITECTURE.md](ARCHITECTURE.md).
+- Current release: integration `2026.9.1.9`, helper v4, protocol v1.
 - Merged baseline commit:
-  `c699f3e75ff3c94ae34b22de44a276b8ab9b88a7`.
-- Baseline validation: **564 tests and 207 snapshots passed**; repository Ruff
-  passed.
+  `f7beac9fec87316e9ec98d85b113b60ce1f8e6d2` (PR #14).
+- Baseline validation: **584 tests and 207 snapshots passed**; repository Ruff,
+  translation and release-parity checks, helper SHA/protocol consistency,
+  ShellCheck, and shell syntax passed.
 
 ## Merged
 
@@ -152,7 +153,11 @@ Status date: 2026-09-13
 - Architecture: **ACCEPTED BY MAINTAINER on 2026-09-13**, before runtime
   implementation; see the durable boundary in
   [ARCHITECTURE.md](ARCHITECTURE.md#lxc-health).
-- Implementation: **IMPLEMENTED / READY FOR REVIEW**.
+- Implementation: **IMPLEMENTED / DRAFT / CORRECTION REVIEW**. PR #15 is open
+  and not merged. An independent review found three release-blocking
+  lifecycle/operator issues plus smaller hardening gaps; one narrow
+  correction pass has been applied addressing all of them. This has not yet
+  been externally re-reviewed.
 - Accepted scope: generic point-in-time OS/package Health for package-eligible
   LXCs, manually runnable and automatically run immediately after a
   successful Update or Autoremove, through one new helper v5 `check_health`
@@ -160,18 +165,21 @@ Status date: 2026-09-13
   `unknown` classification, no notifications, no systemd/CPU/RAM/uptime or
   application-specific checks, and no change to Update/Autoremove/Restore
   safety semantics.
-- The atomic post-Update/post-Autoremove hand-off, Health's own busy model,
-  and its identity-guarded evidence invalidation are implemented exactly as
-  accepted; `begin_restore()` and existing Update/Autoremove safety checks
-  are unchanged.
-- Release: integration `2026.9.1.10`, helper v5, protocol v1 unchanged.
-- Validation: **681 tests and 207 snapshots passed**; repository Ruff,
+- The post-Update/post-Autoremove hand-off claims Health `RUNNING` *before*
+  publishing the terminal `SUCCESS` (re-entrancy-safe against eager HA
+  listeners), starts no Health from the unload/reload cancellation path, uses
+  its own tight 60s/20s/10s/90s timeout model instead of scan-sized bounds,
+  and owns its background-task coroutine explicitly on both the manual and
+  post-operation paths. `begin_restore()` and existing Update/Autoremove
+  safety checks are unchanged.
+- Validation: **703 tests and 207 snapshots passed**; repository Ruff,
   translation and release-parity checks, helper SHA/protocol consistency,
   ShellCheck, and shell syntax passed.
 
 ## Next
 
-Review and release the accepted `2026.9.1.10` LXC Health release.
+Obtain review of the PR #15 correction pass, then release `2026.9.1.10` LXC
+Health.
 
 ## Explicitly not started
 

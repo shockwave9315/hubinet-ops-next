@@ -1,7 +1,7 @@
 """Tests for package-manager state, concurrency, and Home Assistant entities."""
 
 import asyncio
-from collections.abc import Iterator
+from collections.abc import Callable
 from contextlib import suppress
 from copy import deepcopy
 from dataclasses import replace
@@ -999,6 +999,17 @@ class UpdateTransport:
                 reboot_required=None,
             ),
         )
+        self.plan_autoremove_calls = 0
+        self.plan_autoremove_release = asyncio.Event()
+        self.plan_autoremove_release.set()
+
+    async def async_plan_autoremove(
+        self, expected_node: str, vmid: int
+    ) -> ParsedAutoremoveSimulation:
+        """Return an empty cleanup observation, waiting for release if gated."""
+        self.plan_autoremove_calls += 1
+        await self.plan_autoremove_release.wait()
+        return ParsedAutoremoveSimulation(packages=(), not_upgraded_count=0)
 
     async def async_scan(self, expected_node: str, vmid: int) -> PackageScanResult:
         """Return a successful reviewable scan."""
@@ -1056,6 +1067,7 @@ def _update_manager(
     sleep: AsyncMock | None = None,
     retained_callback: MagicMock | None = None,
     complete_callback: MagicMock | None = None,
+    on_state_change: Callable[[], None] | None = None,
 ) -> tuple[PackageManager, MagicMock]:
     """Build an update-capable manager and native PVE status double."""
     proxmox = proxmox or MagicMock()
@@ -1067,7 +1079,7 @@ def _update_manager(
             hass,
             mock_config_entry,
             transport=transport,
-            on_state_change=MagicMock(),
+            on_state_change=on_state_change or MagicMock(),
             now=lambda: ATTEMPTED_AT,
             proxmox_getter=lambda: proxmox,
             sleep=sleep or AsyncMock(),

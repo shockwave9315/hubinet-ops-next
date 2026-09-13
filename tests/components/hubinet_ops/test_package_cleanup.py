@@ -2,6 +2,7 @@
 
 import asyncio
 from collections import deque
+from collections.abc import Callable
 from datetime import UTC, datetime
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, call, patch
@@ -58,6 +59,11 @@ class CleanupTransport:
     def __init__(self, plans: list[object]) -> None:
         self.plans = deque(plans)
         self.plan_calls = 0
+        # Set to a 1-based call number to gate that exact
+        # async_plan_autoremove call; None (default) never gates.
+        self.gate_plan_autoremove_call: int | None = None
+        self.gated_plan_autoremove_entered = asyncio.Event()
+        self.gated_plan_autoremove_release = asyncio.Event()
         self.autoremove_calls = 0
         self.update_calls = 0
         self.autoremove_result: PackageMutationResult | PackageUpdateError = (
@@ -111,6 +117,9 @@ class CleanupTransport:
         self, expected_node: str, vmid: int
     ) -> ParsedAutoremoveSimulation:
         self.plan_calls += 1
+        if self.plan_calls == self.gate_plan_autoremove_call:
+            self.gated_plan_autoremove_entered.set()
+            await self.gated_plan_autoremove_release.wait()
         result = self.plans.popleft()
         if isinstance(result, Exception):
             raise result
@@ -156,6 +165,7 @@ def _manager(
     invalidated: MagicMock | None = None,
     update_complete: MagicMock | None = None,
     cleanup_complete: MagicMock | None = None,
+    on_state_change: Callable[[], None] | None = None,
 ) -> tuple[PackageManager, MagicMock]:
     proxmox = MagicMock()
     proxmox.nodes.return_value.lxc.return_value.status.current.get.return_value = {
@@ -165,7 +175,7 @@ def _manager(
         hass,
         entry,
         transport=transport,
-        on_state_change=MagicMock(),
+        on_state_change=on_state_change or MagicMock(),
         now=lambda: NOW,
         proxmox_getter=lambda: proxmox,
         sleep=AsyncMock(),

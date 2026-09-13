@@ -953,7 +953,12 @@ class PackageManager:
             except asyncio.CancelledError:
                 if self._update_records.get((node, vmid)) is own_record:
                     self._publish_cleanup_observation(node, vmid, None, "update")
-                    self._finish_update(node, vmid, own_record, outcome)
+                    # Unload/reload is cancelling this task; terminalize the
+                    # already-successful mutation but start no new
+                    # diagnostic work that could escape the unload.
+                    self._finish_update(
+                        node, vmid, own_record, outcome, claim_health=False
+                    )
                 else:
                     self._notify_update_complete(node, vmid, outcome)
                 raise
@@ -1214,7 +1219,12 @@ class PackageManager:
                     self._publish_cleanup_observation(
                         node, vmid, None, "autoremove"
                     )
-                    self._finish_cleanup(node, vmid, own_record, outcome)
+                    # Unload/reload is cancelling this task; terminalize the
+                    # already-successful mutation but start no new
+                    # diagnostic work that could escape the unload.
+                    self._finish_cleanup(
+                        node, vmid, own_record, outcome, claim_health=False
+                    )
                 else:
                     self._notify_cleanup_complete(node, vmid, outcome)
                 raise
@@ -1272,20 +1282,34 @@ class PackageManager:
         vmid: int,
         own_record: PackageUpdateRecord,
         outcome: PackageUpdateRecord,
+        *,
+        claim_health: bool = True,
     ) -> bool:
         """Publish an update outcome only while this attempt still owns the target.
 
-        On a published SUCCESS, claims Health RUNNING synchronously in the
-        same call, with no ``await`` in between, per the accepted atomic
-        post-Update hand-off.
+        On a SUCCESS about to be published, Health RUNNING is claimed
+        *before* that publish (see :meth:`_try_claim_health_before_publish`)
+        so a re-entrant HA listener reacting to the publish can never start
+        a conflicting Scan/Update/Autoremove/Health for this VMID; the
+        background task itself only starts after the publish. ``claim_health
+        =False`` is used by the unload/reload cancellation path, which must
+        terminalize an already-successful mutation without starting new
+        diagnostic work.
         """
         if self._update_records.get((node, vmid)) is not own_record:
             return False
         self._update_tasks.pop((node, vmid), None)
+        health_claim: PackageHealthRecord | None = None
+        if claim_health and outcome.status is PackageUpdateStatus.SUCCESS:
+            health_claim = self._try_claim_health_before_publish(
+                node, vmid, source=HealthSource.UPDATE
+            )
         self._set_update_record(node, vmid, outcome)
         self._notify_update_complete(node, vmid, outcome)
-        if outcome.status is PackageUpdateStatus.SUCCESS:
-            self._claim_health_after_operation(node, vmid, source=HealthSource.UPDATE)
+        if health_claim is not None:
+            self._start_claimed_health_task(
+                node, vmid, health_claim, source=HealthSource.UPDATE
+            )
         return True
 
     def _notify_update_complete(
@@ -1432,12 +1456,18 @@ class PackageManager:
             )
 
         own_record = self._claim_health_record(node, vmid, source=HealthSource.MANUAL)
-        task = self._config_entry.async_create_background_task(
-            self._hass,
-            self._async_run_health(node, vmid, own_record),
-            f"package health check {node}/{vmid}",
-        )
-        self._health_tasks[(node, vmid)] = task
+        try:
+            task = self._start_health_background_task(node, vmid, own_record)
+        except Exception as err:
+            if self._health_records.get((node, vmid)) is own_record:
+                self._health_records.pop((node, vmid), None)
+                self._on_state_change()
+            raise PackageScanError(
+                PackageScanFailure.EXECUTION_FAILED,
+                "could not start the health check background task",
+            ) from err
+        if not task.done():
+            self._health_tasks[(node, vmid)] = task
         return task
 
     async def _async_run_health(
@@ -1493,30 +1523,81 @@ class PackageManager:
         )
         self._on_state_change()
 
-    @callback
-    def _claim_health_after_operation(
-        self, node: str, vmid: int, *, source: HealthSource
-    ) -> None:
-        """Atomically claim Health RUNNING right after a successful mutation.
+    def _start_health_background_task(
+        self, node: str, vmid: int, own_record: PackageHealthRecord
+    ) -> asyncio.Task[None]:
+        """Create the background Health task with explicit coroutine ownership.
 
-        Called synchronously, with no ``await`` between the just-published
-        terminal Update/Autoremove SUCCESS and this claim, so no
-        interleaving start path can observe the target in between. Health
-        RUNNING cannot already be present here: while the just-finished
-        operation was itself RUNNING, every Health/Scan/Update/Autoremove
-        start for this VMID was rejected.
+        The coroutine object is created first and held locally so that, if
+        task creation itself raises, it can be closed explicitly here
+        rather than leaked as an un-awaited coroutine.
         """
-        own_record = self._claim_health_record(node, vmid, source=source)
+        operation = self._async_run_health(node, vmid, own_record)
         try:
-            task = self._config_entry.async_create_background_task(
-                self._hass,
-                self._async_run_health(node, vmid, own_record),
-                f"package health check {node}/{vmid}",
+            return self._config_entry.async_create_background_task(
+                self._hass, operation, f"package health check {node}/{vmid}"
             )
         except Exception:
-            # Never let a failure here recast the already-published
-            # mutation outcome; only the just-claimed RUNNING record is
-            # undone.
+            operation.close()
+            raise
+
+    @callback
+    def _health_claim_blocked(self, vmid: int) -> bool:
+        """Return whether a defensive pre-publish Health claim must be skipped.
+
+        Deliberately excludes the same-VMID Update/Autoremove record this
+        very hand-off is finishing: that record is expected to still read
+        RUNNING at this exact point and is never a conflict.
+        """
+        return (
+            any(target_vmid == vmid for _node, target_vmid in self._restore_reserved)
+            or any(
+                target_vmid == vmid and record.status is PackageScanStatus.RUNNING
+                for (_node, target_vmid), record in self._records.items()
+            )
+            or self._health_running(vmid)
+        )
+
+    @callback
+    def _try_claim_health_before_publish(
+        self, node: str, vmid: int, *, source: HealthSource
+    ) -> PackageHealthRecord | None:
+        """Defensively claim Health RUNNING before a terminal SUCCESS publishes.
+
+        Home Assistant listeners triggered by state publication can run
+        eagerly/re-entrantly, so the claim must land *before*
+        ``_set_update_record``/``_set_cleanup_record`` and its
+        notification -- not merely without an ``await`` after them -- so a
+        re-entrant Scan/Update/Autoremove/Health start for this VMID
+        already observes Health RUNNING. Skips (never overwrites) when the
+        target is unexpectedly already busy; this is defense in depth; no
+        `await` happens between this claim and the publish that follows.
+        """
+        if self._health_claim_blocked(vmid):
+            return None
+        return self._claim_health_record(node, vmid, source=source)
+
+    @callback
+    def _start_claimed_health_task(
+        self,
+        node: str,
+        vmid: int,
+        own_record: PackageHealthRecord,
+        *,
+        source: HealthSource,
+    ) -> None:
+        """Start the background task for a Health claim made just before publish.
+
+        Called only after the terminal mutation result and its
+        notification have been published. Only starts the task while this
+        exact claim still owns the target; never lets a failure here
+        recast the already-published mutation outcome.
+        """
+        if self._health_records.get((node, vmid)) is not own_record:
+            return
+        try:
+            task = self._start_health_background_task(node, vmid, own_record)
+        except Exception:
             if self._health_records.get((node, vmid)) is own_record:
                 self._health_records.pop((node, vmid), None)
                 self._on_state_change()
@@ -1524,7 +1605,8 @@ class PackageManager:
                 "Could not start post-%s Health check for %s/%s", source, node, vmid
             )
             return
-        self._health_tasks[(node, vmid)] = task
+        if not task.done():
+            self._health_tasks[(node, vmid)] = task
 
     @callback
     def _invalidate_cleanup(self, node: str, vmid: int) -> None:
@@ -1615,21 +1697,29 @@ class PackageManager:
         vmid: int,
         own_record: PackageUpdateRecord,
         outcome: PackageUpdateRecord,
+        *,
+        claim_health: bool = True,
     ) -> bool:
         """Publish cleanup state only while this attempt owns the target.
 
-        On a published SUCCESS, claims Health RUNNING synchronously in the
-        same call, with no ``await`` in between, per the accepted atomic
-        post-Autoremove hand-off.
+        On a SUCCESS about to be published, Health RUNNING is claimed
+        *before* that publish for the same re-entrancy reason documented on
+        :meth:`_finish_update`. ``claim_health=False`` is used by the
+        unload/reload cancellation path.
         """
         if self._cleanup_records.get((node, vmid)) is not own_record:
             return False
         self._cleanup_tasks.pop((node, vmid), None)
+        health_claim: PackageHealthRecord | None = None
+        if claim_health and outcome.status is PackageUpdateStatus.SUCCESS:
+            health_claim = self._try_claim_health_before_publish(
+                node, vmid, source=HealthSource.AUTOREMOVE
+            )
         self._set_cleanup_record(node, vmid, outcome)
         self._notify_cleanup_complete(node, vmid, outcome)
-        if outcome.status is PackageUpdateStatus.SUCCESS:
-            self._claim_health_after_operation(
-                node, vmid, source=HealthSource.AUTOREMOVE
+        if health_claim is not None:
+            self._start_claimed_health_task(
+                node, vmid, health_claim, source=HealthSource.AUTOREMOVE
             )
         return True
 

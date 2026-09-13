@@ -38,6 +38,8 @@ UPDATE_OPERATION_TIMEOUT_SECONDS = 1800.0
 UPDATE_COMMAND_TIMEOUT_SECONDS = 1500.0
 PING_OPERATION_TIMEOUT_SECONDS = 30.0
 PING_COMMAND_TIMEOUT_SECONDS = 10.0
+HEALTH_OPERATION_TIMEOUT_SECONDS = 60.0
+HEALTH_COMMAND_TIMEOUT_SECONDS = 20.0
 LOCK_DIRECTORY = "/run/lock"
 PVE_LOCAL_NODE_LINK = "/etc/pve/local"
 PVE_LOCAL_NODE_PREFIX = "/etc/pve/nodes/"
@@ -763,7 +765,13 @@ def _read_health_inventory(
     inventory is ``unsupported_guest``, not Update/Autoremove's
     ``dpkg_sanity_failed``/``dpkg_unfinished``.
     """
-    result = _guest_command(runner, deadline, vmid, INVENTORY_COMMAND)
+    result = _guest_command(
+        runner,
+        deadline,
+        vmid,
+        INVENTORY_COMMAND,
+        command_timeout=HEALTH_COMMAND_TIMEOUT_SECONDS,
+    )
     text, _ = _decode(result)
     if result.returncode != 0:
         raise ScanError("unsupported_guest", "guest dpkg inventory is unavailable")
@@ -789,32 +797,16 @@ def _read_health_inventory(
     return statuses
 
 
-def _check_dpkg_health(
-    vmid: int, runner: Runner, deadline: OperationDeadline
-) -> tuple[str, int | None]:
-    """Classify dpkg health using unfinished-state and audit-lock disambiguation.
+def _audit_dpkg_lock(
+    runner: Runner, deadline: OperationDeadline, vmid: int
+) -> str | None:
+    """Return a lock-uncertainty classification, or ``None`` when it is clear.
 
-    A bare dpkg inventory alone cannot distinguish a genuinely interrupted
-    package manager from apt legitimately pausing between phases while
-    dpkg's own lock is briefly released. ``dpkg --audit`` disambiguates a
-    busy/uncertain lock; only packages that remain half-installed or
-    half-configured across two reads, with no busy/uncertain lock evidence
-    between them, are reported as an interrupted package manager.
+    A nonzero result, oversized output, or output that cannot even be
+    decoded all mean the same thing here: the lock state could not be
+    reliably established, so this is uncertainty (``lock_unknown``), not a
+    positive failure.
     """
-    statuses = _read_health_inventory(runner, deadline, vmid)
-    half = frozenset(
-        identity
-        for identity, status in statuses.items()
-        if status in HEALTH_HALF_STATUS_WORDS
-    )
-    pending = frozenset(
-        identity
-        for identity, status in statuses.items()
-        if status in HEALTH_PENDING_STATUS_WORDS
-    )
-    if not half and not pending:
-        return "ok", None
-
     try:
         audit = _guest_command(
             runner,
@@ -822,26 +814,74 @@ def _check_dpkg_health(
             vmid,
             ("env", "LC_ALL=C", "dpkg", "--audit"),
             max_output=HEALTH_AUDIT_MAX_BYTES,
+            command_timeout=HEALTH_COMMAND_TIMEOUT_SECONDS,
         )
     except ScanError as err:
         if err.classification == "timeout":
             raise
         # Output exceeded its bound: the lock state cannot be evaluated.
-        return "lock_unknown", None
+        return "lock_unknown"
     if audit.returncode != 0:
-        return "lock_unknown", None
-    audit_stdout, _ = _decode(audit)
+        return "lock_unknown"
+    try:
+        audit_stdout, _ = _decode(audit)
+    except ScanError:
+        # Non-UTF8 output is equally unable to prove the lock state.
+        return "lock_unknown"
     if HEALTH_AUDIT_BUSY_NOTICE in audit_stdout:
-        return "busy", None
+        return "busy"
+    return None
 
-    if not half:
+
+def _check_dpkg_health(
+    vmid: int, runner: Runner, deadline: OperationDeadline
+) -> tuple[str, int | None]:
+    """Classify dpkg health using unfinished-state and audit-lock disambiguation.
+
+    A bare dpkg inventory alone cannot distinguish a genuinely interrupted
+    package manager from apt legitimately pausing between phases while
+    dpkg's own lock is briefly released. The order is deliberately read,
+    (re-)read, then audit: auditing before the second read would let a
+    dpkg run that starts after the audit but finishes before that second
+    read masquerade as a persistent failure. Only packages whose exact
+    half-installed/half-configured status is unchanged across both reads,
+    with the lock clear at audit time, are reported as an interrupted
+    package manager.
+    """
+    first = _read_health_inventory(runner, deadline, vmid)
+    half_status: dict[tuple[str, str], str] = {
+        identity: status
+        for identity, status in first.items()
+        if status in HEALTH_HALF_STATUS_WORDS
+    }
+    pending = frozenset(
+        identity
+        for identity, status in first.items()
+        if status in HEALTH_PENDING_STATUS_WORDS
+    )
+    if not half_status and not pending:
+        return "ok", None
+
+    persisted = False
+    if half_status:
+        second = _read_health_inventory(runner, deadline, vmid)
+        persisted = all(
+            second.get(identity) == status for identity, status in half_status.items()
+        )
+
+    audit_state = _audit_dpkg_lock(runner, deadline, vmid)
+    if audit_state is not None:
+        # The lock is busy or uncertain at audit time (after the second
+        # read); that uncertainty always takes precedence over whatever
+        # the two reads compared to.
+        return audit_state, None
+
+    if not half_status:
         # Only pending/triggers-* identities remain; never classify these
         # as FAILED.
         return "pending", None
-
-    second = _read_health_inventory(runner, deadline, vmid)
-    if all(second.get(identity) in HEALTH_HALF_STATUS_WORDS for identity in half):
-        return "interrupted", len(half)
+    if persisted:
+        return "interrupted", len(half_status)
     return "changed", None
 
 
@@ -888,10 +928,25 @@ def _check_health(
         vmid,
         ("test", "-e", "/var/run/reboot-required"),
         max_output=4096,
+        command_timeout=HEALTH_COMMAND_TIMEOUT_SECONDS,
     )
-    # Only the marker's presence is reliable evidence, matching the fixed
-    # tri-state reboot semantics used elsewhere in this helper.
-    reboot_required = True if reboot.returncode == 0 else None
+    if reboot.returncode == 0:
+        # Only the marker's presence is reliable evidence, matching the
+        # fixed tri-state reboot semantics used elsewhere in this helper.
+        reboot_required = True
+    elif _guest_still_running(vmid, runner, deadline):
+        reboot_required = None
+    else:
+        # The guest disappeared between the exec check and this probe;
+        # discard the evidence already collected for a single unestablished
+        # UNKNOWN result rather than a partially-stale one.
+        return {
+            "guest_exec": False,
+            "guest_exec_unavailable": True,
+            "dpkg": None,
+            "unfinished_package_count": None,
+            "reboot_required": None,
+        }
 
     return {
         "guest_exec": True,
@@ -998,6 +1053,8 @@ def handle_request(
         operation_timeout = UPDATE_OPERATION_TIMEOUT_SECONDS
     elif operation == OPERATION_PING:
         operation_timeout = PING_OPERATION_TIMEOUT_SECONDS
+    elif operation == OPERATION_CHECK_HEALTH:
+        operation_timeout = HEALTH_OPERATION_TIMEOUT_SECONDS
     else:
         operation_timeout = OPERATION_TIMEOUT_SECONDS
     deadline = OperationDeadline(clock(), operation_timeout, clock)

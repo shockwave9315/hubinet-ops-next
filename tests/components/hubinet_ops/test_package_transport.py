@@ -1156,8 +1156,9 @@ def test_update_transport_timeout_exceeds_helper_deadline() -> None:
 
 
 def test_health_transport_timeout_exceeds_helper_deadline() -> None:
-    """Health reuses the scan-sized transport bound over its helper deadline."""
-    assert HEALTH_TRANSPORT_TIMEOUT_SECONDS >= TRANSPORT_TIMEOUT_SECONDS
+    """Health has its own tight bound, above its own 60s helper deadline."""
+    assert HEALTH_TRANSPORT_TIMEOUT_SECONDS == 90.0
+    assert HEALTH_TRANSPORT_TIMEOUT_SECONDS > 60.0
 
 
 def _health_evidence(
@@ -1304,10 +1305,54 @@ async def test_health_transport_rejects_malformed_evidence(
     assert caught.value.reason is HealthReason.MALFORMED_EVIDENCE
 
 
-async def test_health_transport_rejects_wrong_protocol_and_operation(
+@pytest.mark.parametrize(
+    "evidence",
+    [
+        # guest_exec=True + guest_exec_unavailable=True is impossible.
+        {**_health_evidence(), "guest_exec_unavailable": True},
+        # guest_exec=False must discard every other field.
+        {
+            "guest_exec": False,
+            "guest_exec_unavailable": False,
+            "dpkg": "ok",
+            "unfinished_package_count": None,
+            "reboot_required": None,
+        },
+        {
+            "guest_exec": False,
+            "guest_exec_unavailable": True,
+            "dpkg": None,
+            "unfinished_package_count": None,
+            "reboot_required": True,
+        },
+        # dpkg == interrupted requires a positive count.
+        _health_evidence(dpkg="interrupted", unfinished_package_count=None),
+        _health_evidence(dpkg="interrupted", unfinished_package_count=0),
+        # Every other dpkg value requires no count at all.
+        _health_evidence(dpkg="ok", unfinished_package_count=1),
+        _health_evidence(dpkg="pending", unfinished_package_count=1),
+        _health_evidence(dpkg="busy", unfinished_package_count=1),
+        _health_evidence(dpkg="changed", unfinished_package_count=1),
+    ],
+)
+async def test_health_transport_rejects_contradictory_evidence_combinations(
+    hass: HomeAssistant, tmp_path: Path, evidence: dict[str, object]
+) -> None:
+    """A type-valid but logically impossible evidence combination is rejected."""
+    transport, *_ = await _transport(
+        hass, tmp_path, _operation_response("check_health", evidence)
+    )
+    with pytest.raises(PackageHealthError) as caught:
+        await transport.async_check_health("pve1", 200)
+    assert caught.value.reason is HealthReason.MALFORMED_EVIDENCE
+
+
+async def test_health_transport_distinguishes_protocol_mismatch_from_old_helper(
     hass: HomeAssistant, tmp_path: Path
 ) -> None:
-    """A wrong operation echo or incompatible protocol is HELPER_OUTDATED."""
+    """A true wire-protocol mismatch is distinct from the expected old-helper case."""
+    # A structurally valid protocol-1 envelope with the wrong operation echo
+    # is the expected old/v4-style helper case.
     wrong_operation, *_ = await _transport(
         hass, tmp_path, _operation_response("scan_packages", _health_evidence())
     )
@@ -1315,12 +1360,19 @@ async def test_health_transport_rejects_wrong_protocol_and_operation(
         await wrong_operation.async_check_health("pve1", 200)
     assert caught.value.reason is HealthReason.HELPER_OUTDATED
 
+    # An incompatible protocol_version is a true wire-protocol mismatch.
     response = _operation_response("check_health", _health_evidence())
     response["protocol_version"] = 2
     wrong_protocol, *_ = await _transport(hass, tmp_path, response)
     with pytest.raises(PackageHealthError) as caught:
         await wrong_protocol.async_check_health("pve1", 200)
-    assert caught.value.reason is HealthReason.HELPER_OUTDATED
+    assert caught.value.reason is HealthReason.PROTOCOL_MISMATCH
+
+    # A non-mapping payload is likewise a protocol mismatch, not "outdated".
+    non_mapping, *_ = await _transport(hass, tmp_path, ["not", "a", "mapping"])
+    with pytest.raises(PackageHealthError) as caught:
+        await non_mapping.async_check_health("pve1", 200)
+    assert caught.value.reason is HealthReason.PROTOCOL_MISMATCH
 
 
 @pytest.mark.parametrize(

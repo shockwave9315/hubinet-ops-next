@@ -1,7 +1,9 @@
 """Tests for LXC Health: the pure classifier, manager, and entity surface."""
 
 import asyncio
+from collections.abc import Callable
 from copy import deepcopy
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -34,14 +36,22 @@ from homeassistant.const import ATTR_ENTITY_ID, STATE_UNAVAILABLE, STATE_UNKNOWN
 from homeassistant.core import HomeAssistant
 
 from . import setup_integration
-from .test_package_cleanup import CleanupTransport, _candidates, _parsed
-from .test_package_cleanup import _manager as _cleanup_manager
-from .test_package_cleanup import _scan as _cleanup_scan
-from .test_package_cleanup import _snapshot_patches as _cleanup_snapshot_patches
-from .test_packages import ATTEMPTED_AT, RESULT, UpdateTransport
-from .test_packages import _review_target
-from .test_packages import _snapshot_patches as _update_snapshot_patches
-from .test_packages import _update_manager
+from .test_package_cleanup import (
+    CleanupTransport,
+    _candidates,
+    _manager as _cleanup_manager,
+    _parsed,
+    _scan as _cleanup_scan,
+    _snapshot_patches as _cleanup_snapshot_patches,
+)
+from .test_packages import (
+    ATTEMPTED_AT,
+    RESULT,
+    UpdateTransport,
+    _review_target,
+    _snapshot_patches as _update_snapshot_patches,
+    _update_manager,
+)
 
 HEALTH_BUTTON = "button.ct_nginx_health_check"
 HEALTH_SENSOR = "sensor.ct_nginx_health"
@@ -240,6 +250,63 @@ async def test_manual_health_claims_running_then_publishes_classified_outcome(
     assert record.checked_at == ATTEMPTED_AT
     assert record.guest_exec is True
     assert record.dpkg is HealthDpkgState.OK
+
+
+async def test_manual_health_task_creation_failure_rolls_back_and_reraises(
+    hass: HomeAssistant, mock_config_entry: MockConfigEntry
+) -> None:
+    """A manual Health task-creation failure rolls back the claim and re-raises.
+
+    The fake deliberately does NOT close the coroutine itself: the
+    implementation must own and close it explicitly (F4), never leaving an
+    un-awaited coroutine behind, and the caller (the Health button) must
+    still see an error rather than a silently stuck RUNNING claim.
+    """
+    transport = HealthTransport()
+    manager = _health_manager(hass, mock_config_entry, transport)
+    captured: dict[str, Any] = {}
+
+    def failing_create(hass_arg, coro, name, *args, **kwargs):
+        captured["coro"] = coro
+        raise RuntimeError("no background task slots")
+
+    with patch.object(
+        mock_config_entry,
+        "async_create_background_task",
+        side_effect=failing_create,
+    ):
+        with pytest.raises(PackageScanError) as caught:
+            manager.async_start_health("pve1", 200, target_is_running=True)
+
+    assert caught.value.failure is PackageScanFailure.EXECUTION_FAILED
+    assert manager.health_record("pve1", 200) == PackageHealthRecord()
+    assert ("pve1", 200) not in manager._health_tasks  # noqa: SLF001
+    assert captured["coro"].cr_frame is None
+
+
+async def test_eagerly_completed_manual_health_leaves_no_stale_task_entry(
+    hass: HomeAssistant, mock_config_entry: MockConfigEntry
+) -> None:
+    """F5: a transport that resolves without ever truly suspending leaves
+    no stale ``_health_tasks`` entry once the manual check has completed.
+    """
+
+    class ImmediateHealthTransport:
+        configured = True
+
+        async def async_check_health(
+            self, expected_node: str, vmid: int
+        ) -> PackageHealthOutcome:
+            return _default_health_outcome()
+
+    manager = _health_manager(hass, mock_config_entry, ImmediateHealthTransport())
+    task = manager.async_start_health("pve1", 200, target_is_running=True)
+    await task
+
+    assert ("pve1", 200) not in manager._health_tasks  # noqa: SLF001
+    record = manager.health_record("pve1", 200)
+    assert record.check_status is HealthCheckStatus.COMPLETED
+    assert record.state is HealthState.HEALTHY
 
 
 async def test_second_health_start_for_same_vmid_is_rejected_while_running(
@@ -482,6 +549,246 @@ async def test_autoremove_acceptance_invalidates_old_health(
 
 
 # ---------------------------------------------------------------------------
+# F1: RE-ENTRANCY-SAFE POST-OP HAND-OFF
+# ---------------------------------------------------------------------------
+
+
+async def test_reentrant_operations_during_update_success_publish_are_rejected(
+    hass: HomeAssistant, mock_config_entry: MockConfigEntry
+) -> None:
+    """Health RUNNING is claimed before the SUCCESS publish, not merely after it.
+
+    A synchronous ``on_state_change`` listener -- standing in for an eager
+    Home Assistant automation reacting to the just-published SUCCESS state
+    -- attempts a re-entrant Scan, manual Health, and Autoremove for the
+    same VMID. All three must already see Health RUNNING and be rejected,
+    proving the claim happened strictly before publication, not merely
+    without an ``await`` after it.
+    """
+    transport = UpdateTransport()
+    manager_holder: list[PackageManager] = []
+    attempts: dict[str, Exception | None] = {}
+    fired = {"value": False}
+
+    def on_state_change() -> None:
+        if not manager_holder or fired["value"]:
+            return
+        manager = manager_holder[0]
+        if manager.update_record("pve1", 200).status is not (
+            PackageUpdateStatus.SUCCESS
+        ):
+            return
+        fired["value"] = True
+        try:
+            manager.async_start_scan("pve1", 200, target_is_running=True)
+        except PackageScanError as err:
+            attempts["scan"] = err
+        else:
+            attempts["scan"] = None
+        try:
+            manager.async_start_health("pve1", 200, target_is_running=True)
+        except PackageScanError as err:
+            attempts["health"] = err
+        else:
+            attempts["health"] = None
+        try:
+            manager.async_start_autoremove(
+                "pve1", 200, target_is_running=True, snapshot_permission=True
+            )
+        except PackageUpdateError as err:
+            attempts["autoremove"] = err
+        else:
+            attempts["autoremove"] = None
+
+    manager, _proxmox = _update_manager(
+        hass, mock_config_entry, transport, on_state_change=on_state_change
+    )
+    manager_holder.append(manager)
+    await _review_target(manager, "pve1", 200)
+
+    patches = _update_snapshot_patches()
+    with patches[0], patches[1], patches[2], patches[3]:
+        await manager.async_start_update(
+            "pve1", 200, target_is_running=True, snapshot_permission=True
+        )
+
+    assert fired["value"] is True
+    assert set(attempts) == {"scan", "health", "autoremove"}
+    assert isinstance(attempts["scan"], PackageScanError)
+    assert attempts["scan"].failure is PackageScanFailure.PACKAGE_MANAGER_BUSY
+    assert isinstance(attempts["health"], PackageScanError)
+    assert attempts["health"].failure is PackageScanFailure.PACKAGE_MANAGER_BUSY
+    assert isinstance(attempts["autoremove"], PackageUpdateError)
+    assert attempts["autoremove"].outcome is PackageUpdateOutcome.PACKAGE_MANAGER_BUSY
+
+    # Update is still SUCCESS, and exactly one Health claim -- the post-op
+    # one -- survives.
+    assert manager.update_record("pve1", 200).status is PackageUpdateStatus.SUCCESS
+    health = manager.health_record("pve1", 200)
+    assert health.source is HealthSource.UPDATE
+    assert health.check_status in (
+        HealthCheckStatus.RUNNING,
+        HealthCheckStatus.COMPLETED,
+    )
+
+
+async def test_reentrant_operations_during_autoremove_success_publish_are_rejected(
+    hass: HomeAssistant, mock_config_entry: MockConfigEntry
+) -> None:
+    """The same re-entrancy protection holds for the post-Autoremove hand-off."""
+    candidates = _candidates(1)
+    transport = CleanupTransport([_parsed(candidates), _parsed(candidates)])
+    manager_holder: list[PackageManager] = []
+    attempts: dict[str, Exception | None] = {}
+    fired = {"value": False}
+
+    def on_state_change() -> None:
+        if not manager_holder or fired["value"]:
+            return
+        manager = manager_holder[0]
+        if manager.cleanup_record("pve1", 200).status is not (
+            PackageUpdateStatus.SUCCESS
+        ):
+            return
+        fired["value"] = True
+        try:
+            manager.async_start_scan("pve1", 200, target_is_running=True)
+        except PackageScanError as err:
+            attempts["scan"] = err
+        else:
+            attempts["scan"] = None
+        try:
+            manager.async_start_health("pve1", 200, target_is_running=True)
+        except PackageScanError as err:
+            attempts["health"] = err
+        else:
+            attempts["health"] = None
+        try:
+            manager.async_start_update(
+                "pve1", 200, target_is_running=True, snapshot_permission=True
+            )
+        except PackageUpdateError as err:
+            attempts["update"] = err
+        else:
+            attempts["update"] = None
+
+    manager, _proxmox = _cleanup_manager(
+        hass, mock_config_entry, transport, on_state_change=on_state_change
+    )
+    manager_holder.append(manager)
+    await _cleanup_scan(manager)
+
+    patches = _cleanup_snapshot_patches()
+    with patches[0], patches[1], patches[2], patches[3]:
+        manager.async_start_autoremove(
+            "pve1", 200, target_is_running=True, snapshot_permission=True
+        )
+        task = manager._cleanup_tasks[("pve1", 200)]  # noqa: SLF001
+        await task
+
+    assert fired["value"] is True
+    assert set(attempts) == {"scan", "health", "update"}
+    assert isinstance(attempts["scan"], PackageScanError)
+    assert attempts["scan"].failure is PackageScanFailure.PACKAGE_MANAGER_BUSY
+    assert isinstance(attempts["health"], PackageScanError)
+    assert attempts["health"].failure is PackageScanFailure.PACKAGE_MANAGER_BUSY
+    assert isinstance(attempts["update"], PackageUpdateError)
+    assert attempts["update"].outcome is PackageUpdateOutcome.PACKAGE_MANAGER_BUSY
+
+    assert manager.cleanup_record("pve1", 200).status is PackageUpdateStatus.SUCCESS
+    health = manager.health_record("pve1", 200)
+    assert health.source is HealthSource.AUTOREMOVE
+    assert health.check_status in (
+        HealthCheckStatus.RUNNING,
+        HealthCheckStatus.COMPLETED,
+    )
+
+
+# ---------------------------------------------------------------------------
+# F2: NO HEALTH FROM UNLOAD-CANCELLATION BRANCHES
+# ---------------------------------------------------------------------------
+
+
+async def test_cancelled_update_during_post_success_observation_starts_no_health(
+    hass: HomeAssistant, mock_config_entry: MockConfigEntry
+) -> None:
+    """Cancelling Update mid post-success observation never starts Health.
+
+    This is the config-entry unload/reload shape: HA cancels the tracked
+    background task while it is waiting inside the post-success cleanup
+    observation. The mutation must still terminalize SUCCESS exactly as
+    before, but no new Health diagnostic work may start and escape the
+    unload.
+    """
+    transport = UpdateTransport()
+    manager, _proxmox = _update_manager(hass, mock_config_entry, transport)
+    await _review_target(manager, "pve1", 200)
+    # Gate only the post-mutation observation, not the scan-phase call
+    # _review_target already made.
+    baseline_calls = transport.plan_autoremove_calls
+    transport.plan_autoremove_release.clear()
+
+    patches = _update_snapshot_patches()
+    with patches[0], patches[1], patches[2], patches[3]:
+        task = manager.async_start_update(
+            "pve1", 200, target_is_running=True, snapshot_permission=True
+        )
+        await asyncio.wait_for(
+            _wait_for_calls_beyond(
+                lambda: transport.plan_autoremove_calls, baseline_calls
+            ),
+            1,
+        )
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+    record = manager.update_record("pve1", 200)
+    assert record.status is PackageUpdateStatus.SUCCESS
+    assert record.outcome is PackageUpdateOutcome.SUCCESS
+    assert manager.health_record("pve1", 200) == PackageHealthRecord()
+    assert ("pve1", 200) not in manager._health_tasks  # noqa: SLF001
+    assert transport.health_calls == 0
+
+
+async def _wait_for_calls_beyond(count: Callable[[], int], baseline: int) -> None:
+    """Wait until a call counter advances past its captured baseline."""
+    while count() <= baseline:
+        await asyncio.sleep(0)
+
+
+async def test_cancelled_autoremove_during_post_success_observation_starts_no_health(
+    hass: HomeAssistant, mock_config_entry: MockConfigEntry
+) -> None:
+    """The same unload-safety guard holds for the post-Autoremove observation."""
+    candidates = _candidates(1)
+    transport = CleanupTransport(
+        [_parsed(candidates), _parsed(candidates), _parsed(candidates)]
+    )
+    transport.gate_plan_autoremove_call = 3
+    manager, _proxmox = _cleanup_manager(hass, mock_config_entry, transport)
+    await _cleanup_scan(manager)
+
+    patches = _cleanup_snapshot_patches()
+    with patches[0], patches[1], patches[2], patches[3]:
+        manager.async_start_autoremove(
+            "pve1", 200, target_is_running=True, snapshot_permission=True
+        )
+        task = manager._cleanup_tasks[("pve1", 200)]  # noqa: SLF001
+        await asyncio.wait_for(transport.gated_plan_autoremove_entered.wait(), 1)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+    record = manager.cleanup_record("pve1", 200)
+    assert record.status is PackageUpdateStatus.SUCCESS
+    assert record.outcome is PackageUpdateOutcome.SUCCESS
+    assert manager.health_record("pve1", 200) == PackageHealthRecord()
+    assert ("pve1", 200) not in manager._health_tasks  # noqa: SLF001
+    assert transport.health_calls == 0
+
+
+# ---------------------------------------------------------------------------
 # POST-UPDATE / POST-AUTOREMOVE HAND-OFF
 # ---------------------------------------------------------------------------
 
@@ -570,9 +877,10 @@ async def test_health_outcome_never_changes_the_published_update_outcome(
         await manager.async_start_update(
             "pve1", 200, target_is_running=True, snapshot_permission=True
         )
-        health_task = manager._health_tasks[("pve1", 200)]  # noqa: SLF001
-        await health_task
 
+    # The default (unreleased) transport health check resolves eagerly, so
+    # no stale entry is left in _health_tasks (see the F5 regression test).
+    assert ("pve1", 200) not in manager._health_tasks  # noqa: SLF001
     assert manager.update_record("pve1", 200).status is PackageUpdateStatus.SUCCESS
     assert manager.health_record("pve1", 200).state is HealthState.FAILED
 
@@ -602,15 +910,21 @@ async def test_health_cancellation_after_handoff_never_changes_update_outcome(
 async def test_health_task_creation_failure_never_changes_update_outcome(
     hass: HomeAssistant, mock_config_entry: MockConfigEntry
 ) -> None:
-    """A failure creating the Health task removes only the RUNNING claim."""
+    """A failure creating the Health task removes only the RUNNING claim.
+
+    The fake deliberately does NOT close the coroutine itself: the
+    implementation must own and close it explicitly (F4), never leaving an
+    un-awaited coroutine behind.
+    """
     transport = UpdateTransport()
     manager, _proxmox = _update_manager(hass, mock_config_entry, transport)
     await _review_target(manager, "pve1", 200)
     original_create = mock_config_entry.async_create_background_task
+    captured: dict[str, Any] = {}
 
     def failing_create(hass_arg, coro, name, *args, **kwargs):
         if name.startswith("package health check"):
-            coro.close()
+            captured["coro"] = coro
             raise RuntimeError("no background task slots")
         return original_create(hass_arg, coro, name, *args, **kwargs)
 
@@ -632,6 +946,8 @@ async def test_health_task_creation_failure_never_changes_update_outcome(
 
     assert manager.update_record("pve1", 200).status is PackageUpdateStatus.SUCCESS
     assert manager.health_record("pve1", 200) == PackageHealthRecord()
+    assert ("pve1", 200) not in manager._health_tasks  # noqa: SLF001
+    assert captured["coro"].cr_frame is None
 
 
 async def test_failed_autoremove_does_not_start_health(

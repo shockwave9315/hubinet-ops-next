@@ -58,10 +58,11 @@ TRANSPORT_TIMEOUT_SECONDS = 300.0
 UPDATE_TRANSPORT_TIMEOUT_SECONDS = 1860.0
 PING_TRANSPORT_TIMEOUT_SECONDS = 45.0
 PROBE_TIMEOUT_SECONDS = 30.0
-# Health does as much guest work as scan_packages and shares its helper-side
-# operation deadline (OPERATION_TIMEOUT_SECONDS), so it reuses the same
-# transport bound, which already exceeds that helper deadline.
-HEALTH_TRANSPORT_TIMEOUT_SECONDS = TRANSPORT_TIMEOUT_SECONDS
+# Health has its own, tighter helper-side operation deadline
+# (HEALTH_OPERATION_TIMEOUT_SECONDS = 60s in the helper) so it does not
+# block same-VMID Scan/Update/Autoremove/Health on scan-sized bounds; this
+# transport bound stays well above that helper deadline.
+HEALTH_TRANSPORT_TIMEOUT_SECONDS = 90.0
 _HEALTH_EVIDENCE_KEYS = frozenset(
     {
         "guest_exec",
@@ -754,16 +755,25 @@ def _parse_health_response(
     """Validate one Health response and return its strictly typed evidence."""
     if not isinstance(payload, Mapping):
         raise PackageHealthError(
-            HealthReason.HELPER_OUTDATED,
-            "package helper returned a malformed response",
+            HealthReason.PROTOCOL_MISMATCH,
+            "package helper returned a non-protocol response",
         )
     if (
         type(payload.get("protocol_version")) is not int
         or payload.get("protocol_version") != PROTOCOL_VERSION
-        or type(payload.get("helper_version")) is not int
+    ):
+        raise PackageHealthError(
+            HealthReason.PROTOCOL_MISMATCH,
+            "package helper protocol is incompatible",
+        )
+    if (
+        type(payload.get("helper_version")) is not int
         or payload.get("helper_version") < 1
         or payload.get("operation") != OPERATION_CHECK_HEALTH
     ):
+        # A structurally valid protocol-1 envelope with the wrong operation
+        # echo (or missing helper_version) is the expected old-helper case,
+        # not a wire-protocol mismatch.
         raise PackageHealthError(
             HealthReason.HELPER_OUTDATED,
             "package helper is outdated; run the current bootstrap command again",
@@ -835,10 +845,29 @@ def _parse_health_response(
             HealthReason.MALFORMED_EVIDENCE,
             "package helper returned malformed Health evidence",
         )
-    if guest_exec and dpkg is None:
+    # Reject logically impossible combinations the type checks above cannot
+    # catch: a type-valid but self-contradictory shape is malformed too.
+    if guest_exec:
+        if guest_exec_unavailable or dpkg is None:
+            raise PackageHealthError(
+                HealthReason.MALFORMED_EVIDENCE,
+                "package helper returned contradictory Health evidence",
+            )
+    elif dpkg is not None or unfinished is not None or reboot_required is not None:
         raise PackageHealthError(
             HealthReason.MALFORMED_EVIDENCE,
-            "package helper returned incomplete Health evidence",
+            "package helper returned contradictory Health evidence",
+        )
+    if dpkg is HealthDpkgState.INTERRUPTED:
+        if unfinished is None or unfinished < 1:
+            raise PackageHealthError(
+                HealthReason.MALFORMED_EVIDENCE,
+                "package helper returned contradictory Health evidence",
+            )
+    elif unfinished is not None:
+        raise PackageHealthError(
+            HealthReason.MALFORMED_EVIDENCE,
+            "package helper returned contradictory Health evidence",
         )
     return PackageHealthEvidence(
         guest_exec=guest_exec,
