@@ -133,7 +133,7 @@ Status date: 2026-09-13
 
 - Architecture: **ACCEPTED BY MAINTAINER on 2026-09-13**; see the durable
   boundary in [ARCHITECTURE.md](ARCHITECTURE.md).
-- Implementation: **NOT STARTED** at this checkpoint.
+- Implementation: **IMPLEMENTED / READY FOR REVIEW**.
 - Accepted behavior: observe the exact native Create UPID in the background,
   publish a terminal result notification, and refresh only the exact guest's
   snapshot selector after confirmed success. The main coordinator remains
@@ -143,11 +143,14 @@ Status date: 2026-09-13
   seconds; an ambiguous upstream POST failure without a returned UPID retains
   existing button-error behavior and relies on normal selector polling.
 - Release target: integration `2026.9.1.9`, helper v4, protocol v1 unchanged.
+- Validation: **584 tests and 207 snapshots passed**; repository Ruff,
+  translation and release-parity checks, helper SHA/protocol consistency,
+  ShellCheck, and shell syntax passed.
 
 ## Next
 
-Implement and review the accepted `2026.9.1.9` native snapshot Create
-observation release. Post-update Health remains separate future work.
+Review and release the accepted `2026.9.1.9` native snapshot Create observation
+release. Post-update Health remains separate future work.
 
 ## Explicitly not started
 
