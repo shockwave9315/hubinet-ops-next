@@ -1,6 +1,6 @@
 # Status
 
-Status date: 2026-09-11
+Status date: 2026-09-13
 
 ## Current baseline
 
@@ -9,12 +9,12 @@ Status date: 2026-09-11
 - Baseline tag: `baseline-ha-2026.9.1`.
 - Merged runtime: a domain-isolated custom-integration fork of Home Assistant
   Core `proxmoxve`, plus the package scan, review, and update subsystem and
-  guided fresh-install enrollment documented in
+  guided fresh-install enrollment and native snapshot Restore documented in
   [ARCHITECTURE.md](ARCHITECTURE.md).
-- Current release: integration `2026.9.1.6`, helper v4, protocol v1.
+- Current release: integration `2026.9.1.7`, helper v4, protocol v1.
 - Merged baseline commit:
-  `6598d603fb2c1ad4b185e7d79a92f029f89ced46`.
-- Baseline validation: **495 tests and 195 snapshots passed**; repository Ruff
+  `27eb9c49ce24f97a4b777eeea69ac52185cabd50`.
+- Baseline validation: **563 tests and 207 snapshots passed**; repository Ruff
   passed.
 
 ## Merged
@@ -99,25 +99,40 @@ Status date: 2026-09-11
 - Release target: integration `2026.9.1.6`, helper v4, protocol v1.
 - Validation: **495 tests and 195 snapshots passed**; repository Ruff passed.
 
-## PR #12: native snapshot Restore
+## PR #12: native snapshot Restore (merged)
 
 - Architecture: **ACCEPTED BY MAINTAINER on 2026-09-11**, before runtime
   implementation; see the durable boundary in
   [ARCHITECTURE.md](ARCHITECTURE.md).
-- Implementation: **IMPLEMENTED IN PR #12**. Native PVE snapshot selection and
-  explicit Restore are available for eligible QEMU VMs and LXCs; LXC package
-  truth and operation exclusion follow the accepted fail-closed boundary.
-- Release target: integration `2026.9.1.7`, helper v4, protocol v1 unchanged.
+- Implementation: **MERGED IN RELEASE 2026.9.1.7**. Native PVE snapshot
+  selection and explicit Restore are available for eligible QEMU VMs and LXCs;
+  LXC package truth and operation exclusion follow the accepted fail-closed
+  boundary.
+- Release: integration `2026.9.1.7`, helper v4, protocol v1 unchanged.
 - Post-implementation red-team result: **PASS AFTER SMALL FIXES**. The focused
   file-boundary, initial-polling, selector-identity, validation, and safety-test
-  corrections are applied on the open PR #12 branch.
+  corrections are included in the merged release.
 - Validation: **563 tests and 207 snapshots passed**; repository Ruff,
+  translation and release-parity checks, helper SHA/protocol consistency,
+  ShellCheck, and shell syntax passed.
+
+## 2026.9.1.8 Restore polling hotfix
+
+- Hotfix: **IMPLEMENTED / READY FOR REVIEW** within the accepted PR #12
+  architecture.
+- Restore no longer forces an immediate full coordinator refresh; native guest
+  state converges through the normal coordinator poll.
+- Snapshot selector initial, periodic, and manual updates use Home Assistant's
+  native entity-platform concurrency limit of three.
+- Release target: integration `2026.9.1.8`, helper v4, protocol v1 unchanged.
+- Validation: **564 tests and 207 snapshots passed**; repository Ruff,
   translation and release-parity checks, helper SHA/protocol consistency,
   ShellCheck, and shell syntax passed.
 
 ## Next
 
-Post-update Health remains separate future work and is not part of PR #12.
+Review and release the `2026.9.1.8` Restore polling hotfix. Post-update Health
+remains separate future work.
 
 ## Explicitly not started
 
