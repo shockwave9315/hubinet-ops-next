@@ -26,6 +26,12 @@ from custom_components.hubinet_ops.const import (
     DOMAIN,
     ProxmoxPermission,
 )
+from custom_components.hubinet_ops.packages.models import (
+    HealthDpkgState,
+    HealthState,
+    PackageHealthEvidence,
+    PackageHealthOutcome,
+)
 from custom_components.hubinet_ops.packages.parser import ParsedAutoremoveSimulation
 from custom_components.hubinet_ops.packages.transport import PackageHelperProbe
 from homeassistant.const import (
@@ -244,6 +250,26 @@ def package_transport_material(mock_config_entry: MockConfigEntry) -> Iterator[N
             AsyncMock(
                 return_value=ParsedAutoremoveSimulation(
                     packages=(), not_upgraded_count=0
+                )
+            ),
+        ),
+        # Health may be triggered automatically right after a successful
+        # Update/Autoremove; give every test a harmless default so an
+        # incidental post-op check never opens a real SSH connection.
+        patch(
+            "custom_components.hubinet_ops.packages.transport."
+            "AsyncSSHPackageTransport.async_check_health",
+            AsyncMock(
+                return_value=PackageHealthOutcome(
+                    HealthState.HEALTHY,
+                    None,
+                    PackageHealthEvidence(
+                        guest_exec=True,
+                        guest_exec_unavailable=False,
+                        dpkg=HealthDpkgState.OK,
+                        unfinished_package_count=None,
+                        reboot_required=None,
+                    ),
                 )
             ),
         ),

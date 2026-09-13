@@ -16,7 +16,15 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from custom_components.hubinet_ops.const import EXPECTED_HELPER_VERSION
-from custom_components.hubinet_ops.packages.transport import TRANSPORT_TIMEOUT_SECONDS
+from custom_components.hubinet_ops.packages.models import (
+    HealthReason,
+    HealthState,
+    classify_health,
+)
+from custom_components.hubinet_ops.packages.transport import (
+    TRANSPORT_TIMEOUT_SECONDS,
+    _parse_health_response,
+)
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 HELPER_PATH = REPO_ROOT / "deploy/hubinet-package-scan-helper.py"
@@ -72,6 +80,10 @@ class FakeHelperRunner:
         inventory_outputs: tuple[str, ...] | None = None,
         ping_returncode: int = 0,
         reboot_returncode: int = 1,
+        audit_returncode: int = 0,
+        audit_stdout: str = "",
+        audit_stdout_bytes: bytes | None = None,
+        status_after_exec_failure: str | None = None,
     ) -> None:
         """Initialize fixed command outcomes."""
         self.local_node = local_node
@@ -86,6 +98,11 @@ class FakeHelperRunner:
         self.inventory_reads = 0
         self.ping_returncode = ping_returncode
         self.reboot_returncode = reboot_returncode
+        self.audit_returncode = audit_returncode
+        self.audit_stdout = audit_stdout
+        self.audit_stdout_bytes = audit_stdout_bytes
+        self.status_after_exec_failure = status_after_exec_failure
+        self.status_calls = 0
         self.calls: list[tuple[tuple[str, ...], float, int]] = []
 
     def __call__(self, argv, timeout, max_output):
@@ -99,7 +116,11 @@ class FakeHelperRunner:
         if argv[:2] == ("pct", "config"):
             return helper.CommandResult(self.config_returncode, b"arch: amd64\n", b"")
         if argv[:2] == ("pct", "status"):
-            return helper.CommandResult(0, f"status: {self.status}\n".encode(), b"")
+            self.status_calls += 1
+            status = self.status
+            if self.status_calls > 1 and self.status_after_exec_failure is not None:
+                status = self.status_after_exec_failure
+            return helper.CommandResult(0, f"status: {status}\n".encode(), b"")
         if "/etc/os-release" in rendered:
             return helper.CommandResult(0, b'ID=debian\nVERSION_ID="12"\n', b"")
         if "apt-get --version" in rendered:
@@ -120,6 +141,13 @@ class FakeHelperRunner:
             return helper.CommandResult(
                 self.mutation_returncode, b"", self.mutation_stderr.encode()
             )
+        if "dpkg --audit" in rendered:
+            audit_stdout = (
+                self.audit_stdout_bytes
+                if self.audit_stdout_bytes is not None
+                else self.audit_stdout.encode()
+            )
+            return helper.CommandResult(self.audit_returncode, audit_stdout, b"")
         if "dpkg --print-architecture" in rendered:
             return helper.CommandResult(0, b"amd64\n", b"")
         if "dpkg-query" in rendered:
@@ -157,7 +185,7 @@ def test_helper_uses_fixed_commands_and_returns_versioned_identity() -> None:
     response = _handle(runner)
     assert response["ok"] is True
     assert response["protocol_version"] == 1
-    assert response["helper_version"] == 4
+    assert response["helper_version"] == helper.HELPER_VERSION
     assert response["operation"] == "scan_packages"
     assert response["target"] == {"node": "pve1", "vmid": 200}
     assert response["evidence"]["reboot_required"] is True
@@ -187,7 +215,7 @@ def test_probe_returns_local_node_and_never_calls_pct() -> None:
     )
     assert response == {
         "protocol_version": 1,
-        "helper_version": 4,
+        "helper_version": helper.HELPER_VERSION,
         "operation": "probe",
         "ok": True,
         "node": "pve1",
@@ -394,7 +422,8 @@ def test_fixed_upgrade_policy_keeps_held_packages_and_forbids_unsafe_apt_modes()
 
 
 @pytest.mark.parametrize(
-    "operation", ["scan_packages", "plan_packages", "update_packages"]
+    "operation",
+    ["scan_packages", "plan_packages", "update_packages", "check_health"],
 )
 def test_all_package_operations_use_same_vmid_lock(operation: str) -> None:
     """Every package operation takes the unchanged per-VMID lock boundary."""
@@ -856,3 +885,701 @@ def test_helper_source_is_python_3_11_compatible() -> None:
     aliases; this also stands as a compile-error check.
     """
     ast.parse(HELPER_PATH.read_text(), feature_version=(3, 11))
+
+
+def _health(runner: FakeHelperRunner, **kwargs):
+    """Run one ``check_health`` request through the fixed dispatch."""
+    return helper.handle_request(
+        _request(operation="check_health"),
+        runner=runner,
+        lock_factory=lambda _vmid: nullcontext(),
+        **kwargs,
+    )
+
+
+def test_check_health_happy_path_is_bounded_and_versioned() -> None:
+    """A clean, running guest returns bounded evidence with no reboot marker."""
+    runner = FakeHelperRunner(reboot_returncode=1)
+    response = _health(runner)
+    assert response["ok"] is True
+    assert response["helper_version"] == helper.HELPER_VERSION
+    assert response["operation"] == "check_health"
+    assert response["target"] == {"node": "pve1", "vmid": 200}
+    assert response["evidence"] == {
+        "guest_exec": True,
+        "guest_exec_unavailable": False,
+        "dpkg": "ok",
+        "unfinished_package_count": None,
+        "reboot_required": None,
+    }
+    # No package names, dpkg stdout, or other guest-controlled text leaks out.
+    assert "openssl" not in json.dumps(response)
+
+
+def test_check_health_identity_mismatch_is_unestablished_not_failed() -> None:
+    """A wrong local node is a classified failure, never a FAILED verdict."""
+    response = _health(FakeHelperRunner(local_node="pve2"))
+    assert response["ok"] is False
+    assert response["error"]["classification"] == "identity_mismatch"
+
+
+def test_check_health_stopped_target_is_unestablished_not_failed() -> None:
+    """A stopped/unavailable target never becomes FAILED Health evidence."""
+    runner = FakeHelperRunner(status="stopped")
+    response = _health(runner)
+    assert response["ok"] is False
+    assert response["error"]["classification"] == "guest_unavailable"
+    assert not any(call[0][-1:] == ("/bin/true",) for call in runner.calls)
+
+
+def test_check_health_exec_failure_while_still_running_is_positive_failure() -> None:
+    """A guest that answers pct status but fails /bin/true is FAILED evidence."""
+    runner = FakeHelperRunner(ping_returncode=1, status="running")
+    response = _health(runner)
+    assert response["ok"] is True
+    assert response["evidence"] == {
+        "guest_exec": False,
+        "guest_exec_unavailable": False,
+        "dpkg": None,
+        "unfinished_package_count": None,
+        "reboot_required": None,
+    }
+    # dpkg/reboot checks are skipped once guest_exec is false.
+    assert not any("dpkg" in " ".join(call[0]) for call in runner.calls)
+    assert not any(
+        "/var/run/reboot-required" in " ".join(call[0]) for call in runner.calls
+    )
+
+
+def test_check_health_exec_failure_after_guest_stops_is_unknown() -> None:
+    """A guest that stops between validation and exec is UNKNOWN, not FAILED."""
+    runner = FakeHelperRunner(
+        ping_returncode=1, status="running", status_after_exec_failure="stopped"
+    )
+    response = _health(runner)
+    assert response["ok"] is True
+    assert response["evidence"]["guest_exec"] is False
+    assert response["evidence"]["guest_exec_unavailable"] is True
+
+
+def test_check_health_exec_timeout_is_bounded_timeout_failure() -> None:
+    """A hanging fixed exec command is a bounded timeout, never a hang."""
+
+    def timeout_runner(argv, timeout, max_output):
+        if argv[-1:] == ("/bin/true",):
+            return helper.CommandResult(-9, b"", b"", timed_out=True)
+        return FakeHelperRunner()(argv, timeout, max_output)
+
+    response = _health(timeout_runner)
+    assert response["ok"] is False
+    assert response["error"]["classification"] == "timeout"
+
+
+def test_check_health_dpkg_ok_with_no_unfinished_state() -> None:
+    """A fully installed inventory is dpkg ``ok`` with no audit call at all."""
+    runner = FakeHelperRunner(inventory_outputs=(TWO_INVENTORY,))
+    response = _health(runner)
+    assert response["evidence"]["dpkg"] == "ok"
+    assert response["evidence"]["unfinished_package_count"] is None
+    assert not any("dpkg --audit" in " ".join(call[0]) for call in runner.calls)
+
+
+# Verbatim LC_ALL=C ``dpkg --audit`` output (dpkg 1.22) for a half-* database.
+AUDIT_HALF_INSTALLED = (
+    "The following packages are only half installed, due to problems during\n"
+    "installation.  The installation can probably be completed by retrying it;\n"
+    "the packages can be removed using dselect or dpkg --remove:\n"
+    " openssl              Secure Sockets Layer toolkit\n\n"
+)
+AUDIT_HALF_CONFIGURED = (
+    "The following packages are only half configured, probably due to problems\n"
+    "configuring them the first time.  The configuration should be retried using\n"
+    "dpkg --configure <package> or the configure menu option in dselect:\n"
+    " openssl              Secure Sockets Layer toolkit\n\n"
+)
+AUDIT_LOCKED_PREFIX = (
+    "Another process has locked the database for writing, and might currently be\n"
+    "modifying it, some of the following problems might just be due to that.\n\n"
+)
+
+
+def test_check_health_persistent_half_state_is_interrupted() -> None:
+    """A half-installed identity that survives a second read is FAILED evidence."""
+    half = "openssl\tamd64\t3.0.11-1\thalf-installed\n"
+    runner = FakeHelperRunner(
+        inventory_outputs=(half, half), audit_stdout=AUDIT_HALF_INSTALLED
+    )
+    response = _health(runner)
+    assert response["evidence"]["dpkg"] == "interrupted"
+    assert response["evidence"]["unfinished_package_count"] == 1
+    audit_calls = [
+        call for call in runner.calls if "dpkg --audit" in " ".join(call[0])
+    ]
+    assert len(audit_calls) == 1
+
+
+def test_check_health_changed_identity_between_reads_is_unknown() -> None:
+    """A half-installed identity that resolved by the second read is UNKNOWN."""
+    half = "openssl\tamd64\t3.0.11-1\thalf-installed\n"
+    resolved = "openssl\tamd64\t3.0.11-1\tinstalled\n"
+    runner = FakeHelperRunner(inventory_outputs=(half, resolved))
+    response = _health(runner)
+    assert response["evidence"]["dpkg"] == "changed"
+    assert response["evidence"]["unfinished_package_count"] is None
+
+
+@pytest.mark.parametrize(
+    "status",
+    ["unpacked", "triggers-awaited", "triggers-pending", "half-configured"],
+)
+def test_check_health_pending_only_is_never_failed(status: str) -> None:
+    """Packages merely pending (including half-configured) are UNKNOWN, never FAILED.
+
+    The lock is still audited for busy/uncertain disambiguation even when
+    only pending identities exist, but a clean audit result here always
+    classifies as pending -- a P-only inventory is never a second-read
+    candidate and can never become FAILED.
+    """
+    pending = f"openssl\tamd64\t3.0.11-1\t{status}\n"
+    runner = FakeHelperRunner(inventory_outputs=(pending,))
+    response = _health(runner)
+    assert response["evidence"]["dpkg"] == "pending"
+    assert response["evidence"]["unfinished_package_count"] is None
+    assert any("dpkg --audit" in " ".join(call[0]) for call in runner.calls)
+    # Only one inventory read -- a P-only result never re-reads.
+    assert runner.inventory_reads == 1
+
+
+@pytest.mark.parametrize(
+    ("audit", "expected"),
+    [
+        ({}, "pending"),
+        (
+            {
+                "audit_stdout": (
+                    "openssl:\n Another process has locked the database for writing\n"
+                )
+            },
+            "busy",
+        ),
+        ({"audit_returncode": 2}, "lock_unknown"),
+        ({"audit_stdout_bytes": b"\xff\xfe not utf-8"}, "lock_unknown"),
+    ],
+)
+def test_check_health_pending_only_is_one_read_and_audit_uncertainty_wins(
+    audit: dict[str, object], expected: str
+) -> None:
+    """A P-only inventory is read once; busy/uncertain audit wins over pending.
+
+    Even if the guest would have finished the package by a hypothetical
+    second read, the result stays an UNKNOWN-only classification: P-only
+    evidence can never become FAILED or a false HEALTHY ``ok``.
+    """
+    pending = "openssl\tamd64\t3.0.11-1\ttriggers-pending\n"
+    resolved = "openssl\tamd64\t3.0.11-1\tinstalled\n"
+    runner = FakeHelperRunner(inventory_outputs=(pending, resolved), **audit)
+    response = _health(runner)
+    assert response["evidence"]["dpkg"] == expected
+    assert response["evidence"]["unfinished_package_count"] is None
+    assert runner.inventory_reads == 1
+
+
+def test_check_health_audit_lock_notice_is_package_manager_busy() -> None:
+    """The fixed LC_ALL=C lock notice is disambiguated as busy, not FAILED."""
+    half = "openssl\tamd64\t3.0.11-1\thalf-installed\n"
+    runner = FakeHelperRunner(
+        inventory_outputs=(half,),
+        audit_stdout=(
+            "openssl:\n"
+            " Another process has locked the database for writing\n"
+        ),
+    )
+    response = _health(runner)
+    assert response["evidence"]["dpkg"] == "busy"
+
+
+def test_check_health_audit_failure_is_lock_unknown() -> None:
+    """A nonzero dpkg --audit result cannot be evaluated reliably."""
+    half = "openssl\tamd64\t3.0.11-1\thalf-installed\n"
+    runner = FakeHelperRunner(inventory_outputs=(half,), audit_returncode=2)
+    response = _health(runner)
+    assert response["evidence"]["dpkg"] == "lock_unknown"
+
+
+def test_check_health_progressed_half_state_is_changed_not_interrupted() -> None:
+    """Progress between two half-* states is CHANGED, not a persistent failure.
+
+    half-installed -> half-configured is forward progress, not the same
+    stuck state; requiring the *exact* original status (not merely "still
+    somewhere in the half-* set") across both reads prevents this from
+    being misclassified as FAILED.
+    """
+    half_installed = "openssl\tamd64\t3.0.11-1\thalf-installed\n"
+    half_configured = "openssl\tamd64\t3.0.11-1\thalf-configured\n"
+    runner = FakeHelperRunner(inventory_outputs=(half_installed, half_configured))
+    response = _health(runner)
+    assert response["evidence"]["dpkg"] == "changed"
+    assert response["evidence"]["unfinished_package_count"] is None
+
+
+def test_check_health_persisted_half_configured_with_clear_audit_is_pending() -> None:
+    """half-configured is never FAILED, even persisted with a clear audit.
+
+    Reproduced with real apt 3.0.3 / dpkg 1.22.22: a successful
+    ``dpkg --unpack --auto-deconfigure`` leaves a Breaks-deconfigured package
+    half-configured across later successful dpkg runs, and in the gaps between
+    them only apt's frontend lock is held, so audit reports it under this
+    section with no busy notice.
+    """
+    half_configured = "openssl\tamd64\t3.0.11-1\thalf-configured\n"
+    runner = FakeHelperRunner(
+        inventory_outputs=(half_configured, half_configured),
+        audit_stdout=AUDIT_HALF_CONFIGURED,
+    )
+    response = _health(runner)
+    assert response["evidence"]["dpkg"] == "pending"
+    assert response["evidence"]["unfinished_package_count"] is None
+
+
+def test_check_health_second_read_precedes_audit_so_busy_wins_over_persisted() -> None:
+    """A busy lock observed at audit time (after the second read) is never FAILED.
+
+    Even though both reads show the identical half-installed state, dpkg
+    could still be actively working on it right up to the audit; the busy
+    result at that point takes precedence over the read comparison.
+    """
+    half = "openssl\tamd64\t3.0.11-1\thalf-installed\n"
+    runner = FakeHelperRunner(
+        inventory_outputs=(half, half),
+        audit_stdout=(
+            "openssl:\n Another process has locked the database for writing\n"
+        ),
+    )
+    response = _health(runner)
+    assert response["evidence"]["dpkg"] == "busy"
+    assert response["evidence"]["unfinished_package_count"] is None
+    # The order is read, re-read, then audit.
+    dpkg_query_indices = [
+        index
+        for index, call in enumerate(runner.calls)
+        if "dpkg-query" in " ".join(call[0])
+    ]
+    audit_index = next(
+        index
+        for index, call in enumerate(runner.calls)
+        if "dpkg --audit" in " ".join(call[0])
+    )
+    assert len(dpkg_query_indices) == 2
+    assert max(dpkg_query_indices) < audit_index
+
+
+@pytest.mark.parametrize(
+    ("half_status", "audit_stdout", "expected"),
+    [
+        # Lock held: dpkg's own notice precedes its half-* report.
+        ("half-installed", AUDIT_LOCKED_PREFIX + AUDIT_HALF_INSTALLED, "busy"),
+        ("half-configured", AUDIT_LOCKED_PREFIX + AUDIT_HALF_CONFIGURED, "busy"),
+        # Lock tested and clear: audit itself still reports the same state.
+        ("half-installed", AUDIT_HALF_INSTALLED, "interrupted"),
+        # half-configured is pending even then (apt deconfigure between runs).
+        ("half-configured", AUDIT_HALF_CONFIGURED, "pending"),
+        # Audit's snapshot has no problem, so dpkg never tested the lock; a
+        # live writer may hold it (reproduced with a real fcntl lock + rc 0).
+        ("half-installed", "", "changed"),
+        # A different half-* state is not audit's report of the persisted one.
+        ("half-installed", AUDIT_HALF_CONFIGURED, "changed"),
+    ],
+)
+def test_check_health_clear_lock_requires_audit_to_report_the_half_state(
+    half_status: str, audit_stdout: str, expected: str
+) -> None:
+    """dpkg --audit is not a lock probe: a missing busy notice alone is not FAILED.
+
+    ``dpkg --audit`` opens the database read-only, always exits 0, and runs
+    its fcntl F_GETLK check on the database lock only after its own
+    snapshot finds a problem. Identical reads plus a silent audit therefore
+    cannot prove that no writer still holds the lock.
+    """
+    half = f"openssl\tamd64\t3.0.11-1\t{half_status}\n"
+    runner = FakeHelperRunner(inventory_outputs=(half, half), audit_stdout=audit_stdout)
+    response = _health(runner)
+    assert response["evidence"]["dpkg"] == expected
+    assert response["evidence"]["unfinished_package_count"] == (
+        1 if expected == "interrupted" else None
+    )
+
+
+# Verbatim LC_ALL=C ``dpkg --audit`` output (dpkg 1.22.22) for a reinst-required
+# half-* package (half-installed reproduced by SIGKILLing a real ``dpkg
+# --unpack``; half-configured confirmed against a reinst-required status
+# database): dpkg lists it only under this section, never under its half-*
+# header. Only half-installed can become FAILED through it.
+AUDIT_REINSTREQ = (
+    "The following packages are in a mess due to serious problems during\n"
+    "installation.  They must be reinstalled for them (and any packages\n"
+    "that depend on them) to function properly:\n"
+    " openssl              Secure Sockets Layer toolkit\n\n"
+)
+
+
+@pytest.mark.parametrize(
+    ("half_status", "audit_stdout", "expected"),
+    [
+        ("half-installed", AUDIT_REINSTREQ, "interrupted"),
+        ("half-configured", AUDIT_REINSTREQ, "pending"),
+        ("half-installed", AUDIT_LOCKED_PREFIX + AUDIT_REINSTREQ, "busy"),
+    ],
+)
+def test_check_health_reinst_required_audit_section_confirms_persisted_half_state(
+    half_status: str, audit_stdout: str, expected: str
+) -> None:
+    """A persisted reinst-required half-installed state is interrupted."""
+    half = f"openssl\tamd64\t3.0.11-1\t{half_status}\n"
+    runner = FakeHelperRunner(inventory_outputs=(half, half), audit_stdout=audit_stdout)
+    response = _health(runner)
+    assert response["evidence"]["dpkg"] == expected
+    assert response["evidence"]["unfinished_package_count"] == (
+        1 if expected == "interrupted" else None
+    )
+
+
+def test_check_health_mixed_half_states_count_only_half_installed() -> None:
+    """A half-configured neighbour neither blocks nor inflates FAILED evidence."""
+    mixed = (
+        "openssl\tamd64\t3.0.11-1\thalf-installed\n"
+        "libssl3\tamd64\t3.0.11-1\thalf-configured\n"
+    )
+    runner = FakeHelperRunner(
+        inventory_outputs=(mixed, mixed),
+        audit_stdout=AUDIT_HALF_CONFIGURED + AUDIT_HALF_INSTALLED,
+    )
+    response = _health(runner)
+    assert response["evidence"]["dpkg"] == "interrupted"
+    assert response["evidence"]["unfinished_package_count"] == 1
+
+
+def test_check_health_audit_half_installed_evidence_is_not_identity_matched() -> None:
+    """Audit's own half-installed report with a clear lock is the FAILED evidence.
+
+    Deliberately no identity parsing: outside a running dpkg (which would hold
+    the database lock) a half-installed package exists only after a failed or
+    killed run, so a different package in audit's section is still truthful.
+    """
+    persisted = "openssl\tamd64\t3.0.11-1\thalf-installed\n"
+    other_package_audit = AUDIT_HALF_INSTALLED.replace(
+        " openssl              Secure Sockets Layer toolkit",
+        " libssl3              Secure Sockets Layer toolkit",
+    )
+    assert "openssl" not in other_package_audit
+    runner = FakeHelperRunner(
+        inventory_outputs=(persisted, persisted), audit_stdout=other_package_audit
+    )
+    response = _health(runner)
+    assert response["evidence"]["dpkg"] == "interrupted"
+    assert response["evidence"]["unfinished_package_count"] == 1
+
+
+def test_check_health_changed_between_reads_is_changed_regardless_of_audit() -> None:
+    """A half-* state that moved between reads is never FAILED, even if audit agrees."""
+    half = "openssl\tamd64\t3.0.11-1\thalf-installed\n"
+    resolved = "openssl\tamd64\t3.0.11-1\tinstalled\n"
+    runner = FakeHelperRunner(
+        inventory_outputs=(half, resolved), audit_stdout=AUDIT_HALF_INSTALLED
+    )
+    response = _health(runner)
+    assert response["evidence"]["dpkg"] == "changed"
+
+
+@pytest.mark.parametrize(
+    "audit",
+    [
+        {"audit_returncode": 2, "audit_stdout": AUDIT_HALF_INSTALLED},
+        {"audit_stdout_bytes": b"\xff\xfe not utf-8"},
+    ],
+)
+def test_check_health_audit_error_with_persisted_half_state_is_never_failed(
+    audit: dict[str, object],
+) -> None:
+    """An unusable audit is lock_unknown even when both reads are identical."""
+    half = "openssl\tamd64\t3.0.11-1\thalf-installed\n"
+    runner = FakeHelperRunner(inventory_outputs=(half, half), **audit)
+    response = _health(runner)
+    assert response["evidence"]["dpkg"] == "lock_unknown"
+
+
+def test_check_health_audit_non_utf8_output_is_lock_unknown() -> None:
+    """Non-UTF8 dpkg --audit output cannot prove the lock is clear either."""
+    half = "openssl\tamd64\t3.0.11-1\thalf-installed\n"
+    runner = FakeHelperRunner(
+        inventory_outputs=(half, half), audit_stdout_bytes=b"\xff\xfe not utf-8"
+    )
+    response = _health(runner)
+    assert response["ok"] is True
+    assert response["evidence"]["dpkg"] == "lock_unknown"
+
+
+def test_check_health_audit_output_bound_is_tight_and_becomes_lock_unknown() -> None:
+    """Oversized dpkg --audit output is bounded and reported as lock_unknown."""
+    half = "openssl\tamd64\t3.0.11-1\thalf-installed\n"
+
+    def oversized_audit_runner(argv, timeout, max_output):
+        if "dpkg --audit" in " ".join(argv):
+            assert max_output == helper.HEALTH_AUDIT_MAX_BYTES
+            return helper.CommandResult(0, b"", b"", output_exceeded=True)
+        return FakeHelperRunner(inventory_outputs=(half,))(argv, timeout, max_output)
+
+    response = _health(oversized_audit_runner)
+    assert response["evidence"]["dpkg"] == "lock_unknown"
+
+
+def test_check_health_malformed_inventory_is_bounded_and_semantic() -> None:
+    """Unparseable dpkg-query output is Health's own malformed_evidence."""
+    runner = FakeHelperRunner(inventory_outputs=("not\ta\tvalid\tline\textra\n",))
+    response = _health(runner)
+    assert response["ok"] is False
+    assert response["error"]["classification"] == "malformed_evidence"
+
+
+def test_check_health_unsupported_dpkg_is_bounded_and_semantic() -> None:
+    """A guest without dpkg-query is unsupported_guest, not malformed."""
+
+    def no_dpkg_runner(argv, timeout, max_output):
+        if "dpkg-query" in " ".join(argv):
+            return helper.CommandResult(127, b"", b"command not found\n")
+        return FakeHelperRunner()(argv, timeout, max_output)
+
+    response = _health(no_dpkg_runner)
+    assert response["ok"] is False
+    assert response["error"]["classification"] == "unsupported_guest"
+
+
+@pytest.mark.parametrize(("returncode", "expected"), [(0, True), (1, None)])
+def test_check_health_preserves_reboot_tri_state(
+    returncode: int, expected: bool | None
+) -> None:
+    """Only the marker's presence is reliable; absence is never ``false``."""
+    response = _health(FakeHelperRunner(reboot_returncode=returncode))
+    assert response["evidence"]["dpkg"] == "ok"
+    assert response["evidence"]["reboot_required"] is expected
+
+
+@pytest.mark.parametrize("returncode", [2, 126, 127, 255])
+def test_check_health_reboot_probe_error_while_running_is_not_healthy_evidence(
+    returncode: int,
+) -> None:
+    """``test -e`` exits 1 for an absent marker; any other failure is no evidence.
+
+    Collapsing a failed probe into ``reboot_required: null`` would let a
+    clean dpkg state classify as HEALTHY, so it is a bounded helper failure
+    (UNKNOWN in Home Assistant) instead.
+    """
+    runner = FakeHelperRunner(reboot_returncode=returncode)
+    response = _health(runner)
+    assert response["ok"] is False
+    assert response["error"] == {
+        "classification": "execution_failed",
+        "message": "reboot-required probe failed",
+    }
+    assert "evidence" not in response
+    # The guest was re-confirmed running before this was treated as a failure.
+    assert runner.status_calls == 2
+
+
+def test_check_health_reboot_probe_error_after_guest_gone_is_still_unavailable() -> None:
+    """A non-1 reboot probe result from a vanished guest keeps its existing shape."""
+    runner = FakeHelperRunner(reboot_returncode=255)
+
+    def gone_at_reboot_runner(argv, timeout, max_output):
+        if "/var/run/reboot-required" in " ".join(argv):
+            runner.status = "stopped"
+            return helper.CommandResult(255, b"", b"")
+        return runner(argv, timeout, max_output)
+
+    response = _health(gone_at_reboot_runner)
+    assert response["ok"] is True
+    assert response["evidence"]["guest_exec"] is False
+    assert response["evidence"]["guest_exec_unavailable"] is True
+
+
+def test_check_health_reboot_probe_guest_gone_is_unknown_not_stale() -> None:
+    """A guest that disappears right at the reboot probe discards stale evidence.
+
+    A nonzero (not just rc==1) reboot-marker result is re-checked against
+    native LXC status; when the guest is no longer confirmed running, the
+    whole result becomes one unestablished UNKNOWN rather than a mix of
+    real dpkg evidence and a reboot marker that could not be trusted.
+    """
+    runner = FakeHelperRunner(reboot_returncode=1)
+
+    def gone_at_reboot_runner(argv, timeout, max_output):
+        if "/var/run/reboot-required" in " ".join(argv):
+            runner.status = "stopped"
+            return helper.CommandResult(1, b"", b"")
+        return runner(argv, timeout, max_output)
+
+    response = _health(gone_at_reboot_runner)
+    assert response["ok"] is True
+    assert response["evidence"] == {
+        "guest_exec": False,
+        "guest_exec_unavailable": True,
+        "dpkg": None,
+        "unfinished_package_count": None,
+        "reboot_required": None,
+    }
+
+
+def test_check_health_reboot_marker_timeout_is_bounded_unknown() -> None:
+    """A hanging reboot-marker check is a bounded timeout, never a hang."""
+
+    def timeout_runner(argv, timeout, max_output):
+        if "/var/run/reboot-required" in " ".join(argv):
+            return helper.CommandResult(-9, b"", b"", timed_out=True)
+        return FakeHelperRunner()(argv, timeout, max_output)
+
+    response = _health(timeout_runner)
+    assert response["ok"] is False
+    assert response["error"]["classification"] == "timeout"
+
+
+@pytest.mark.parametrize(
+    ("dpkg_status", "reboot", "gone_at_reboot", "expected"),
+    [
+        # Established interrupted dpkg is FAILED whatever the reboot probe does
+        # while the guest stays confirmed running.
+        ("half-installed", 2, False, HealthState.FAILED),
+        ("half-installed", 127, False, HealthState.FAILED),
+        ("half-installed", "timeout", False, HealthState.FAILED),
+        ("half-installed", 1, False, HealthState.FAILED),
+        ("half-installed", 0, False, HealthState.FAILED),
+        # Without FAILED evidence a failed probe stays fail-closed UNKNOWN.
+        ("installed", 2, False, None),
+        ("installed", "timeout", False, None),
+        # A guest gone at the reboot probe still discards everything.
+        ("half-installed", 255, True, None),
+        ("half-installed", "timeout", True, None),
+    ],
+)
+def test_check_health_reboot_probe_failure_never_erases_interrupted_dpkg(
+    dpkg_status: str, reboot: int | str, gone_at_reboot: bool, expected
+) -> None:
+    """Reboot uncertainty blocks HEALTHY/DEGRADED but never an established FAILED."""
+    line = f"openssl\tamd64\t3.0.11-1\t{dpkg_status}\n"
+    runner = FakeHelperRunner(
+        inventory_outputs=(line, line), audit_stdout=AUDIT_HALF_INSTALLED
+    )
+
+    def reboot_runner(argv, timeout, max_output):
+        if "/var/run/reboot-required" in " ".join(argv):
+            if gone_at_reboot:
+                runner.status = "stopped"
+            if reboot == "timeout":
+                return helper.CommandResult(-9, b"", b"", timed_out=True)
+            return helper.CommandResult(reboot, b"", b"")
+        return runner(argv, timeout, max_output)
+
+    response = _health(reboot_runner)
+    if response["ok"] is not True:
+        assert expected is None
+        return
+    outcome = classify_health(_parse_health_response(response, "pve1", 200))
+    assert outcome.state is expected
+    if expected is HealthState.FAILED:
+        assert outcome.reason is HealthReason.DPKG_INTERRUPTED
+        assert response["evidence"]["reboot_required"] is (
+            True if reboot == 0 else None
+        )
+
+
+def test_check_health_has_its_own_tight_timeout_model() -> None:
+    """Health does not reuse scan-sized bounds; it has its own tight model."""
+    assert helper.HEALTH_OPERATION_TIMEOUT_SECONDS == 60.0
+    assert helper.HEALTH_COMMAND_TIMEOUT_SECONDS == 20.0
+    assert helper.PING_COMMAND_TIMEOUT_SECONDS == 10.0
+    assert helper.HEALTH_OPERATION_TIMEOUT_SECONDS < helper.OPERATION_TIMEOUT_SECONDS
+    assert helper.HEALTH_COMMAND_TIMEOUT_SECONDS < helper.COMMAND_TIMEOUT_SECONDS
+    # Scan/Update/Autoremove timeout semantics are unchanged.
+    assert helper.OPERATION_TIMEOUT_SECONDS == 240.0
+    assert helper.COMMAND_TIMEOUT_SECONDS == 120.0
+    assert helper.UPDATE_OPERATION_TIMEOUT_SECONDS == 1800.0
+    assert helper.UPDATE_COMMAND_TIMEOUT_SECONDS == 1500.0
+
+
+def test_check_health_guest_commands_use_the_health_command_bound() -> None:
+    """Health's own guest commands are capped at 20s, not the generic 120s."""
+    half = "openssl\tamd64\t3.0.11-1\thalf-installed\n"
+    runner = FakeHelperRunner(inventory_outputs=(half, half), reboot_returncode=0)
+    _health(runner)
+    guest_commands = [
+        call
+        for call in runner.calls
+        if call[0][:3] == ("pct", "exec", "200")
+        and call[0][4:5] != ("/bin/true",)
+    ]
+    dpkg_and_reboot_calls = [
+        call
+        for call in guest_commands
+        if "dpkg-query" in " ".join(call[0])
+        or "dpkg --audit" in " ".join(call[0])
+        or "/var/run/reboot-required" in " ".join(call[0])
+    ]
+    assert dpkg_and_reboot_calls
+    assert all(
+        call[1] == helper.HEALTH_COMMAND_TIMEOUT_SECONDS
+        for call in dpkg_and_reboot_calls
+    )
+    exec_call = next(
+        call for call in runner.calls if call[0][-1:] == ("/bin/true",)
+    )
+    assert exec_call[1] == helper.PING_COMMAND_TIMEOUT_SECONDS
+
+
+def test_check_health_deadline_exceeded_is_a_bounded_timeout() -> None:
+    """Health shares the generic bounded-deadline mechanism, now at 60s."""
+
+    class FakeClock:
+        value = 0.0
+
+        def __call__(self):
+            return self.value
+
+    clock = FakeClock()
+    base_runner = FakeHelperRunner()
+    timeouts: list[float] = []
+
+    def advancing_runner(argv, timeout, max_output):
+        timeouts.append(timeout)
+        result = base_runner(argv, timeout, max_output)
+        clock.value += 100.0
+        return result
+
+    response = helper.handle_request(
+        _request(operation="check_health"),
+        runner=advancing_runner,
+        clock=clock,
+        lock_factory=lambda _vmid: nullcontext(),
+    )
+    assert response["error"] == {
+        "classification": "timeout",
+        "message": "package scan operation deadline exceeded",
+    }
+    # The very first command already receives no more than the 60s Health
+    # deadline, unlike the 120s generic command cap.
+    assert timeouts[0] == 60.0
+
+
+def test_check_health_evidence_never_carries_package_names_or_guest_text() -> None:
+    """Health evidence stays limited to bounded enums/bools/ints only."""
+    half = "openssl\tamd64\t3.0.11-1\thalf-installed\n"
+    runner = FakeHelperRunner(
+        inventory_outputs=(half, half),
+        audit_stdout="openssl: some diagnostic line\n",
+    )
+    response = _health(runner)
+    assert set(response["evidence"]) == {
+        "guest_exec",
+        "guest_exec_unavailable",
+        "dpkg",
+        "unfinished_package_count",
+        "reboot_required",
+    }
+    assert "openssl" not in json.dumps(response["evidence"])

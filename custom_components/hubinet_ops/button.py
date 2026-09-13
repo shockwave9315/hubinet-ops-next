@@ -26,6 +26,7 @@ from .coordinator import ProxmoxConfigEntry, ProxmoxCoordinator, ProxmoxNodeData
 from .entity import ProxmoxContainerEntity, ProxmoxNodeEntity, ProxmoxVMEntity
 from .helpers import is_granted
 from .packages.models import (
+    HealthCheckStatus,
     PackageScanError,
     PackageScanStatus,
     PackageUpdateError,
@@ -259,6 +260,11 @@ PACKAGE_AUTOREMOVE_BUTTON = ButtonEntityDescription(
     translation_key="package_autoremove",
     entity_category=EntityCategory.CONFIG,
 )
+PACKAGE_HEALTH_BUTTON = ButtonEntityDescription(
+    key="package_health_check",
+    translation_key="package_health_check",
+    entity_category=EntityCategory.CONFIG,
+)
 
 
 async def async_setup_entry(
@@ -326,6 +332,7 @@ async def async_setup_entry(
                         PackageScanButtonEntity(coordinator, container, node_data),
                         PackageReviewButtonEntity(coordinator, container, node_data),
                         PackageApproveButtonEntity(coordinator, container, node_data),
+                        PackageHealthButtonEntity(coordinator, container, node_data),
                     )
                 )
                 if is_granted(
@@ -526,6 +533,7 @@ class PackageScanButtonEntity(ProxmoxContainerEntity, ProxmoxBaseButton):
         scan = manager.record(self._node_name, self.device_id)
         update = manager.update_record(self._node_name, self.device_id)
         cleanup = manager.cleanup_record(self._node_name, self.device_id)
+        health = manager.health_record(self._node_name, self.device_id)
         return (
             super().available
             and self.container_data.get("status") == VM_CONTAINER_RUNNING
@@ -533,6 +541,7 @@ class PackageScanButtonEntity(ProxmoxContainerEntity, ProxmoxBaseButton):
             and scan.status is not PackageScanStatus.RUNNING
             and update.status is not PackageUpdateStatus.RUNNING
             and cleanup.status is not PackageUpdateStatus.RUNNING
+            and health.check_status is not HealthCheckStatus.RUNNING
         )
 
 
@@ -690,12 +699,14 @@ class PackageUpdateButtonEntity(ProxmoxContainerEntity, ButtonEntity):
         record = manager.record(self._node_name, self.device_id)
         update = manager.update_record(self._node_name, self.device_id)
         cleanup = manager.cleanup_record(self._node_name, self.device_id)
+        health = manager.health_record(self._node_name, self.device_id)
         return (
             super().available
             and self.container_data.get("status") == VM_CONTAINER_RUNNING
             and not manager.restore_reserved(self._node_name, self.device_id)
             and update.status is not PackageUpdateStatus.RUNNING
             and cleanup.status is not PackageUpdateStatus.RUNNING
+            and health.check_status is not HealthCheckStatus.RUNNING
             and record.status is PackageScanStatus.SUCCESS
             and record.result is not None
             and bool(record.result.packages)
@@ -761,6 +772,7 @@ class PackageAutoremoveButtonEntity(ProxmoxContainerEntity, ButtonEntity):
         update = manager.update_record(self._node_name, self.device_id)
         cleanup = manager.cleanup_record(self._node_name, self.device_id)
         evidence = manager.cleanup_evidence(self._node_name, self.device_id)
+        health = manager.health_record(self._node_name, self.device_id)
         return (
             super().available
             and self.container_data.get("status") == VM_CONTAINER_RUNNING
@@ -768,6 +780,7 @@ class PackageAutoremoveButtonEntity(ProxmoxContainerEntity, ButtonEntity):
             and scan.status is not PackageScanStatus.RUNNING
             and update.status is not PackageUpdateStatus.RUNNING
             and cleanup.status is not PackageUpdateStatus.RUNNING
+            and health.check_status is not HealthCheckStatus.RUNNING
             and evidence is not None
             and bool(evidence.candidates)
             and is_granted(
@@ -776,4 +789,64 @@ class PackageAutoremoveButtonEntity(ProxmoxContainerEntity, ButtonEntity):
                 p_id=self.device_id,
                 permission=ProxmoxPermission.SNAPSHOT,
             )
+        )
+
+
+class PackageHealthButtonEntity(ProxmoxContainerEntity, ProxmoxBaseButton):
+    """Manually run one point-in-time generic OS/package Health check."""
+
+    def __init__(
+        self,
+        coordinator: ProxmoxCoordinator,
+        container_data: dict[str, Any],
+        node_data: ProxmoxNodeData,
+    ) -> None:
+        """Initialize the Health check button."""
+        super().__init__(coordinator, PACKAGE_HEALTH_BUTTON, container_data, node_data)
+
+    @override
+    async def async_press(self) -> None:
+        """Start the Health check and translate a synchronous rejection."""
+        try:
+            await self._async_press_call()
+        except PackageScanError as err:
+            raise HomeAssistantError(
+                translation_domain=DOMAIN,
+                translation_key="package_health_failed",
+                translation_placeholders={"reason": str(err)},
+            ) from err
+
+    @override
+    async def _async_press_call(self) -> None:
+        """Start a tracked Health check without occupying the native semaphore."""
+        node_data = self.coordinator.data.get(self._node_name)
+        container = (
+            node_data.containers.get(self.device_id) if node_data is not None else None
+        )
+        self.coordinator.package_manager.async_start_health(
+            self._node_name,
+            self.device_id,
+            target_is_running=(
+                container is not None
+                and container.get("status") == VM_CONTAINER_RUNNING
+            ),
+        )
+
+    @property
+    @override
+    def available(self) -> bool:
+        """Require a running guest and no conflicting same-VMID package flow."""
+        manager = self.coordinator.package_manager
+        scan = manager.record(self._node_name, self.device_id)
+        update = manager.update_record(self._node_name, self.device_id)
+        cleanup = manager.cleanup_record(self._node_name, self.device_id)
+        health = manager.health_record(self._node_name, self.device_id)
+        return (
+            super().available
+            and self.container_data.get("status") == VM_CONTAINER_RUNNING
+            and not manager.restore_reserved(self._node_name, self.device_id)
+            and scan.status is not PackageScanStatus.RUNNING
+            and update.status is not PackageUpdateStatus.RUNNING
+            and cleanup.status is not PackageUpdateStatus.RUNNING
+            and health.check_status is not HealthCheckStatus.RUNNING
         )

@@ -32,6 +32,8 @@ from .entity import (
 )
 from .helpers import is_granted
 from .packages.models import (
+    HealthState,
+    PackageHealthRecord,
     PackageScanRecord,
     PackageScanStatus,
     PackageUpdateRecord,
@@ -509,6 +511,13 @@ UNUSED_PACKAGES_SENSOR = SensorEntityDescription(
     translation_key="unused_packages",
     entity_category=EntityCategory.DIAGNOSTIC,
 )
+PACKAGE_HEALTH_SENSOR = SensorEntityDescription(
+    key="package_health",
+    translation_key="package_health",
+    device_class=SensorDeviceClass.ENUM,
+    options=list(HealthState),
+    entity_category=EntityCategory.DIAGNOSTIC,
+)
 
 
 async def async_setup_entry(
@@ -563,6 +572,7 @@ async def async_setup_entry(
                     PackageScanSensor(coordinator, container, node_data),
                     PackageUpdateSensor(coordinator, container, node_data),
                     UnusedPackagesSensor(coordinator, container, node_data),
+                    PackageHealthSensor(coordinator, container, node_data),
                 )
             )
         async_add_entities(entities)
@@ -899,6 +909,53 @@ class UnusedPackagesSensor(ProxmoxContainerEntity, SensorEntity):
             attributes["uncertain_snapshot_name"] = record.snapshot_name
         if record.error_message is not None:
             attributes["last_error"] = record.error_message
+        return attributes
+
+
+class PackageHealthSensor(ProxmoxContainerEntity, SensorEntity):
+    """Latest ephemeral point-in-time generic OS/package Health result."""
+
+    def __init__(
+        self,
+        coordinator: ProxmoxCoordinator,
+        container_data: dict[str, Any],
+        node_data: ProxmoxNodeData,
+    ) -> None:
+        """Initialize the Health outcome sensor."""
+        super().__init__(coordinator, PACKAGE_HEALTH_SENSOR, container_data, node_data)
+
+    @property
+    def _health_record(self) -> PackageHealthRecord:
+        return self.coordinator.package_manager.health_record(
+            self._node_name, self.device_id
+        )
+
+    @property
+    @override
+    def native_value(self) -> str | None:
+        """Return the classified state, or None (unknown) without one."""
+        return self._health_record.state
+
+    @property
+    @override
+    def extra_state_attributes(self) -> dict[str, Any]:
+        """Return only bounded check-lifecycle and raw evidence facts."""
+        record = self._health_record
+        attributes: dict[str, Any] = {"check_status": record.check_status}
+        if record.checked_at is not None:
+            attributes["checked_at"] = record.checked_at.isoformat()
+        if record.source is not None:
+            attributes["source"] = record.source
+        if record.reason is not None:
+            attributes["reason"] = record.reason
+        if record.guest_exec is not None:
+            attributes["guest_exec"] = record.guest_exec
+        if record.dpkg is not None:
+            attributes["dpkg"] = record.dpkg
+        if record.unfinished_package_count is not None:
+            attributes["unfinished_package_count"] = record.unfinished_package_count
+        if record.reboot_required is not None:
+            attributes["reboot_required"] = record.reboot_required
         return attributes
 
 

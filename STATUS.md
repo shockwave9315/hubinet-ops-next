@@ -8,14 +8,17 @@ Status date: 2026-09-13
   `fc034572d0216a04ed40a07154394908a594dfed`.
 - Baseline tag: `baseline-ha-2026.9.1`.
 - Merged runtime: a domain-isolated custom-integration fork of Home Assistant
-  Core `proxmoxve`, plus the package scan, review, and update subsystem and
-  guided fresh-install enrollment and native snapshot Restore documented in
+  Core `proxmoxve`, plus the package scan, review, update, and LXC Health
+  subsystem, guided fresh-install enrollment, native snapshot Restore, and
+  native snapshot Create observation documented in
   [ARCHITECTURE.md](ARCHITECTURE.md).
-- Current release: integration `2026.9.1.8`, helper v4, protocol v1.
-- Merged baseline commit:
-  `c699f3e75ff3c94ae34b22de44a276b8ab9b88a7`.
-- Baseline validation: **564 tests and 207 snapshots passed**; repository Ruff
-  passed.
+- Current merged integration: `2026.9.1.10`, helper v5, protocol v1.
+- Latest tagged release remains `2026.9.1.9` until the post-merge release step.
+- Baseline merge vehicle: PR #15; after merge, Git history is authoritative for
+  the exact merge commit SHA.
+- Baseline validation: **738 tests and 207 snapshots passed**; repository Ruff,
+  translation and release-parity checks, helper SHA/protocol consistency,
+  ShellCheck, and shell syntax passed.
 
 ## Merged
 
@@ -147,11 +150,48 @@ Status date: 2026-09-13
   translation and release-parity checks, helper SHA/protocol consistency,
   ShellCheck, and shell syntax passed.
 
+## 2026.9.1.10 LXC Health
+
+- Architecture: **ACCEPTED BY MAINTAINER on 2026-09-13**, before runtime
+  implementation; see the durable boundary in
+  [ARCHITECTURE.md](ARCHITECTURE.md#lxc-health).
+- Implementation: **MERGED IN PR #15 / READY FOR TAG AND RELEASE**. Several
+  targeted reviews led to lifecycle, evidence, and availability corrections.
+  A subsequent full independent architecture review judged the architecture
+  sound and required only small fixes, applied in a final correction: a
+  reinst-required half-installed package, which `dpkg --audit` lists only
+  under its "in a mess" section, is recognized as persistent interrupted dpkg
+  state. Later adjudication preserved an established dpkg `FAILED` over
+  reboot-probe uncertainty and narrowed dpkg `FAILED` evidence to
+  half-installed only: half-configured is `pending` (`UNKNOWN`), because apt
+  legitimately leaves deconfigured packages half-configured between successful
+  dpkg runs.
+- Accepted scope: generic point-in-time OS/package Health for package-eligible
+  LXCs, manually runnable and automatically run immediately after a successful
+  Update or Autoremove, through one new helper v5 `check_health` operation
+  under unchanged protocol v1. `healthy`/`degraded`/`failed`/native `unknown`
+  classification, no notifications, no systemd/CPU/RAM/uptime or
+  application-specific checks, and no change to Update/Autoremove/Restore
+  safety semantics.
+- The post-Update/post-Autoremove hand-off claims Health `RUNNING` *before*
+  publishing the terminal `SUCCESS` (re-entrancy-safe against eager HA
+  listeners), starts no Health from the unload/reload cancellation path, uses
+  its own tight 60s/20s/10s/90s timeout model instead of scan-sized bounds,
+  and owns its background-task coroutine explicitly on both the manual and
+  post-operation paths. `begin_restore()` and existing Update/Autoremove
+  safety checks are unchanged.
+- Release state after merge: integration `2026.9.1.10`, helper v5, protocol v1;
+  tagging/publishing is the only remaining release step.
+- Validation: **738 tests and 207 snapshots passed**; repository Ruff,
+  translation and release-parity checks, helper SHA/protocol consistency,
+  ShellCheck, and shell syntax passed.
+
 ## Next
 
-Review and release the accepted `2026.9.1.9` native snapshot Create observation
-release. Post-update Health remains separate future work.
+Tag and publish `2026.9.1.10` from the merged PR #15 baseline. No additional
+runtime or architecture work is part of this release.
 
 ## Explicitly not started
 
-- Post-update health: **NOT DESIGNED / NOT STARTED**.
+- Nothing currently accepted and undesigned; `2026.9.1.10` only awaits the
+  post-merge tag/release step.

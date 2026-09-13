@@ -182,6 +182,181 @@ sanity, liveness, and exact snapshot-cleanup path. This adds no CleanupManager,
 database, persistence, scheduler, recovery or workflow framework, automatic
 autoremove, or Post-update Health.
 
+### LXC Health
+
+On 2026-09-13, before implementation, the maintainer accepted generic
+point-in-time LXC Health for package-eligible containers, for release
+2026.9.1.10. Health answers only "does this LXC look technically healthy at
+the guest OS/package level?", never "is the application inside the LXC
+functionally healthy?". It is diagnostic, ephemeral, `PackageManager`-owned,
+helper-backed, manually runnable, and automatically run immediately after a
+successful Update or Autoremove. It is explicitly separate from package
+mutation truth: a successful Update or Autoremove remains successful
+regardless of the subsequent Health outcome, and Health evidence never
+retroactively changes Update outcome, Autoremove outcome, the snapshot
+deletion decision, package evidence, scan tokens, Restore
+reservation/fencing, or cleanup evidence.
+
+Health is point-in-time only, not periodic monitoring: there is no scheduler,
+poller, TTL, or staleness timer. It uses helper v5 under the unchanged
+protocol v1, through one new fixed typed helper operation, `check_health`,
+validated and executed through the existing exact request-shape validation,
+`_validate_local_node`, `_validate_target`, `_guest_command`, `_run_bounded`,
+per-VMID `flock`, deadline handling, and bounded-output handling. No native
+PVE `lxc(vmid).status.current` call is added for Health, and Health never
+triggers a coordinator refresh; helper-side `pct config`/`pct status` remain
+execution-time authoritative, and HA-side coordinator data is used only for
+button availability gating.
+
+The helper performs, in order: local-node and target validation (a stopped or
+unavailable target yields an unestablished, never `FAILED`, Health result);
+one minimal fixed `pct exec <vmid> -- /bin/true` guest-execution check;
+fixed `dpkg-query`-based inventory classification; and a fixed
+`test -e /var/run/reboot-required` check. When that exec check fails, the
+helper re-checks native status: still running is a positive `FAILED`
+(`guest_exec_failed`), while a guest that disappeared is `UNKNOWN`
+(`guest_unavailable`) and discards any evidence already collected rather than
+mixing it with a stale result. When the exec check succeeds but the reboot
+probe itself later finds the guest gone, the same discard-to-UNKNOWN applies.
+Only the reboot marker's positive presence is reliable evidence; its absence
+(`test -e` exit 1) is only a lack of positive evidence, never exposed as
+`reboot_required: false`. Any other nonzero probe result while the guest is
+still running means the probe itself did not run, so it is a bounded helper
+failure (`UNKNOWN`), never `reboot_required: null` that could read as
+`HEALTHY`. The one exception is an already-established interrupted dpkg
+state: a reboot probe that fails or times out while the guest is still
+confirmed running leaves that `FAILED` evidence intact with the reboot
+dimension unestablished, because reboot evidence can never change `FAILED`.
+
+The dpkg classification reads the inventory once; a clean inventory is `ok`
+with no further dpkg command. `half-installed` is the only dpkg state that can
+become positive `FAILED` evidence. `half-configured` is deliberately
+classified like `unpacked`/`triggers-awaited`/`triggers-pending` as
+`pending` (`UNKNOWN`), never `FAILED`: apt's `dpkg --unpack
+--auto-deconfigure` legitimately leaves a Breaks-deconfigured package
+half-configured across later successful dpkg runs, and between those runs
+apt holds only its frontend lock, so a clear dpkg database lock does not mean
+the apt frontend is inactive (reproduced with real apt 3.0.3 and dpkg
+1.22.22). A genuinely failed configuration is therefore reported as
+`UNKNOWN` rather than risking a false `FAILED`. When any identity is
+half-installed, the helper re-reads the inventory a second time before
+auditing the lock with `dpkg --audit` -- in that order, not
+audit-then-reread -- so a dpkg run that starts after the audit but finishes
+before a stale ordering's second read could never masquerade as a persistent
+failure. When the first read shows only pending identities, there is no
+second read: the lock is audited directly and a clear lock is `pending`, a
+point-in-time observation of the first read that may already have resolved by
+the time it is reported. A busy or otherwise uncertain lock at audit time
+(nonzero exit, oversized or non-UTF8 output) always wins over the read
+comparison and over `pending`. `dpkg --audit` is not itself a lock probe: it
+takes no lock, exits 0, and tests the dpkg database lock (`fcntl` `F_GETLK`
+on `/var/lib/dpkg/lock`, never apt's frontend lock) only once the database
+it read shows a problem, so a missing busy notice proves a clear database
+lock only when the audit output itself reports a half-installed package --
+either under its "only half installed" section or, for a reinst-required
+package (such as an unpack killed mid-way), under dpkg's "in a mess"
+section, which is the only place audit lists such a package; otherwise the
+result is `changed` (`UNKNOWN`). Only when the lock is clear in that sense
+and every original half-installed identity's status is *exactly* unchanged
+across both reads -- so half-installed progressing to half-configured is not
+mistaken for a stuck state -- is that reported as an interrupted package
+manager. Audit's report is not matched to package identities and no further
+read follows it: outside a running dpkg, which holds the database lock, a
+half-installed package exists only after a failed or killed dpkg run, so
+audit's own half-installed report with a clear database lock is the positive
+evidence even if it names a different package than the persisted reads. The
+helper returns only bounded booleans/enums/ints -- never package names, dpkg stdout,
+or other guest text -- and Home Assistant strictly validates both the exact
+evidence shape and its logical consistency (for example, `guest_exec: true`
+requires a non-null `dpkg`; `guest_exec: false` requires every other field be
+null; `dpkg: interrupted` requires a positive count and every other value
+requires none), rejecting a type-valid but self-contradictory response as
+`malformed_evidence`. A non-mapping response or an incompatible
+`protocol_version` is `protocol_mismatch`; a structurally valid protocol-1
+envelope with the wrong operation echo (the expected old-helper case) is
+`helper_outdated`.
+
+Top-level Health state is `healthy`, `degraded`, `failed`, or Home Assistant's
+native `unknown`, represented as the sensor's `native_value` being `None`
+(never a literal `"unknown"` enum option). `FAILED` requires positive
+evidence only -- a guest-execution failure while the guest is still confirmed
+running, or a persistently interrupted dpkg state as defined above.
+`DEGRADED` requires a clean dpkg state plus a positive reboot-required
+marker. Every other unresolved condition -- a stopped or vanished guest,
+timeout, helper-outdated, protocol mismatch, transport/auth/host-key failure,
+malformed or contradictory evidence, an unsupported guest, a busy or
+uncertain package manager lock, packages merely pending/triggers-pending, or
+inventory that changed between the two reads or before the audit, or a
+reboot-required probe that could not run -- is `UNKNOWN`. `FAILED` takes
+precedence over `DEGRADED`, and any required-check `UNKNOWN` prevents both
+`HEALTHY` and `DEGRADED`. This explicitly excludes `systemctl --failed`/
+failed-unit checks, CPU/RAM/uptime verdicts, and any application-specific
+probe.
+
+`PackageManager` owns `_health_records[(node, vmid)]` and
+`_health_tasks[(node, vmid)]` as small ephemeral records, the same shape of
+state as existing scan/update/cleanup records; there is no second manager,
+coordinator, database, or persistent health history, and nothing survives a
+Home Assistant restart or reload -- a fresh sensor reads `native_value: None`
+with `check_status: never`. Health RUNNING joins the existing same-VMID
+`PackageManager` busy model: while Health is RUNNING for a VMID, Scan,
+Update, Autoremove, and another Health start are all rejected for that VMID,
+and Health itself is rejected while Scan, Update, Autoremove, or a Restore
+reservation is active for that VMID. The Scan, Update, and Autoremove buttons
+mirror a same-target Health RUNNING record as unavailable; that is
+presentation only, and the manager's busy checks remain authoritative. Manual
+Restore may still begin while Health runs; Restore's existing invalidation path additionally discards and
+cancels any Health evidence/task for that target, and `begin_restore` itself
+is unchanged. Health evidence is likewise invalidated and its task cancelled
+on a non-running observation, on Restore invalidation, when a new Update or
+Autoremove is accepted, and on target pruning, using the same
+identity-guarded late-result-discard pattern already used for scan/update/
+cleanup records so a stale completion can never republish over newer state.
+
+Automatic post-operation Health is a re-entrancy-safe, synchronous hand-off
+inside `PackageManager`: a defensive Health `RUNNING` claim happens *before*
+the terminal Update/Autoremove `SUCCESS` is published (not merely without an
+`await` after it), because Home Assistant listeners reacting to that state
+publication can run eagerly/re-entrantly. The claim is skipped, never
+overwriting an existing one, if the target is unexpectedly already busy with
+a same-VMID Scan, Restore reservation, or another Health attempt; it is never
+blocked by the same-VMID Update/Autoremove attempt that is itself finishing.
+Once claimed, the mutation result and its existing notification publish
+exactly as before, and only then does a separate config-entry-tracked
+background task begin the Health check. A failed Update or Autoremove never
+starts Health, and neither does the config-entry unload/reload cancellation
+path for an already-successful mutation still waiting on its post-success
+cleanup observation -- that path terminalizes the mutation `SUCCESS` as usual
+but claims no Health, so no new diagnostic work can escape the unload. Health
+task creation (manual or post-operation) owns its coroutine explicitly, closing
+it if creation itself fails, and only records the task if it is not already
+done, so a helper that resolves without ever truly suspending cannot leave a
+stale entry behind. On any task-creation failure, only the just-claimed
+`RUNNING` record is removed and the failure is logged (or, for the manual
+button, re-raised to the caller); the already-published mutation outcome is
+never touched.
+
+Presentation is `button.<lxc>_health_check` (available only when transport is
+configured, the coordinator reports the guest running, and no same-VMID
+Scan/Update/Autoremove/Restore/Health is active) and `sensor.<lxc>_health`,
+whose bounded attributes are exactly check status, timestamp, source
+(manual/update/autoremove), reason, `guest_exec`, `dpkg`,
+`unfinished_package_count`, and `reboot_required`. The helper's internal
+`guest_exec_unavailable` discriminator -- which distinguishes a positive exec
+failure while still running (FAILED) from the guest having become unavailable
+(UNKNOWN) -- is a classifier input only and is never exposed on the sensor.
+There are no Health notifications in v1 -- the sensor is the single source of
+truth, and operators may build their own automations on it -- and
+`packages/presentation.py` is unchanged.
+
+Health has its own timeout model, separate from Scan's: a 60-second helper
+operation deadline, a 20-second bound for Health's own guest commands
+(inventory reads, `dpkg --audit`, the reboot-required probe), the existing
+10-second `/bin/true` bound, and a 90-second Home Assistant transport bound
+above that 60-second helper deadline. Health blocks same-VMID
+Scan/Update/Autoremove/Health, so it does not share their much larger
+scan/mutation-sized bounds.
+
 ## Guided fresh-install enrollment
 
 The default config-flow path is a guided setup layered beside the preserved

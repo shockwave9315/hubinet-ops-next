@@ -14,12 +14,18 @@ import asyncssh
 from homeassistant.core import HomeAssistant
 
 from .models import (
+    HealthDpkgState,
+    HealthReason,
+    PackageHealthError,
+    PackageHealthEvidence,
+    PackageHealthOutcome,
     PackageMutationResult,
     PackageScanError,
     PackageScanFailure,
     PackageScanResult,
     PackageUpdateError,
     PackageUpdateOutcome,
+    classify_health,
 )
 from .parser import (
     PackageScanParseError,
@@ -41,6 +47,7 @@ OPERATION_UPDATE_PACKAGES = "update_packages"
 OPERATION_PLAN_AUTOREMOVE = "plan_autoremove"
 OPERATION_AUTOREMOVE_PACKAGES = "autoremove_packages"
 OPERATION_PING = "ping"
+OPERATION_CHECK_HEALTH = "check_health"
 
 _NODE_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9.-]{0,62}")
 _MAX_REQUEST_BYTES = 1024
@@ -51,6 +58,28 @@ TRANSPORT_TIMEOUT_SECONDS = 300.0
 UPDATE_TRANSPORT_TIMEOUT_SECONDS = 1860.0
 PING_TRANSPORT_TIMEOUT_SECONDS = 45.0
 PROBE_TIMEOUT_SECONDS = 30.0
+# Health has its own, tighter helper-side operation deadline
+# (HEALTH_OPERATION_TIMEOUT_SECONDS = 60s in the helper) so it does not
+# block same-VMID Scan/Update/Autoremove/Health on scan-sized bounds; this
+# transport bound stays well above that helper deadline.
+HEALTH_TRANSPORT_TIMEOUT_SECONDS = 90.0
+_HEALTH_EVIDENCE_KEYS = frozenset(
+    {
+        "guest_exec",
+        "guest_exec_unavailable",
+        "dpkg",
+        "unfinished_package_count",
+        "reboot_required",
+    }
+)
+_HEALTH_FAILURE_REASONS: dict[str, HealthReason] = {
+    "guest_unavailable": HealthReason.GUEST_UNAVAILABLE,
+    "identity_mismatch": HealthReason.GUEST_UNAVAILABLE,
+    "timeout": HealthReason.TIMEOUT,
+    "package_manager_busy": HealthReason.PACKAGE_MANAGER_BUSY,
+    "unsupported_guest": HealthReason.UNSUPPORTED_GUEST,
+    "malformed_evidence": HealthReason.MALFORMED_EVIDENCE,
+}
 
 
 def _build_known_hosts(endpoint: str, host_key: str, port: int = 22) -> bytes:
@@ -452,6 +481,43 @@ class AsyncSSHPackageTransport:
             )
         return True
 
+    async def async_check_health(
+        self, expected_node: str, vmid: int
+    ) -> PackageHealthOutcome:
+        """Return one classified point-in-time Health verdict for one LXC."""
+        _validate_health_target(expected_node, vmid)
+        request = {
+            "protocol_version": PROTOCOL_VERSION,
+            "operation": OPERATION_CHECK_HEALTH,
+            "target": {"node": expected_node, "vmid": vmid},
+        }
+        try:
+            payload = await self._async_request(
+                request, timeout=HEALTH_TRANSPORT_TIMEOUT_SECONDS
+            )
+        except PackageTransportTimeoutError as err:
+            raise PackageHealthError(
+                HealthReason.TIMEOUT, "Health check timed out"
+            ) from err
+        except PackageTransportHostKeyError as err:
+            raise PackageHealthError(
+                HealthReason.TRANSPORT_FAILED,
+                "Health check SSH host key did not match",
+            ) from err
+        except PackageTransportAuthenticationError as err:
+            raise PackageHealthError(
+                HealthReason.TRANSPORT_FAILED,
+                "Health check SSH authentication failed",
+            ) from err
+        except PackageTransportConnectionError as err:
+            raise PackageHealthError(HealthReason.TRANSPORT_FAILED, str(err)) from err
+        except PackageHelperUnavailableError as err:
+            raise PackageHealthError(HealthReason.HELPER_OUTDATED, str(err)) from err
+        except PackageHelperProtocolError as err:
+            raise PackageHealthError(HealthReason.PROTOCOL_MISMATCH, str(err)) from err
+        evidence = _parse_health_response(payload, expected_node, vmid)
+        return classify_health(evidence)
+
     async def _async_update_request(
         self,
         expected_node: str,
@@ -670,6 +736,146 @@ def _validate_update_target(expected_node: str, vmid: int) -> None:
             PackageUpdateOutcome.GUEST_UNAVAILABLE,
             "Proxmox LXC identity is invalid for package operations",
         )
+
+
+def _validate_health_target(expected_node: str, vmid: int) -> None:
+    """Validate Health-path identity without translating through other errors."""
+    if not _NODE_RE.fullmatch(expected_node) or type(vmid) is not int or not (
+        100 <= vmid <= 999_999_999
+    ):
+        raise PackageHealthError(
+            HealthReason.GUEST_UNAVAILABLE,
+            "Proxmox LXC identity is invalid for a Health check",
+        )
+
+
+def _parse_health_response(
+    payload: Any, expected_node: str, expected_vmid: int
+) -> PackageHealthEvidence:
+    """Validate one Health response and return its strictly typed evidence."""
+    if not isinstance(payload, Mapping):
+        raise PackageHealthError(
+            HealthReason.PROTOCOL_MISMATCH,
+            "package helper returned a non-protocol response",
+        )
+    if (
+        type(payload.get("protocol_version")) is not int
+        or payload.get("protocol_version") != PROTOCOL_VERSION
+    ):
+        raise PackageHealthError(
+            HealthReason.PROTOCOL_MISMATCH,
+            "package helper protocol is incompatible",
+        )
+    if (
+        type(payload.get("helper_version")) is not int
+        or payload.get("helper_version") < 1
+        or payload.get("operation") != OPERATION_CHECK_HEALTH
+    ):
+        # A structurally valid protocol-1 envelope with the wrong operation
+        # echo (or missing helper_version) is the expected old-helper case,
+        # not a wire-protocol mismatch.
+        raise PackageHealthError(
+            HealthReason.HELPER_OUTDATED,
+            "package helper is outdated; run the current bootstrap command again",
+        )
+
+    target = payload.get("target")
+    target_matches = (
+        isinstance(target, Mapping)
+        and bool(target)
+        and target.get("node") == expected_node
+        and type(target.get("vmid")) is int
+        and target.get("vmid") == expected_vmid
+    )
+    if payload.get("ok") is True:
+        if not target_matches:
+            raise PackageHealthError(
+                HealthReason.GUEST_UNAVAILABLE,
+                "package helper returned the wrong node or LXC identity",
+            )
+    else:
+        error = payload.get("error")
+        if isinstance(target, Mapping) and target and not target_matches:
+            raise PackageHealthError(
+                HealthReason.GUEST_UNAVAILABLE,
+                "package helper returned the wrong node or LXC identity",
+            )
+        classification = (
+            error.get("classification") if isinstance(error, Mapping) else None
+        )
+        reason = _HEALTH_FAILURE_REASONS.get(
+            str(classification), HealthReason.MALFORMED_EVIDENCE
+        )
+        raise PackageHealthError(reason, f"Health check failed: {reason}")
+
+    evidence = payload.get("evidence")
+    if not isinstance(evidence, Mapping) or set(evidence) != _HEALTH_EVIDENCE_KEYS:
+        raise PackageHealthError(
+            HealthReason.MALFORMED_EVIDENCE,
+            "package helper returned malformed Health evidence",
+        )
+    guest_exec = evidence["guest_exec"]
+    guest_exec_unavailable = evidence["guest_exec_unavailable"]
+    dpkg_raw = evidence["dpkg"]
+    unfinished = evidence["unfinished_package_count"]
+    reboot_required = evidence["reboot_required"]
+    if type(guest_exec) is not bool or type(guest_exec_unavailable) is not bool:
+        raise PackageHealthError(
+            HealthReason.MALFORMED_EVIDENCE,
+            "package helper returned malformed Health evidence",
+        )
+    dpkg: HealthDpkgState | None
+    if dpkg_raw is None:
+        dpkg = None
+    else:
+        try:
+            dpkg = HealthDpkgState(dpkg_raw)
+        except ValueError as err:
+            raise PackageHealthError(
+                HealthReason.MALFORMED_EVIDENCE,
+                "package helper returned an unknown dpkg state",
+            ) from err
+    if unfinished is not None and (type(unfinished) is not int or unfinished < 0):
+        raise PackageHealthError(
+            HealthReason.MALFORMED_EVIDENCE,
+            "package helper returned malformed Health evidence",
+        )
+    if reboot_required is not None and reboot_required is not True:
+        raise PackageHealthError(
+            HealthReason.MALFORMED_EVIDENCE,
+            "package helper returned malformed Health evidence",
+        )
+    # Reject logically impossible combinations the type checks above cannot
+    # catch: a type-valid but self-contradictory shape is malformed too.
+    if guest_exec:
+        if guest_exec_unavailable or dpkg is None:
+            raise PackageHealthError(
+                HealthReason.MALFORMED_EVIDENCE,
+                "package helper returned contradictory Health evidence",
+            )
+    elif dpkg is not None or unfinished is not None or reboot_required is not None:
+        raise PackageHealthError(
+            HealthReason.MALFORMED_EVIDENCE,
+            "package helper returned contradictory Health evidence",
+        )
+    if dpkg is HealthDpkgState.INTERRUPTED:
+        if unfinished is None or unfinished < 1:
+            raise PackageHealthError(
+                HealthReason.MALFORMED_EVIDENCE,
+                "package helper returned contradictory Health evidence",
+            )
+    elif unfinished is not None:
+        raise PackageHealthError(
+            HealthReason.MALFORMED_EVIDENCE,
+            "package helper returned contradictory Health evidence",
+        )
+    return PackageHealthEvidence(
+        guest_exec=guest_exec,
+        guest_exec_unavailable=guest_exec_unavailable,
+        dpkg=dpkg,
+        unfinished_package_count=unfinished,
+        reboot_required=reboot_required,
+    )
 
 
 def _parse_update_response(

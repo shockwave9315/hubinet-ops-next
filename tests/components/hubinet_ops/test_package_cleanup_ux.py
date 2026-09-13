@@ -864,7 +864,7 @@ async def test_unknown_probe_does_not_claim_outdated_helper(
     ) is None
 
 
-async def test_v3_cleanup_is_unknown_and_later_v4_response_clears_issue(
+async def test_v3_cleanup_is_unknown_and_later_current_response_clears_issue(
     hass: HomeAssistant,
     mock_proxmox_client: MagicMock,
     mock_config_entry: MockConfigEntry,
@@ -905,7 +905,7 @@ async def test_v3_cleanup_is_unknown_and_later_v4_response_clears_issue(
     assert issue_registry.async_get_issue(DOMAIN, issue_id) is not None
 
     transport = manager._transport  # noqa: SLF001
-    transport._observed_helper_version = 4  # noqa: SLF001
+    transport._observed_helper_version = EXPECTED_HELPER_VERSION  # noqa: SLF001
     with (
         patch.object(transport, "async_scan", AsyncMock(return_value=RESULT)),
         patch.object(
@@ -916,7 +916,7 @@ async def test_v3_cleanup_is_unknown_and_later_v4_response_clears_issue(
     ):
         await _press(hass, SCAN)
         await hass.async_block_till_done()
-    assert manager.helper_version == 4
+    assert manager.helper_version == EXPECTED_HELPER_VERSION
     assert issue_registry.async_get_issue(DOMAIN, issue_id) is None
 
 

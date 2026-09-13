@@ -13,6 +13,12 @@ from homeassistant.core import HomeAssistant, callback
 
 from .models import (
     CleanupEvidence,
+    HealthCheckStatus,
+    HealthReason,
+    HealthSource,
+    PackageHealthError,
+    PackageHealthOutcome,
+    PackageHealthRecord,
     PackageMutationResult,
     PackageScanError,
     PackageScanFailure,
@@ -196,6 +202,11 @@ class PackageTransport(Protocol):
     async def async_ping(self, expected_node: str, vmid: int) -> bool:
         """Return whether the fixed guest liveness command succeeded."""
 
+    async def async_check_health(
+        self, expected_node: str, vmid: int
+    ) -> PackageHealthOutcome:
+        """Return one classified point-in-time Health verdict for one target."""
+
 
 def _utcnow() -> datetime:
     """Return an aware timestamp for scan records."""
@@ -253,6 +264,8 @@ class PackageManager:
         self._cleanup_records: dict[tuple[str, int], PackageUpdateRecord] = {}
         self._cleanup_tasks: dict[tuple[str, int], asyncio.Task[None]] = {}
         self._restore_reserved: set[tuple[str, int]] = set()
+        self._health_records: dict[tuple[str, int], PackageHealthRecord] = {}
+        self._health_tasks: dict[tuple[str, int], asyncio.Task[None]] = {}
         self._helper_version: int | None = None
         self._helper_probe_task: asyncio.Task[None] | None = None
         self._viewed_tokens: dict[tuple[str, int], str] = {}
@@ -295,6 +308,10 @@ class PackageManager:
         """Return the latest ephemeral package-update state for one LXC."""
         return self._update_records.get((node, vmid), PackageUpdateRecord())
 
+    def health_record(self, node: str, vmid: int) -> PackageHealthRecord:
+        """Return the latest ephemeral Health check state for one LXC."""
+        return self._health_records.get((node, vmid), PackageHealthRecord())
+
     @callback
     def restore_reserved(self, node: str, vmid: int) -> bool:
         """Return whether Restore owns this LXC in the current manager lifetime."""
@@ -333,6 +350,7 @@ class PackageManager:
         had_scan = self._records.pop(key, None) is not None
         had_viewed = self._viewed_tokens.pop(key, None) is not None
         had_cleanup = self._cleanup_evidence.pop(key, None) is not None
+        self._invalidate_health(node, vmid)
         if had_scan or had_viewed:
             self._dismiss_review(node, vmid)
         if had_cleanup:
@@ -390,6 +408,7 @@ class PackageManager:
                 | self._cleanup_evidence.keys()
                 | self._fenced_evidence
                 | self._cleanup_records.keys()
+                | self._health_records.keys()
             )
             if key not in current_targets
         ]
@@ -402,6 +421,7 @@ class PackageManager:
             self._fenced_evidence.discard(key)
             self._cleanup_records.pop(key, None)
             had_viewed = self._viewed_tokens.pop(key, None) is not None
+            self._invalidate_health(*key)
             if had_scan or had_viewed:
                 self._dismiss_review(*key)
             if had_cleanup:
@@ -435,6 +455,7 @@ class PackageManager:
             | self._cleanup_evidence.keys()
             | self._cleanup_tasks.keys()
             | self._viewed_tokens.keys()
+            | self._health_records.keys()
         ) - set(running_targets)
         if not stale:
             return
@@ -444,6 +465,7 @@ class PackageManager:
             had_scan = self._records.pop(key, None) is not None
             had_viewed = self._viewed_tokens.pop(key, None) is not None
             had_cleanup = self._cleanup_evidence.pop(key, None) is not None
+            had_health = self._invalidate_health(*key)
             task = self._tasks.pop(key, None)
             if task is not None and not task.done():
                 task.cancel()
@@ -457,7 +479,9 @@ class PackageManager:
                         "Could not dismiss stale cleanup presentation for %s/%s",
                         *key,
                     )
-            changed |= had_scan or had_viewed or had_cleanup or task is not None
+            changed |= (
+                had_scan or had_viewed or had_cleanup or had_health or task is not None
+            )
         if changed:
             self._on_state_change()
 
@@ -504,6 +528,11 @@ class PackageManager:
             raise PackageScanError(
                 PackageScanFailure.PACKAGE_MANAGER_BUSY,
                 "package cleanup is already running for this LXC VMID",
+            )
+        if self._health_running(vmid):
+            raise PackageScanError(
+                PackageScanFailure.PACKAGE_MANAGER_BUSY,
+                "a package health check is already running for this LXC VMID",
             )
 
         self._fenced_evidence.discard((node, vmid))
@@ -704,17 +733,22 @@ class PackageManager:
                 PackageUpdateOutcome.PACKAGE_MANAGER_BUSY,
                 "snapshot Restore owns this LXC VMID",
             )
-        if any(
-            target_vmid == vmid and record.status is PackageScanStatus.RUNNING
-            for (_node, target_vmid), record in self._records.items()
-        ) or any(
-            target_vmid == vmid and record.status is PackageUpdateStatus.RUNNING
-            for records in (self._update_records, self._cleanup_records)
-            for (_node, target_vmid), record in records.items()
+        if (
+            any(
+                target_vmid == vmid and record.status is PackageScanStatus.RUNNING
+                for (_node, target_vmid), record in self._records.items()
+            )
+            or any(
+                target_vmid == vmid and record.status is PackageUpdateStatus.RUNNING
+                for records in (self._update_records, self._cleanup_records)
+                for (_node, target_vmid), record in records.items()
+            )
+            or self._health_running(vmid)
         ):
             raise PackageUpdateError(
                 PackageUpdateOutcome.PACKAGE_MANAGER_BUSY,
-                "a package scan, update, or cleanup is already running for this LXC VMID",
+                "a package scan, update, cleanup, or health check is already "
+                "running for this LXC VMID",
             )
 
         reviewed = self._records.get((node, vmid))
@@ -736,6 +770,7 @@ class PackageManager:
         self._viewed_tokens.pop((node, vmid), None)
         self._dismiss_review(node, vmid)
         self._invalidate_cleanup(node, vmid)
+        self._invalidate_health(node, vmid)
         self._set_record(node, vmid, PackageScanRecord())
         own_record = PackageUpdateRecord(
             status=PackageUpdateStatus.RUNNING,
@@ -918,7 +953,12 @@ class PackageManager:
             except asyncio.CancelledError:
                 if self._update_records.get((node, vmid)) is own_record:
                     self._publish_cleanup_observation(node, vmid, None, "update")
-                    self._finish_update(node, vmid, own_record, outcome)
+                    # Unload/reload is cancelling this task; terminalize the
+                    # already-successful mutation but start no new
+                    # diagnostic work that could escape the unload.
+                    self._finish_update(
+                        node, vmid, own_record, outcome, claim_health=False
+                    )
                 else:
                     self._notify_update_complete(node, vmid, outcome)
                 raise
@@ -966,17 +1006,22 @@ class PackageManager:
                 PackageUpdateOutcome.PACKAGE_MANAGER_BUSY,
                 "snapshot Restore owns this LXC VMID",
             )
-        if any(
-            target_vmid == vmid and record.status is PackageScanStatus.RUNNING
-            for (_node, target_vmid), record in self._records.items()
-        ) or any(
-            target_vmid == vmid and record.status is PackageUpdateStatus.RUNNING
-            for records in (self._update_records, self._cleanup_records)
-            for (_node, target_vmid), record in records.items()
+        if (
+            any(
+                target_vmid == vmid and record.status is PackageScanStatus.RUNNING
+                for (_node, target_vmid), record in self._records.items()
+            )
+            or any(
+                target_vmid == vmid and record.status is PackageUpdateStatus.RUNNING
+                for records in (self._update_records, self._cleanup_records)
+                for (_node, target_vmid), record in records.items()
+            )
+            or self._health_running(vmid)
         ):
             raise PackageUpdateError(
                 PackageUpdateOutcome.PACKAGE_MANAGER_BUSY,
-                "a package scan, update, or cleanup is already running for this LXC VMID",
+                "a package scan, update, cleanup, or health check is already "
+                "running for this LXC VMID",
             )
         evidence = self._cleanup_evidence.get((node, vmid))
         if evidence is None or not evidence.candidates:
@@ -988,6 +1033,7 @@ class PackageManager:
         attempted_at = self._now()
         shown_plan = cleanup_plan_tuple(evidence.candidates)
         self._invalidate_cleanup(node, vmid)
+        self._invalidate_health(node, vmid)
         own_record = PackageUpdateRecord(
             status=PackageUpdateStatus.RUNNING,
             last_attempt=attempted_at,
@@ -1173,7 +1219,12 @@ class PackageManager:
                     self._publish_cleanup_observation(
                         node, vmid, None, "autoremove"
                     )
-                    self._finish_cleanup(node, vmid, own_record, outcome)
+                    # Unload/reload is cancelling this task; terminalize the
+                    # already-successful mutation but start no new
+                    # diagnostic work that could escape the unload.
+                    self._finish_cleanup(
+                        node, vmid, own_record, outcome, claim_health=False
+                    )
                 else:
                     self._notify_cleanup_complete(node, vmid, outcome)
                 raise
@@ -1231,13 +1282,35 @@ class PackageManager:
         vmid: int,
         own_record: PackageUpdateRecord,
         outcome: PackageUpdateRecord,
-    ) -> None:
-        """Publish an update outcome only while this attempt still owns the target."""
+        *,
+        claim_health: bool = True,
+    ) -> bool:
+        """Publish an update outcome only while this attempt still owns the target.
+
+        On a SUCCESS about to be published, Health RUNNING is claimed
+        *before* that publish (see :meth:`_try_claim_health_before_publish`)
+        so a re-entrant HA listener reacting to the publish can never start
+        a conflicting Scan/Update/Autoremove/Health for this VMID; the
+        background task itself only starts after the publish. ``claim_health
+        =False`` is used by the unload/reload cancellation path, which must
+        terminalize an already-successful mutation without starting new
+        diagnostic work.
+        """
         if self._update_records.get((node, vmid)) is not own_record:
-            return
+            return False
         self._update_tasks.pop((node, vmid), None)
+        health_claim: PackageHealthRecord | None = None
+        if claim_health and outcome.status is PackageUpdateStatus.SUCCESS:
+            health_claim = self._try_claim_health_before_publish(
+                node, vmid, source=HealthSource.UPDATE
+            )
         self._set_update_record(node, vmid, outcome)
         self._notify_update_complete(node, vmid, outcome)
+        if health_claim is not None:
+            self._start_claimed_health_task(
+                node, vmid, health_claim, source=HealthSource.UPDATE
+            )
+        return True
 
     def _notify_update_complete(
         self, node: str, vmid: int, outcome: PackageUpdateRecord
@@ -1311,6 +1384,229 @@ class PackageManager:
             self._on_helper_version(version)
         except Exception:
             _LOGGER.exception("Could not update package helper compatibility issue")
+
+    def _health_running(self, vmid: int) -> bool:
+        """Return whether Health is RUNNING for this VMID under any node key."""
+        return any(
+            target_vmid == vmid and record.check_status is HealthCheckStatus.RUNNING
+            for (_node, target_vmid), record in self._health_records.items()
+        )
+
+    @callback
+    def _invalidate_health(self, node: str, vmid: int) -> bool:
+        """Discard current Health evidence and cancel its task, if any.
+
+        Health evidence is ephemeral and must never survive the guest truth
+        changing materially; this never touches Restore reservation/fencing.
+        """
+        had_record = self._health_records.pop((node, vmid), None) is not None
+        task = self._health_tasks.pop((node, vmid), None)
+        if task is not None and not task.done():
+            task.cancel()
+        return had_record or task is not None
+
+    @callback
+    def _claim_health_record(
+        self, node: str, vmid: int, *, source: HealthSource
+    ) -> PackageHealthRecord:
+        """Synchronously replace the Health record with one fresh RUNNING attempt."""
+        own_record = PackageHealthRecord(
+            check_status=HealthCheckStatus.RUNNING, source=source
+        )
+        self._health_records[(node, vmid)] = own_record
+        self._on_state_change()
+        return own_record
+
+    @callback
+    def async_start_health(
+        self, node: str, vmid: int, *, target_is_running: bool
+    ) -> asyncio.Task[None]:
+        """Start a lifecycle-tracked manual Health check without holding the button."""
+        if not self.configured:
+            raise PackageScanError(
+                PackageScanFailure.EXECUTION_FAILED,
+                "package transport is not configured",
+            )
+        if not target_is_running:
+            raise PackageScanError(
+                PackageScanFailure.GUEST_UNAVAILABLE,
+                "LXC is not present and running in current Proxmox data",
+            )
+        if any(target_vmid == vmid for _node, target_vmid in self._restore_reserved):
+            raise PackageScanError(
+                PackageScanFailure.PACKAGE_MANAGER_BUSY,
+                "snapshot Restore owns this LXC VMID",
+            )
+        if (
+            any(
+                target_vmid == vmid and record.status is PackageScanStatus.RUNNING
+                for (_node, target_vmid), record in self._records.items()
+            )
+            or any(
+                target_vmid == vmid and record.status is PackageUpdateStatus.RUNNING
+                for records in (self._update_records, self._cleanup_records)
+                for (_node, target_vmid), record in records.items()
+            )
+            or self._health_running(vmid)
+        ):
+            raise PackageScanError(
+                PackageScanFailure.PACKAGE_MANAGER_BUSY,
+                "a package scan, update, cleanup, or health check is already "
+                "active for this LXC VMID",
+            )
+
+        own_record = self._claim_health_record(node, vmid, source=HealthSource.MANUAL)
+        try:
+            task = self._start_health_background_task(node, vmid, own_record)
+        except Exception as err:
+            if self._health_records.get((node, vmid)) is own_record:
+                self._health_records.pop((node, vmid), None)
+                self._on_state_change()
+            raise PackageScanError(
+                PackageScanFailure.EXECUTION_FAILED,
+                "could not start the health check background task",
+            ) from err
+        if not task.done():
+            self._health_tasks[(node, vmid)] = task
+        return task
+
+    async def _async_run_health(
+        self, node: str, vmid: int, own_record: PackageHealthRecord
+    ) -> None:
+        """Run one bounded Health check and publish its classified outcome.
+
+        A cancellation here is always caused by this manager's own
+        invalidation replacing or removing the Health record first (a
+        non-running observation, Restore invalidation, a new accepted
+        Update/Autoremove, or target pruning); the identity-guarded
+        :meth:`_finish_health` would be a no-op regardless, so cancellation
+        publishes nothing and simply propagates.
+        """
+        try:
+            outcome = await self._async_transport(
+                self._transport.async_check_health(node, vmid)
+            )
+        except PackageHealthError as err:
+            outcome = PackageHealthOutcome(None, err.reason, None)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            _LOGGER.exception("Unexpected Health check failure for %s/%s", node, vmid)
+            outcome = PackageHealthOutcome(None, HealthReason.MALFORMED_EVIDENCE, None)
+        self._finish_health(node, vmid, own_record, outcome)
+
+    @callback
+    def _finish_health(
+        self,
+        node: str,
+        vmid: int,
+        own_record: PackageHealthRecord,
+        outcome: PackageHealthOutcome,
+    ) -> None:
+        """Publish a Health outcome only while this attempt still owns the target."""
+        if self._health_records.get((node, vmid)) is not own_record:
+            return
+        self._health_tasks.pop((node, vmid), None)
+        evidence = outcome.evidence
+        self._health_records[(node, vmid)] = PackageHealthRecord(
+            check_status=HealthCheckStatus.COMPLETED,
+            state=outcome.state,
+            reason=outcome.reason,
+            source=own_record.source,
+            checked_at=self._now(),
+            guest_exec=evidence.guest_exec if evidence is not None else None,
+            dpkg=evidence.dpkg if evidence is not None else None,
+            unfinished_package_count=(
+                evidence.unfinished_package_count if evidence is not None else None
+            ),
+            reboot_required=evidence.reboot_required if evidence is not None else None,
+        )
+        self._on_state_change()
+
+    def _start_health_background_task(
+        self, node: str, vmid: int, own_record: PackageHealthRecord
+    ) -> asyncio.Task[None]:
+        """Create the background Health task with explicit coroutine ownership.
+
+        The coroutine object is created first and held locally so that, if
+        task creation itself raises, it can be closed explicitly here
+        rather than leaked as an un-awaited coroutine.
+        """
+        operation = self._async_run_health(node, vmid, own_record)
+        try:
+            return self._config_entry.async_create_background_task(
+                self._hass, operation, f"package health check {node}/{vmid}"
+            )
+        except Exception:
+            operation.close()
+            raise
+
+    @callback
+    def _health_claim_blocked(self, vmid: int) -> bool:
+        """Return whether a defensive pre-publish Health claim must be skipped.
+
+        Deliberately excludes the same-VMID Update/Autoremove record this
+        very hand-off is finishing: that record is expected to still read
+        RUNNING at this exact point and is never a conflict.
+        """
+        return (
+            any(target_vmid == vmid for _node, target_vmid in self._restore_reserved)
+            or any(
+                target_vmid == vmid and record.status is PackageScanStatus.RUNNING
+                for (_node, target_vmid), record in self._records.items()
+            )
+            or self._health_running(vmid)
+        )
+
+    @callback
+    def _try_claim_health_before_publish(
+        self, node: str, vmid: int, *, source: HealthSource
+    ) -> PackageHealthRecord | None:
+        """Defensively claim Health RUNNING before a terminal SUCCESS publishes.
+
+        Home Assistant listeners triggered by state publication can run
+        eagerly/re-entrantly, so the claim must land *before*
+        ``_set_update_record``/``_set_cleanup_record`` and its
+        notification -- not merely without an ``await`` after them -- so a
+        re-entrant Scan/Update/Autoremove/Health start for this VMID
+        already observes Health RUNNING. Skips (never overwrites) when the
+        target is unexpectedly already busy; this is defense in depth; no
+        `await` happens between this claim and the publish that follows.
+        """
+        if self._health_claim_blocked(vmid):
+            return None
+        return self._claim_health_record(node, vmid, source=source)
+
+    @callback
+    def _start_claimed_health_task(
+        self,
+        node: str,
+        vmid: int,
+        own_record: PackageHealthRecord,
+        *,
+        source: HealthSource,
+    ) -> None:
+        """Start the background task for a Health claim made just before publish.
+
+        Called only after the terminal mutation result and its
+        notification have been published. Only starts the task while this
+        exact claim still owns the target; never lets a failure here
+        recast the already-published mutation outcome.
+        """
+        if self._health_records.get((node, vmid)) is not own_record:
+            return
+        try:
+            task = self._start_health_background_task(node, vmid, own_record)
+        except Exception:
+            if self._health_records.get((node, vmid)) is own_record:
+                self._health_records.pop((node, vmid), None)
+                self._on_state_change()
+            _LOGGER.exception(
+                "Could not start post-%s Health check for %s/%s", source, node, vmid
+            )
+            return
+        if not task.done():
+            self._health_tasks[(node, vmid)] = task
 
     @callback
     def _invalidate_cleanup(self, node: str, vmid: int) -> None:
@@ -1401,13 +1697,31 @@ class PackageManager:
         vmid: int,
         own_record: PackageUpdateRecord,
         outcome: PackageUpdateRecord,
-    ) -> None:
-        """Publish cleanup state only while this attempt owns the target."""
+        *,
+        claim_health: bool = True,
+    ) -> bool:
+        """Publish cleanup state only while this attempt owns the target.
+
+        On a SUCCESS about to be published, Health RUNNING is claimed
+        *before* that publish for the same re-entrancy reason documented on
+        :meth:`_finish_update`. ``claim_health=False`` is used by the
+        unload/reload cancellation path.
+        """
         if self._cleanup_records.get((node, vmid)) is not own_record:
-            return
+            return False
         self._cleanup_tasks.pop((node, vmid), None)
+        health_claim: PackageHealthRecord | None = None
+        if claim_health and outcome.status is PackageUpdateStatus.SUCCESS:
+            health_claim = self._try_claim_health_before_publish(
+                node, vmid, source=HealthSource.AUTOREMOVE
+            )
         self._set_cleanup_record(node, vmid, outcome)
         self._notify_cleanup_complete(node, vmid, outcome)
+        if health_claim is not None:
+            self._start_claimed_health_task(
+                node, vmid, health_claim, source=HealthSource.AUTOREMOVE
+            )
+        return True
 
     @callback
     def _set_record(self, node: str, vmid: int, record: PackageScanRecord) -> None:
