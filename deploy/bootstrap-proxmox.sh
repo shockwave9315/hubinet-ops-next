@@ -5,7 +5,7 @@ set -eu
 
 main() {
   RELEASE_VERSION="2026.9.1.10"
-  HELPER_SHA256="70141fbf8b0df4079c43f00b32eeda8fe366e446760b447cda6bd64587f1875f"
+  HELPER_SHA256="74a352681161b76484735ac5818ca736264b70382a48d00ae713734d54278fca"
   REPOSITORY="shockwave9315/hubinet-ops-next"
   HELPER_URL="https://raw.githubusercontent.com/${REPOSITORY}/${RELEASE_VERSION}/deploy/hubinet-package-scan-helper.py"
   BOOTSTRAP_URL="https://raw.githubusercontent.com/${REPOSITORY}/${RELEASE_VERSION}/deploy/bootstrap-proxmox.sh"

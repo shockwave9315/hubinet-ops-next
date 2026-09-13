@@ -96,6 +96,9 @@ HEALTH_AUDIT_HALF_HEADERS = {
     "half-installed": "The following packages are only half installed",
     "half-configured": "The following packages are only half configured",
 }
+# dpkg --audit lists a reinst-required half-* package (for example an unpack
+# killed mid-way) only under this section, never under its half-* header.
+HEALTH_AUDIT_REINSTREQ_HEADER = "The following packages are in a mess"
 
 # Scan simulation, execution-time simulation, and mutation intentionally share
 # the same policy options. The only differences are simulation's ``-s`` and
@@ -891,6 +894,7 @@ def _check_dpkg_health(
         return "pending", None
     if persisted and all(
         HEALTH_AUDIT_HALF_HEADERS[status] in audit_stdout
+        or HEALTH_AUDIT_REINSTREQ_HEADER in audit_stdout
         for status in set(half_status.values())
     ):
         return "interrupted", len(half_status)

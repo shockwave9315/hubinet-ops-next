@@ -242,9 +242,12 @@ oversized or non-UTF8 output) always wins over the read comparison and over
 exits 0, and tests the dpkg database lock (`fcntl` `F_GETLK` on
 `/var/lib/dpkg/lock`) only once the database it read shows a problem, so a
 missing busy notice proves a clear lock only when the audit output itself
-reports each persisted half-installed/half-configured state; otherwise the
-result is `changed` (`UNKNOWN`). Only when the lock is clear in that sense and
-every original half-installed/half-configured identity's status is *exactly*
+reports each persisted half-installed/half-configured state -- either under
+its "only half installed"/"only half configured" section or, for a
+reinst-required package (such as an unpack killed mid-way), under dpkg's
+"in a mess" section, which is the only place audit lists such a package;
+otherwise the result is `changed` (`UNKNOWN`). Only when the lock is clear in
+that sense and every original half-installed/half-configured identity's status is *exactly*
 unchanged across both reads -- not merely "still somewhere in the half-* set",
 so half-installed progressing to half-configured is not mistaken for a stuck
 state -- is that reported as an interrupted package manager. The helper

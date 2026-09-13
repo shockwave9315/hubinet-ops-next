@@ -153,11 +153,14 @@ Status date: 2026-09-13
 - Architecture: **ACCEPTED BY MAINTAINER on 2026-09-13**, before runtime
   implementation; see the durable boundary in
   [ARCHITECTURE.md](ARCHITECTURE.md#lxc-health).
-- Implementation: **IMPLEMENTED / DRAFT / CORRECTION REVIEW**. PR #15 is open
-  and not merged. An independent review found three release-blocking
-  lifecycle/operator issues plus smaller hardening gaps; one narrow
-  correction pass has been applied addressing all of them. This has not yet
-  been externally re-reviewed.
+- Implementation: **IMPLEMENTED / READY FOR REVIEW**. PR #15 is open,
+  non-draft, and not merged or tagged. Several targeted reviews led to
+  lifecycle, evidence, and availability correction commits. A subsequent
+  full independent architecture review judged the architecture sound and
+  required only small fixes, applied in a final correction: a reinst-required
+  half-installed/half-configured package, which `dpkg --audit` lists only
+  under its "in a mess" section, is now recognized as persistent interrupted
+  dpkg state instead of `changed`, and this status record was refreshed.
 - Accepted scope: generic point-in-time OS/package Health for package-eligible
   LXCs, manually runnable and automatically run immediately after a
   successful Update or Autoremove, through one new helper v5 `check_health`
@@ -172,14 +175,14 @@ Status date: 2026-09-13
   and owns its background-task coroutine explicitly on both the manual and
   post-operation paths. `begin_restore()` and existing Update/Autoremove
   safety checks are unchanged.
-- Validation: **703 tests and 207 snapshots passed**; repository Ruff,
+- Validation: **724 tests and 207 snapshots passed**; repository Ruff,
   translation and release-parity checks, helper SHA/protocol consistency,
   ShellCheck, and shell syntax passed.
 
 ## Next
 
-Obtain review of the PR #15 correction pass, then release `2026.9.1.10` LXC
-Health.
+Merge PR #15 after maintainer approval, then tag and release `2026.9.1.10`
+LXC Health.
 
 ## Explicitly not started
 

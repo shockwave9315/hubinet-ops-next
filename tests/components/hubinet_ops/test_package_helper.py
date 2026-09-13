@@ -1186,6 +1186,40 @@ def test_check_health_clear_lock_requires_audit_to_report_the_half_state(
     )
 
 
+# Verbatim LC_ALL=C ``dpkg --audit`` output (dpkg 1.22.22) for a reinst-required
+# half-* package (half-installed reproduced by SIGKILLing a real ``dpkg
+# --unpack``; half-configured confirmed against a reinst-required status
+# database): dpkg lists it only under this section, never under its half-*
+# header.
+AUDIT_REINSTREQ = (
+    "The following packages are in a mess due to serious problems during\n"
+    "installation.  They must be reinstalled for them (and any packages\n"
+    "that depend on them) to function properly:\n"
+    " openssl              Secure Sockets Layer toolkit\n\n"
+)
+
+
+@pytest.mark.parametrize(
+    ("half_status", "audit_stdout", "expected"),
+    [
+        ("half-installed", AUDIT_REINSTREQ, "interrupted"),
+        ("half-configured", AUDIT_REINSTREQ, "interrupted"),
+        ("half-installed", AUDIT_LOCKED_PREFIX + AUDIT_REINSTREQ, "busy"),
+    ],
+)
+def test_check_health_reinst_required_audit_section_confirms_persisted_half_state(
+    half_status: str, audit_stdout: str, expected: str
+) -> None:
+    """A persisted reinst-required half-* state is interrupted, not changed."""
+    half = f"openssl\tamd64\t3.0.11-1\t{half_status}\n"
+    runner = FakeHelperRunner(inventory_outputs=(half, half), audit_stdout=audit_stdout)
+    response = _health(runner)
+    assert response["evidence"]["dpkg"] == expected
+    assert response["evidence"]["unfinished_package_count"] == (
+        1 if expected == "interrupted" else None
+    )
+
+
 def test_check_health_changed_between_reads_is_changed_regardless_of_audit() -> None:
     """A half-* state that moved between reads is never FAILED, even if audit agrees."""
     half = "openssl\tamd64\t3.0.11-1\thalf-installed\n"
