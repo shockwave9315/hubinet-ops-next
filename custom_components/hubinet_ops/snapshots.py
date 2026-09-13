@@ -1,4 +1,4 @@
-"""Thin stateless adapter for native Proxmox VE snapshot Restore operations."""
+"""Thin stateless adapter for native Proxmox VE snapshot operations."""
 
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
@@ -253,11 +253,35 @@ async def async_rollback_snapshot(
     except Exception as err:  # noqa: BLE001  # any transport failure is uncertain
         return RestoreResult(RestoreOutcome.UNCERTAIN, reason=_bounded_reason(err))
 
+    return await async_observe_task(
+        proxmox,
+        node,
+        raw_upid,
+        executor=executor,
+        observation_timeout=observation_timeout,
+        observation_attempts=observation_attempts,
+        monotonic=monotonic,
+        sleep=sleep,
+    )
+
+
+async def async_observe_task(
+    proxmox: Any,
+    node: str,
+    raw_upid: object,
+    *,
+    executor: Executor,
+    observation_timeout: float = RESTORE_OBSERVATION_TIMEOUT,
+    observation_attempts: int = _MAX_OBSERVATION_ATTEMPTS,
+    monotonic: Callable[[], float] = time.monotonic,
+    sleep: Callable[[float], None] = time.sleep,
+) -> RestoreResult:
+    """Validate and observe one native PVE task through the executor."""
     upid = _valid_upid(raw_upid, node)
     if upid is None:
         return RestoreResult(
             RestoreOutcome.UNCERTAIN,
-            reason="PVE returned an invalid rollback task ID",
+            reason="PVE returned an invalid task ID",
         )
     return await executor(
         lambda: _observe_task(

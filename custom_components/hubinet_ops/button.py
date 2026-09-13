@@ -32,7 +32,8 @@ from .packages.models import (
     PackageUpdateStatus,
 )
 from .packages.presentation import notify_review_plan
-from .snapshot_restore import setup_restore_buttons
+from .snapshot_restore import setup_restore_buttons, start_snapshot_create_observation
+from .snapshots import SnapshotKind
 
 PARALLEL_UPDATES = 1
 
@@ -41,7 +42,7 @@ PARALLEL_UPDATES = 1
 class ProxmoxNodeButtonNodeEntityDescription(ButtonEntityDescription):
     """Class to hold Proxmox node button description."""
 
-    press_action: Callable[[ProxmoxCoordinator, str], None]
+    press_action: Callable[[ProxmoxCoordinator, str], Any]
     permission: ProxmoxPermission = ProxmoxPermission.SYSPOWER
     permission_target: str = "nodes"
 
@@ -50,7 +51,7 @@ class ProxmoxNodeButtonNodeEntityDescription(ButtonEntityDescription):
 class ProxmoxVMButtonEntityDescription(ButtonEntityDescription):
     """Class to hold Proxmox VM button description."""
 
-    press_action: Callable[[ProxmoxCoordinator, str, int], None]
+    press_action: Callable[[ProxmoxCoordinator, str, int], Any]
     permission: ProxmoxPermission = ProxmoxPermission.POWER
     permission_target: str = "vms"
 
@@ -59,7 +60,7 @@ class ProxmoxVMButtonEntityDescription(ButtonEntityDescription):
 class ProxmoxContainerButtonEntityDescription(ButtonEntityDescription):
     """Class to hold Proxmox container button description."""
 
-    press_action: Callable[[ProxmoxCoordinator, str, int], None]
+    press_action: Callable[[ProxmoxCoordinator, str, int], Any]
     permission: ProxmoxPermission = ProxmoxPermission.POWER
     permission_target: str = "vms"
 
@@ -435,12 +436,21 @@ class ProxmoxVMButtonEntity(ProxmoxVMEntity, ProxmoxBaseButton):
     @override
     async def _async_press_call(self) -> None:
         """Execute the VM button action via executor."""
-        await self.hass.async_add_executor_job(
+        result = await self.hass.async_add_executor_job(
             self.entity_description.press_action,
             self.coordinator,
             self._node_name,
             self.device_id,
         )
+        if self.entity_description.key == "snapshot_create":
+            start_snapshot_create_observation(
+                self.hass,
+                self.coordinator,
+                SnapshotKind.QEMU,
+                self._node_name,
+                self.device_id,
+                result,
+            )
 
 
 class ProxmoxContainerButtonEntity(ProxmoxContainerEntity, ProxmoxBaseButton):
@@ -451,12 +461,21 @@ class ProxmoxContainerButtonEntity(ProxmoxContainerEntity, ProxmoxBaseButton):
     @override
     async def _async_press_call(self) -> None:
         """Execute the container button action via executor."""
-        await self.hass.async_add_executor_job(
+        result = await self.hass.async_add_executor_job(
             self.entity_description.press_action,
             self.coordinator,
             self._node_name,
             self.device_id,
         )
+        if self.entity_description.key == "snapshot_create":
+            start_snapshot_create_observation(
+                self.hass,
+                self.coordinator,
+                SnapshotKind.LXC,
+                self._node_name,
+                self.device_id,
+                result,
+            )
 
 
 class PackageScanButtonEntity(ProxmoxContainerEntity, ProxmoxBaseButton):

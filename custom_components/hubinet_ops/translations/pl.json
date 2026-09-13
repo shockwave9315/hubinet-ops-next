@@ -519,6 +519,18 @@
     "snapshot_restore_uncertain_lxc_guidance": {
       "message": "Sterowanie przywracaniem i pakietami dla tego LXC pozostaje zablokowane w bieżącym środowisku Home Assistant. Sprawdź zadanie PVE za pomocą UPID, jeśli jest dostępny. Przeładuj integrację dopiero po zakończeniu zadania PVE i upewnieniu się, że dla tego wpisu nie działa żadna operacja pakietowa Hubinet."
     },
+    "snapshot_create_notification_title": {
+      "message": "Wynik tworzenia snapshota"
+    },
+    "snapshot_create_success_notification": {
+      "message": "{target_type} {node}/{vmid}: natywne zadanie tworzenia snapshota zakończyło się pomyślnie o {timestamp}."
+    },
+    "snapshot_create_failed_notification": {
+      "message": "{target_type} {node}/{vmid}: PVE zgłosił błąd podczas tworzenia snapshota o {timestamp}. Natywne zadanie tworzenia snapshota zostało zatrzymane."
+    },
+    "snapshot_create_uncertain_notification": {
+      "message": "{target_type} {node}/{vmid}: nie udało się potwierdzić zakończenia natywnego zadania tworzenia snapshota o {timestamp}. Sprawdź zadanie PVE przed dalszym działaniem; zwykłe odpytywanie snapshotów może później pokazać snapshot."
+    },
     "package_table_package": {
       "message": "Pakiet"
     },

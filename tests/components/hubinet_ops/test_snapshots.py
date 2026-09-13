@@ -9,6 +9,7 @@ from custom_components.hubinet_ops.snapshots import (
     RestoreOutcome,
     SnapshotKind,
     async_list_snapshots,
+    async_observe_task,
     async_rollback_snapshot,
     async_validate_snapshot,
     eligible_snapshots,
@@ -21,6 +22,88 @@ UPID = "UPID:pve1:00000001:00000002:00000003:qmrollback:100:user@pam:"
 async def _executor(call):
     """Run a blocking-shaped callable immediately in adapter tests."""
     return call()
+
+
+@pytest.mark.parametrize("exitstatus", ["OK", "WARNINGS: 2"])
+async def test_shared_task_observer_classifies_success(exitstatus: str) -> None:
+    """The shared observer accepts native OK and warning terminal forms."""
+    proxmox = MagicMock()
+    with patch(
+        "custom_components.hubinet_ops.snapshots.Tasks.blocking_status",
+        return_value={"status": "stopped", "exitstatus": exitstatus},
+    ):
+        result = await async_observe_task(
+            proxmox, "pve1", UPID, executor=_executor
+        )
+
+    assert result.outcome is RestoreOutcome.SUCCESS
+    assert result.upid == UPID
+
+
+async def test_shared_task_observer_classifies_terminal_error() -> None:
+    """The shared observer reports a known stopped native error as FAILED."""
+    with patch(
+        "custom_components.hubinet_ops.snapshots.Tasks.blocking_status",
+        return_value={"status": "stopped", "exitstatus": "snapshot failed"},
+    ):
+        result = await async_observe_task(
+            MagicMock(), "pve1", UPID, executor=_executor
+        )
+
+    assert result.outcome is RestoreOutcome.FAILED
+    assert result.reason == "snapshot failed"
+
+
+@pytest.mark.parametrize(
+    "raw_upid",
+    ["not-a-UPID", UPID.replace("UPID:pve1:", "UPID:pve2:")],
+    ids=["malformed", "wrong-node"],
+)
+async def test_shared_task_observer_rejects_unobservable_upid(raw_upid: str) -> None:
+    """Malformed and wrong-node task identities remain UNCERTAIN."""
+    with patch(
+        "custom_components.hubinet_ops.snapshots.Tasks.blocking_status"
+    ) as blocking_status:
+        result = await async_observe_task(
+            MagicMock(), "pve1", raw_upid, executor=_executor
+        )
+
+    assert result.outcome is RestoreOutcome.UNCERTAIN
+    assert result.upid is None
+    blocking_status.assert_not_called()
+
+
+async def test_shared_task_observer_none_at_deadline_is_uncertain() -> None:
+    """Missing terminal status cannot confirm Create or Restore completion."""
+    with patch(
+        "custom_components.hubinet_ops.snapshots.Tasks.blocking_status",
+        return_value=None,
+    ):
+        result = await async_observe_task(
+            MagicMock(), "pve1", UPID, executor=_executor
+        )
+
+    assert result.outcome is RestoreOutcome.UNCERTAIN
+    assert result.upid == UPID
+
+
+async def test_shared_task_observer_three_read_failures_are_uncertain() -> None:
+    """Three bounded observation failures exhaust visibility without guessing."""
+    with patch(
+        "custom_components.hubinet_ops.snapshots.Tasks.blocking_status",
+        side_effect=ConnectionError("status unavailable"),
+    ) as blocking_status:
+        result = await async_observe_task(
+            MagicMock(),
+            "pve1",
+            UPID,
+            executor=_executor,
+            sleep=lambda _seconds: None,
+        )
+
+    assert result.outcome is RestoreOutcome.UNCERTAIN
+    assert result.upid == UPID
+    assert blocking_status.call_count == 3
 
 
 def _proxmox(kind: SnapshotKind, rows: object = ()) -> tuple[MagicMock, MagicMock]:

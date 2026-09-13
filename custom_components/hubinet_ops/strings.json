@@ -519,6 +519,18 @@
     "snapshot_restore_uncertain_lxc_guidance": {
       "message": "Restore and package controls remain fail-closed for this LXC in the current Home Assistant runtime. Inspect the PVE task using the UPID when available. Reload the integration only after the PVE task is finished and no Hubinet package operation is running for this entry."
     },
+    "snapshot_create_notification_title": {
+      "message": "Snapshot Create result"
+    },
+    "snapshot_create_success_notification": {
+      "message": "{target_type} {node}/{vmid}: the native snapshot task completed successfully at {timestamp}."
+    },
+    "snapshot_create_failed_notification": {
+      "message": "{target_type} {node}/{vmid}: PVE reported an error while creating the snapshot at {timestamp}. The native snapshot task has stopped."
+    },
+    "snapshot_create_uncertain_notification": {
+      "message": "{target_type} {node}/{vmid}: native snapshot task completion could not be confirmed at {timestamp}. Inspect the PVE task before taking further action; normal snapshot polling may later show the snapshot."
+    },
     "package_table_package": {
       "message": "Package"
     },
