@@ -12,12 +12,12 @@ Status date: 2026-09-26
   subsystem, guided fresh-install enrollment, native snapshot Restore, and
   native snapshot Create observation and explicit native Delete documented in
   [ARCHITECTURE.md](ARCHITECTURE.md).
-- Integration after merge: `2026.9.1.11`, helper v5, protocol v1.
+- Integration after merge: `2026.9.1.12`, helper v5, protocol v1.
 - Latest tagged release: `2026.9.1.11`.
 - Starting merged baseline: release `2026.9.1.11`, merged PR #16, main commit
   `6e3c1735f2635453a7e21675407ea2ff7438c54a`.
 - Git history is authoritative for the eventual feature merge SHA.
-- Feature validation: **810 tests and 213 snapshots passed**; repository Ruff,
+- Feature validation: **844 tests and 213 snapshots passed**; repository Ruff,
   translation and release-parity checks, helper SHA/protocol consistency,
   ShellCheck, and shell syntax passed.
 
@@ -191,11 +191,11 @@ Status date: 2026-09-26
 
 - Architecture: **ACCEPTED BY MAINTAINER on 2026-09-26**, before runtime
   implementation; see [ARCHITECTURE.md](ARCHITECTURE.md#native-snapshot-delete).
-- Implementation: **IMPLEMENTED / READY FOR REVIEW**. The pre-implementation
+- Implementation: **MERGED IN PR #16 / RELEASED AS 2026.9.1.11**. The pre-implementation
   documentation checkpoint is commit `246baa7`.
 - Independent review correction: architecture **ACCEPTED CONDITIONALLY BY
-  MAINTAINER / CONDITION CONFIRMED**; implementation **IMPLEMENTED / READY FOR
-  REVIEW**. Pre-runtime documentation checkpoint: `636136e`. Four
+  MAINTAINER / CONDITION CONFIRMED**; implementation **MERGED IN PR #16**.
+  Pre-runtime documentation checkpoint: `636136e`. Four
   reproductions establish false retained-snapshot reporting when generic Delete
   removes an active Update/Autoremove safety snapshot. The accepted correction
   uses only existing RUNNING records for the exact LXC target and
@@ -220,17 +220,26 @@ Status date: 2026-09-26
 
 - Architecture: **ACCEPTED BY MAINTAINER BEFORE IMPLEMENTATION**; optional
   HA YAML composition over existing entities and entity actions only.
-- Implementation: **NOT STARTED**. Automatic Scan automation blueprint,
-  one-click Update script blueprint with opt-in Autoremove, Mushroom example,
-  documentation, and focused HA validation are the accepted deliverables.
+- Implementation: **IMPLEMENTED / READY FOR REVIEW**. Documentation checkpoint:
+  `9f87618`. Automatic Scan automation blueprint, one-click Update script
+  blueprint with opt-in Autoremove, Mushroom example, and Easy/YOLO/Manual
+  instructions are shipped artifacts, validated with the pinned HA blueprint
+  loader and script engine. Both entity-action responses use the actual
+  `hubinet_ops` service domain and per-sensor response keys.
 - Backend lifecycle delta: **NONE**. Release metadata only may change under
   `custom_components/hubinet_ops`; helper v5/protocol v1 remain unchanged.
+- Validation: **34 focused Easy UX tests passed**; full `scripts/test.sh`
+  **844 tests and 213 snapshots passed**. Ruff, translation/release parity,
+  helper SHA/protocol consistency, shell checks, and `git diff --check` passed.
+  An initial full run hit three existing Snapshot Delete background-task
+  assertion timing failures; the affected 14-test group, all 810 existing
+  tests alone, and the final full run passed. Snapshot code/tests are unchanged.
 - Release target: `2026.9.1.12`.
 
 ## Next
 
-Implement the accepted Easy Update UX artifacts, then maintainer review of one
-draft PR. No merge, tag, or release is performed by this task.
+Maintainer review of the Easy Update UX draft PR. No merge, tag, or release is
+performed by this task.
 
 ## Explicitly not started
 

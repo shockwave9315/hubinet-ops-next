@@ -52,7 +52,9 @@ current state and [ARCHITECTURE.md](ARCHITECTURE.md) for accepted design.
 
 - Package updates are never automatic.
 - An update requires explicit operator action.
-- Package cleanup is never automatic and requires explicit operator action.
+- The integration never initiates package cleanup by itself. Cleanup requires
+  explicit operator action or the operator's opt-in post-Update Autoremove
+  choice in the optional Easy UX script.
 - A non-empty cleanup plan must be shown to the operator and re-verified before
   cleanup mutation.
 - The operator must be able to see and review the plan before an update.
@@ -87,6 +89,23 @@ current state and [ARCHITECTURE.md](ARCHITECTURE.md) for accepted design.
 The product should use the smallest correct architecture. New architecture
 exists only to solve a demonstrated problem; anticipated future complexity is
 not sufficient justification.
+
+## Optional Easy Update UX
+
+Easy Update UX composes existing Home Assistant entities and actions outside
+the integration runtime. A daily Scan automation keeps summary evidence useful;
+an explicit Update click confirms the exact current plan token and presses the
+existing Update button. Viewing individual package names is optional UX: the
+count, security count, operation result, and Health summarize the decision,
+while Review continues to expose the full exact plan on demand.
+
+The user may choose Easy (scheduled Scan, one-click Update, no Autoremove), YOLO
+(the same with opt-in Autoremove after successful Update and fresh candidates),
+or Manual/Advanced (Scan -> Review -> Approve -> Update / Autoremove / Health).
+These are optional presentation/orchestration profiles, not backend modes.
+All profiles use the same unchanged backend and its exact-plan checks. A changed
+plan requires new Scan evidence and another explicit click; the script never
+silently scans and approves a replacement plan.
 
 ## Practical trust and safety model
 

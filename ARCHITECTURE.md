@@ -37,7 +37,14 @@ Autoremove, and Health remain intact; viewing individual package rows is optiona
 UX. There is no Python scheduling, automatic backend approval/Autoremove,
 new manager/coordinator, persistent workflow, queue, worker, policy store,
 snapshot orchestration, or hidden endpoint. Python changes for this stage are
-limited to release metadata.
+limited to release metadata. The implementation uses native HA daily/start
+triggers, per-target `button.press` with `continue_on_error`, script `single`
+mode, and one hour shared across terminal Update observation and Autoremove
+button availability. Existing `last_attempt` and cleanup `observed_at` facts
+distinguish the new attempt and fresh evidence; no new identity or state is
+introduced. A new Scan during plan retrieval stops the script, and an old
+Update SUCCESS cannot authorize cleanup. The pre-implementation checkpoint is
+commit `9f87618`.
 
 ### Provenance
 
@@ -1107,7 +1114,7 @@ layer, backend, durable workflow, or snapshot subsystem.
 
 ### Operator flow and state
 
-Every update begins with explicit operator actions:
+The manual/advanced update interface begins with explicit operator actions:
 
 ```text
 Scan pending packages

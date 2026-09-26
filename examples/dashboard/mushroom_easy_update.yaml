@@ -1,0 +1,43 @@
+# Requires Mushroom's current Template card. Replace the five entity IDs below
+# (pending sensor appears again as entity). Copy this entire card into a dashboard.
+type: custom:mushroom-template-card
+entity: sensor.ct_nextcloud_pending_package_updates
+primary: Nextcloud
+icon: mdi:package-up
+secondary: >-
+  {% set pending = 'sensor.ct_nextcloud_pending_package_updates' %}
+  {% set update = 'sensor.ct_nextcloud_package_update' %}
+  {% set health = 'sensor.ct_nextcloud_health' %}
+  {% if is_state(update, 'running') %}
+    Aktualizacja w toku…
+  {% elif is_state(update, 'failed') %}
+    Aktualizacja nie powiodła się
+  {% elif is_state(health, 'failed') %}
+    Health: problem z systemem
+  {% elif not is_state_attr(pending, 'scan_status', 'success') or not is_number(states(pending)) %}
+    Brak aktualnego skanu
+  {% elif states(pending) | int(0) == 0 %}
+    System aktualny
+  {% else %}
+    {{ states(pending) | int(0) }} aktualizacji • {{ state_attr(pending, 'security_updates') | int(0) }} security
+  {% endif %}
+color: >-
+  {% set pending = 'sensor.ct_nextcloud_pending_package_updates' %}
+  {% set update = 'sensor.ct_nextcloud_package_update' %}
+  {% set health = 'sensor.ct_nextcloud_health' %}
+  {% if is_state(update, 'running') %} blue
+  {% elif is_state(update, 'failed') or is_state(health, 'failed') %} red
+  {% elif not is_state_attr(pending, 'scan_status', 'success') or not is_number(states(pending)) %} grey
+  {% elif states(pending) | int(0) == 0 %} green
+  {% else %} amber
+  {% endif %}
+tap_action:
+  action: perform-action
+  perform_action: script.turn_on
+  target:
+    entity_id: script.nextcloud_easy_update
+hold_action:
+  action: perform-action
+  perform_action: button.press
+  target:
+    entity_id: button.ct_nextcloud_review_package_update
