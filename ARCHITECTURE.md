@@ -186,6 +186,18 @@ workflow. Names outside `homeassistant_snapshot_` and `hubinet-preupd-` may
 receive only the non-blocking naming-heuristic warning that the snapshot does
 not appear to have been created by Hubinet-Ops. This is not ownership truth.
 
+The maintainer's independent-review instruction conditionally accepts one
+narrow in-flight package conflict check, now justified by executable evidence:
+deleting a safety snapshot during APT caused Update and Autoremove to publish
+false retained-snapshot records and notifications on both failure and successful
+mutation followed by cleanup. For LXC only, a selected `hubinet-preupd-*` name
+is rejected while that target's existing Update or Autoremove record is
+`RUNNING`. Check before consuming selection and again after fresh native listing,
+immediately before submission. This preserves the current transaction's own
+reporting; it is not ownership authority or a general deletion restriction.
+Other names, QEMU, Scan, Health, and completed package attempts do not participate.
+Use existing ephemeral records only, with no new reservation or persistent state.
+
 Delete neither rolls back the guest nor invalidates package or Health truth.
 It uses no package reservation or package snapshot cleanup helper; the latter
 retains its existing prefix protection. Native PVE locks and task semantics

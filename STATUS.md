@@ -193,13 +193,21 @@ Status date: 2026-09-26
   implementation; see [ARCHITECTURE.md](ARCHITECTURE.md#native-snapshot-delete).
 - Implementation: **IMPLEMENTED / READY FOR REVIEW**. The pre-implementation
   documentation checkpoint is commit `246baa7`.
+- Independent review correction: architecture **ACCEPTED CONDITIONALLY BY
+  MAINTAINER / CONDITION CONFIRMED**; implementation **IN PROGRESS**. Four
+  reproductions establish false retained-snapshot reporting when generic Delete
+  removes an active Update/Autoremove safety snapshot. The accepted correction
+  uses only existing RUNNING records for the exact LXC target and
+  `hubinet-preupd-*` choice, before acceptance and after fresh listing.
 - Validation: **199 focused tests and 213 snapshots passed**; full suite
   **788 tests and 213 snapshots passed**. Translation/release parity,
   helper SHA/protocol consistency, Ruff, ShellCheck, and shell syntax passed.
 - Accepted scope: one explicit Delete button using the existing exact selector,
   fresh native validation, ordinary QEMU/LXC DELETE, bounded background UPID
   observation, localized results, and success-only exact selector refresh.
-  External/manual snapshots are equally deletable; naming is warning-only.
+  External/manual snapshots are equally deletable; the external naming warning
+  is warning-only. The sole package conflict is the active LXC transaction
+  described above.
   Package truth, package cleanup protection, helper v5, and protocol v1 stay
   unchanged.
 - Release target: integration `2026.9.1.11`, helper v5, protocol v1.
