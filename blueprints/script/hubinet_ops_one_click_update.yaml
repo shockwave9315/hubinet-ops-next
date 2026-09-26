@@ -1,0 +1,141 @@
+blueprint:
+  name: Hubinet-Ops — one-click LXC Update
+  description: >-
+    One explicit click approves the current successful non-empty scan via its
+    exact token and presses Update. It never scans or replaces a changed plan.
+    Choose all entities from the SAME LXC. Optional Autoremove uses fresh
+    post-Update evidence after this Update succeeds. Observation is bounded to
+    one hour, including waiting for the existing Autoremove button to become
+    available after automatic Health. Timeout stops only this script; backend
+    operations continue. Manual controls remain available.
+  domain: script
+  homeassistant:
+    min_version: "2026.9.1"
+  input:
+    pending_packages_sensor:
+      name: Pending package updates sensor
+      selector:
+        entity:
+          filter:
+            - domain: sensor
+              integration: hubinet_ops
+    package_update_sensor:
+      name: Package Update status sensor
+      selector:
+        entity:
+          filter:
+            - domain: sensor
+              integration: hubinet_ops
+    update_button:
+      name: Update packages button
+      selector:
+        entity:
+          filter:
+            - domain: button
+              integration: hubinet_ops
+    unused_packages_sensor:
+      name: Unused packages sensor
+      selector:
+        entity:
+          filter:
+            - domain: sensor
+              integration: hubinet_ops
+    autoremove_button:
+      name: Autoremove unused packages button
+      selector:
+        entity:
+          filter:
+            - domain: button
+              integration: hubinet_ops
+    autoremove_after_update:
+      name: Autoremove after successful Update (YOLO)
+      description: >-
+        Your explicit policy choice: press Autoremove with fresh positive
+        candidates after Update succeeds. Off means Update only.
+      default: false
+      selector:
+        boolean: {}
+mode: single
+max_exceeded: silent
+variables:
+  pending_sensor: !input pending_packages_sensor
+  update_sensor: !input package_update_sensor
+  unused_sensor: !input unused_packages_sensor
+  cleanup_button: !input autoremove_button
+  run_autoremove: !input autoremove_after_update
+sequence:
+  - variables:
+      scan_attempt: "{{ state_attr(pending_sensor, 'last_attempt') }}"
+      previous_update_attempt: "{{ state_attr(update_sensor, 'last_attempt') }}"
+  - condition: template
+    value_template: >-
+      {{ is_state_attr(pending_sensor, 'scan_status', 'success')
+         and is_number(states(pending_sensor))
+         and states(pending_sensor) | int(0) > 0 }}
+  # These are the actual registered sensor entity-action names, not sensor.*.
+  - action: hubinet_ops.get_package_plan
+    target:
+      entity_id: !input pending_packages_sensor
+    response_variable: plan_response
+  - condition: template
+    value_template: >-
+      {% set plan = plan_response.get(pending_sensor, {}) %}
+      {{ plan.get('status') == 'success'
+         and plan.get('token') is string and plan.get('token') | length > 0
+         and plan.get('packages', []) | length > 0
+         and is_state_attr(pending_sensor, 'scan_status', 'success')
+         and state_attr(pending_sensor, 'last_attempt') == scan_attempt }}
+  - action: hubinet_ops.confirm_package_review
+    target:
+      entity_id: !input pending_packages_sensor
+    data:
+      token: "{{ plan_response[pending_sensor]['token'] }}"
+    response_variable: confirmation
+  - condition: template
+    value_template: "{{ confirmation.get(pending_sensor, {}).get('reviewed') == true }}"
+  - action: button.press
+    target:
+      entity_id: !input update_button
+  - condition: template
+    value_template: "{{ run_autoremove }}"
+  # last_attempt identifies the newly accepted Update, including very fast tasks.
+  - variables:
+      update_attempt: "{{ state_attr(update_sensor, 'last_attempt') }}"
+  - condition: template
+    value_template: >-
+      {{ update_attempt is not none and update_attempt != previous_update_attempt
+         and as_timestamp(update_attempt, 0) > 0 }}
+  - wait_template: >-
+      {{ state_attr(update_sensor, 'last_attempt') != update_attempt
+         or states(update_sensor) != 'running' }}
+    timeout: "01:00:00"
+    continue_on_timeout: false
+  - condition: template
+    value_template: >-
+      {{ is_state(update_sensor, 'success')
+         and state_attr(update_sensor, 'last_attempt') == update_attempt
+         and is_number(states(unused_sensor))
+         and states(unused_sensor) | int(0) > 0
+         and as_timestamp(state_attr(unused_sensor, 'observed_at'), 0)
+             >= as_timestamp(update_attempt, 0) }}
+  # Health already owns its own task. Wait for native button availability,
+  # using the remaining observation budget rather than starting another hour.
+  - wait_template: >-
+      {{ (states[cleanup_button] is not none and not is_state(cleanup_button, 'unavailable'))
+         or not is_state(update_sensor, 'success')
+         or state_attr(update_sensor, 'last_attempt') != update_attempt
+         or not has_value(unused_sensor) }}
+    timeout: "{{ wait.remaining }}"
+    continue_on_timeout: false
+  - condition: template
+    value_template: >-
+      {{ states[cleanup_button] is not none and not is_state(cleanup_button, 'unavailable')
+         and is_state(update_sensor, 'success')
+         and state_attr(update_sensor, 'last_attempt') == update_attempt
+         and is_number(states(unused_sensor))
+         and states(unused_sensor) | int(0) > 0
+         and as_timestamp(state_attr(unused_sensor, 'observed_at'), 0)
+             >= as_timestamp(update_attempt, 0) }}
+  - action: button.press
+    target:
+      entity_id: !input autoremove_button

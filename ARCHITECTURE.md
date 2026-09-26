@@ -8,6 +8,44 @@ provenance in [UPSTREAM.md](UPSTREAM.md).
 
 ## Accepted architecture today
 
+### Easy Update UX
+
+The maintainer accepted Easy Update UX for release 2026.9.1.12 before
+implementation. It is an optional Home Assistant YAML composition layer:
+an automation blueprint schedules presses of explicitly selected Scan buttons,
+a script blueprint composes one LXC's existing entity actions and buttons,
+and a Mushroom dashboard example presents existing summary facts.
+
+One explicit script click reads the current successful non-empty package plan
+through `hubinet_ops.get_package_plan`, confirms its exact returned token
+through `hubinet_ops.confirm_package_review`, verifies the response, and presses
+Update once. Both responses are keyed by the targeted pending-package sensor
+entity ID. The script never scans to replace the clicked plan, bypasses token
+confirmation, or recreates the backend's plan/snapshot/mutation/dpkg/liveness/
+cleanup/Health lifecycle. The backend remains authoritative and unchanged.
+
+With the user-selected `autoremove_after_update` option (default false), the
+script may observe the same new Update attempt until terminal success, then
+press the existing Autoremove button only with fresh positive cleanup evidence
+and button availability. Observation has a bounded deadline; timeout or script
+interruption never cancels the backend operation. Automatic post-Update Health
+may temporarily keep that button unavailable and remains backend-owned.
+
+Easy, YOLO (opt-in post-Update Autoremove), and Manual/Advanced are user-facing
+composition choices, not backend modes. Manual Scan, Review, Approve, Update,
+Autoremove, and Health remain intact; viewing individual package rows is optional
+UX. There is no Python scheduling, automatic backend approval/Autoremove,
+new manager/coordinator, persistent workflow, queue, worker, policy store,
+snapshot orchestration, or hidden endpoint. Python changes for this stage are
+limited to release metadata. The implementation uses native HA daily/start
+triggers, per-target `button.press` with `continue_on_error`, script `single`
+mode, and one hour shared across terminal Update observation and Autoremove
+button availability. Existing `last_attempt` and cleanup `observed_at` facts
+distinguish the new attempt and fresh evidence; no new identity or state is
+introduced. A new Scan during plan retrieval stops the script, and an old
+Update SUCCESS cannot authorize cleanup. The pre-implementation checkpoint is
+commit `9f87618`.
+
 ### Provenance
 
 ```text
@@ -1076,7 +1114,7 @@ layer, backend, durable workflow, or snapshot subsystem.
 
 ### Operator flow and state
 
-Every update begins with explicit operator actions:
+The manual/advanced update interface begins with explicit operator actions:
 
 ```text
 Scan pending packages

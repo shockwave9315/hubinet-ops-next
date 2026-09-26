@@ -1,0 +1,68 @@
+blueprint:
+  name: Hubinet-Ops — daily package Scan
+  description: >-
+    Refresh package evidence for the LXC Scan buttons you choose. This only
+    presses Scan; it never approves, updates, or removes packages. Unavailable
+    or rejected targets do not stop the remaining button presses.
+  domain: automation
+  homeassistant:
+    min_version: "2026.9.1"
+  input:
+    scan_buttons:
+      name: Package Scan buttons
+      description: Choose only Hubinet-Ops LXC Scan pending packages buttons.
+      selector:
+        entity:
+          filter:
+            - domain: button
+              integration: hubinet_ops
+          multiple: true
+    daily_scan_time:
+      name: Daily scan time
+      default: "04:00:00"
+      selector:
+        time: {}
+    scan_after_start:
+      name: Scan after Home Assistant start
+      default: true
+      selector:
+        boolean: {}
+    startup_delay:
+      name: Startup delay
+      description: Allow integration setup to finish before requesting scans.
+      default: 60
+      selector:
+        number:
+          min: 0
+          max: 3600
+          step: 1
+          unit_of_measurement: seconds
+          mode: box
+mode: single
+max_exceeded: silent
+variables:
+  scan_buttons: !input scan_buttons
+  scan_after_start: !input scan_after_start
+triggers:
+  - trigger: time
+    at: !input daily_scan_time
+    id: daily
+  - trigger: homeassistant
+    event: start
+    id: startup
+actions:
+  - condition: template
+    value_template: "{{ trigger.id != 'startup' or scan_after_start }}"
+  - if:
+      - condition: template
+        value_template: "{{ trigger.id == 'startup' }}"
+    then:
+      - delay:
+          seconds: !input startup_delay
+  - repeat:
+      for_each: "{{ scan_buttons }}"
+      sequence:
+        - action: button.press
+          target:
+            entity_id: "{{ repeat.item }}"
+          continue_on_error: true
