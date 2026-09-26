@@ -13,9 +13,9 @@ Status date: 2026-09-26
   native snapshot Create observation and explicit native Delete documented in
   [ARCHITECTURE.md](ARCHITECTURE.md).
 - Integration after merge: `2026.9.1.11`, helper v5, protocol v1.
-- Latest tagged release: `2026.9.1.10`.
-- Starting merged baseline: release `2026.9.1.10`, PR #15, main commit
-  `87f4dc192690a82253582f8c40898f6df2c1c247`.
+- Latest tagged release: `2026.9.1.11`.
+- Starting merged baseline: release `2026.9.1.11`, merged PR #16, main commit
+  `6e3c1735f2635453a7e21675407ea2ff7438c54a`.
 - Git history is authoritative for the eventual feature merge SHA.
 - Feature validation: **810 tests and 213 snapshots passed**; repository Ruff,
   translation and release-parity checks, helper SHA/protocol consistency,
@@ -216,11 +216,22 @@ Status date: 2026-09-26
   unchanged.
 - Release target: integration `2026.9.1.11`, helper v5, protocol v1.
 
+## 2026.9.1.12 Easy Update UX
+
+- Architecture: **ACCEPTED BY MAINTAINER BEFORE IMPLEMENTATION**; optional
+  HA YAML composition over existing entities and entity actions only.
+- Implementation: **NOT STARTED**. Automatic Scan automation blueprint,
+  one-click Update script blueprint with opt-in Autoremove, Mushroom example,
+  documentation, and focused HA validation are the accepted deliverables.
+- Backend lifecycle delta: **NONE**. Release metadata only may change under
+  `custom_components/hubinet_ops`; helper v5/protocol v1 remain unchanged.
+- Release target: `2026.9.1.12`.
+
 ## Next
 
-Maintainer review of the native snapshot Delete draft pull request. After
-merge, tag and publish `2026.9.1.11`; no release is performed by this task.
+Implement the accepted Easy Update UX artifacts, then maintainer review of one
+draft PR. No merge, tag, or release is performed by this task.
 
 ## Explicitly not started
 
-- Tagging and publishing `2026.9.1.11` await maintainer review and merge.
+- Tagging and publishing `2026.9.1.12` await maintainer review and merge.
