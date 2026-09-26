@@ -161,6 +161,38 @@ error behavior remains authoritative and normal selector polling may later
 reveal the created snapshot, without task reconstruction or transport
 ownership.
 
+### Native snapshot Delete
+
+On 2026-09-26, before runtime implementation, the maintainer explicitly
+accepted native snapshot Delete for release 2026.9.1.11. One **Delete snapshot**
+button per eligible QEMU VM and LXC consumes the exact explicit choice from
+the existing selector, using Restore's collision-safe `selected_snapshot`
+identity lookup. Acceptance requires the current guest and existing selector
+permission boundary; execution freshly lists native snapshots and requires
+that exact name to remain present and eligible.
+
+The thin stateless `snapshots.py` adapter submits exactly one ordinary native
+`DELETE /nodes/{node}/{qemu|lxc}/{vmid}/snapshot/{snapname}`, with no force
+argument. Existing bounded native UPID observation runs in a config-entry-
+tracked background task and publishes localized `SUCCESS`, `FAILED`,
+`NOT_STARTED`, or `UNCERTAIN` evidence. Only confirmed success signals the exact
+guest selector to refresh; no full coordinator refresh is introduced.
+
+Operator choice is authoritative: manually created and Hubinet-created native
+snapshots are equally deletable, with no prefix allowlist or confirmation
+workflow. Names outside `homeassistant_snapshot_` and `hubinet-preupd-` may
+receive only the non-blocking naming-heuristic warning that the snapshot does
+not appear to have been created by Hubinet-Ops. This is not ownership truth.
+
+Delete neither rolls back the guest nor invalidates package or Health truth.
+It uses no package reservation or package snapshot cleanup helper; the latter
+retains its existing prefix protection. Native PVE locks and task semantics
+remain authoritative. No second selector, inventory, manager, persistent
+metadata, lifecycle framework, retry, scheduler, helper, or bootstrap change
+is accepted. The existing Create selector-refresh residual also applies to
+Delete: an already-running entity update can absorb the targeted refresh,
+with normal polling self-healing within approximately 300 seconds.
+
 ### Helper repair and explicit package cleanup boundary
 
 On 2026-09-10, before implementation, the maintainer accepted helper-upgrade

@@ -1,6 +1,6 @@
 # Status
 
-Status date: 2026-09-13
+Status date: 2026-09-26
 
 ## Current baseline
 
@@ -13,7 +13,7 @@ Status date: 2026-09-13
   native snapshot Create observation documented in
   [ARCHITECTURE.md](ARCHITECTURE.md).
 - Current merged integration: `2026.9.1.10`, helper v5, protocol v1.
-- Latest tagged release remains `2026.9.1.9` until the post-merge release step.
+- Latest tagged release: `2026.9.1.10`.
 - Baseline merge vehicle: PR #15; after merge, Git history is authoritative for
   the exact merge commit SHA.
 - Baseline validation: **738 tests and 207 snapshots passed**; repository Ruff,
@@ -186,12 +186,24 @@ Status date: 2026-09-13
   translation and release-parity checks, helper SHA/protocol consistency,
   ShellCheck, and shell syntax passed.
 
+## 2026.9.1.11 native snapshot Delete
+
+- Architecture: **ACCEPTED BY MAINTAINER on 2026-09-26**, before runtime
+  implementation; see [ARCHITECTURE.md](ARCHITECTURE.md#native-snapshot-delete).
+- Implementation: **NOT STARTED** at the documentation checkpoint.
+- Accepted scope: one explicit Delete button using the existing exact selector,
+  fresh native validation, ordinary QEMU/LXC DELETE, bounded background UPID
+  observation, localized results, and success-only exact selector refresh.
+  External/manual snapshots are equally deletable; naming is warning-only.
+  Package truth, package cleanup protection, helper v5, and protocol v1 stay
+  unchanged.
+- Release target: integration `2026.9.1.11`, helper v5, protocol v1.
+
 ## Next
 
-Tag and publish `2026.9.1.10` from the merged PR #15 baseline. No additional
-runtime or architecture work is part of this release.
+Implement and validate the accepted native snapshot Delete feature for
+`2026.9.1.11`, then hand off one draft pull request for maintainer review.
 
 ## Explicitly not started
 
-- Nothing currently accepted and undesigned; `2026.9.1.10` only awaits the
-  post-merge tag/release step.
+- Native snapshot Delete runtime implementation at this checkpoint.
