@@ -7,16 +7,17 @@ Status date: 2026-09-26
 - Upstream: Home Assistant Core tag `2026.9.1`, commit
   `fc034572d0216a04ed40a07154394908a594dfed`.
 - Baseline tag: `baseline-ha-2026.9.1`.
-- Merged runtime: a domain-isolated custom-integration fork of Home Assistant
+- Runtime after merge: a domain-isolated custom-integration fork of Home Assistant
   Core `proxmoxve`, plus the package scan, review, update, and LXC Health
   subsystem, guided fresh-install enrollment, native snapshot Restore, and
-  native snapshot Create observation documented in
+  native snapshot Create observation and explicit native Delete documented in
   [ARCHITECTURE.md](ARCHITECTURE.md).
-- Current merged integration: `2026.9.1.10`, helper v5, protocol v1.
+- Integration after merge: `2026.9.1.11`, helper v5, protocol v1.
 - Latest tagged release: `2026.9.1.10`.
-- Baseline merge vehicle: PR #15; after merge, Git history is authoritative for
-  the exact merge commit SHA.
-- Baseline validation: **738 tests and 207 snapshots passed**; repository Ruff,
+- Starting merged baseline: release `2026.9.1.10`, PR #15, main commit
+  `87f4dc192690a82253582f8c40898f6df2c1c247`.
+- Git history is authoritative for the eventual feature merge SHA.
+- Feature validation: **788 tests and 213 snapshots passed**; repository Ruff,
   translation and release-parity checks, helper SHA/protocol consistency,
   ShellCheck, and shell syntax passed.
 
@@ -136,7 +137,7 @@ Status date: 2026-09-26
 
 - Architecture: **ACCEPTED BY MAINTAINER on 2026-09-13**; see the durable
   boundary in [ARCHITECTURE.md](ARCHITECTURE.md).
-- Implementation: **IMPLEMENTED / READY FOR REVIEW**.
+- Implementation: **MERGED IN RELEASE 2026.9.1.9**.
 - Accepted behavior: observe the exact native Create UPID in the background,
   publish a terminal result notification, and refresh only the exact guest's
   snapshot selector after confirmed success. The main coordinator remains
@@ -155,7 +156,7 @@ Status date: 2026-09-26
 - Architecture: **ACCEPTED BY MAINTAINER on 2026-09-13**, before runtime
   implementation; see the durable boundary in
   [ARCHITECTURE.md](ARCHITECTURE.md#lxc-health).
-- Implementation: **MERGED IN PR #15 / READY FOR TAG AND RELEASE**. Several
+- Implementation: **MERGED IN PR #15 / RELEASED AS 2026.9.1.10**. Several
   targeted reviews led to lifecycle, evidence, and availability corrections.
   A subsequent full independent architecture review judged the architecture
   sound and required only small fixes, applied in a final correction: a
@@ -181,7 +182,7 @@ Status date: 2026-09-26
   post-operation paths. `begin_restore()` and existing Update/Autoremove
   safety checks are unchanged.
 - Release state after merge: integration `2026.9.1.10`, helper v5, protocol v1;
-  tagging/publishing is the only remaining release step.
+  tagged and released as `2026.9.1.10`.
 - Validation: **738 tests and 207 snapshots passed**; repository Ruff,
   translation and release-parity checks, helper SHA/protocol consistency,
   ShellCheck, and shell syntax passed.
@@ -190,7 +191,11 @@ Status date: 2026-09-26
 
 - Architecture: **ACCEPTED BY MAINTAINER on 2026-09-26**, before runtime
   implementation; see [ARCHITECTURE.md](ARCHITECTURE.md#native-snapshot-delete).
-- Implementation: **NOT STARTED** at the documentation checkpoint.
+- Implementation: **IMPLEMENTED / READY FOR REVIEW**. The pre-implementation
+  documentation checkpoint is commit `246baa7`.
+- Validation: **199 focused tests and 213 snapshots passed**; full suite
+  **788 tests and 213 snapshots passed**. Translation/release parity,
+  helper SHA/protocol consistency, Ruff, ShellCheck, and shell syntax passed.
 - Accepted scope: one explicit Delete button using the existing exact selector,
   fresh native validation, ordinary QEMU/LXC DELETE, bounded background UPID
   observation, localized results, and success-only exact selector refresh.
@@ -201,9 +206,9 @@ Status date: 2026-09-26
 
 ## Next
 
-Implement and validate the accepted native snapshot Delete feature for
-`2026.9.1.11`, then hand off one draft pull request for maintainer review.
+Maintainer review of the native snapshot Delete draft pull request. After
+merge, tag and publish `2026.9.1.11`; no release is performed by this task.
 
 ## Explicitly not started
 
-- Native snapshot Delete runtime implementation at this checkpoint.
+- Tagging and publishing `2026.9.1.11` await maintainer review and merge.

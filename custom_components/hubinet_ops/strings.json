@@ -276,6 +276,9 @@
       "snapshot_create": {
         "name": "Create snapshot"
       },
+      "snapshot_delete": {
+        "name": "Delete snapshot"
+      },
       "snapshot_restore": {
         "name": "Restore"
       },
@@ -544,6 +547,33 @@
     },
     "snapshot_create_uncertain_notification": {
       "message": "{target_type} {node}/{vmid}: native snapshot task completion could not be confirmed at {timestamp}. Inspect the PVE task before taking further action; normal snapshot polling may later show the snapshot."
+    },
+    "snapshot_delete_no_selection": {
+      "message": "Select one exact native snapshot before pressing Delete snapshot."
+    },
+    "snapshot_delete_guest_missing": {
+      "message": "Snapshot deletion cannot start because the guest is no longer present in current Proxmox data."
+    },
+    "snapshot_delete_permission_denied": {
+      "message": "Snapshot deletion requires the existing selector permissions: VM.Audit, VM.Snapshot, and VM.PowerMgmt."
+    },
+    "snapshot_delete_notification_title": {
+      "message": "Snapshot Delete result"
+    },
+    "snapshot_delete_success_notification": {
+      "message": "{target_type} {node}/{vmid}: snapshot **{snapshot}** was deleted at {timestamp}."
+    },
+    "snapshot_delete_failed_notification": {
+      "message": "{target_type} {node}/{vmid}: PVE reported an error while deleting snapshot **{snapshot}** at {timestamp}."
+    },
+    "snapshot_delete_not_started_notification": {
+      "message": "{target_type} {node}/{vmid}: deletion of snapshot **{snapshot}** was not started at {timestamp}."
+    },
+    "snapshot_delete_uncertain_notification": {
+      "message": "{target_type} {node}/{vmid}: deletion outcome for snapshot **{snapshot}** could not be established at {timestamp}. Inspect the PVE task state before taking further action."
+    },
+    "snapshot_delete_external_warning": {
+      "message": "Warning for {target_type} {node}/{vmid}, snapshot **{snapshot}**: this snapshot does not appear to have been created by Hubinet-Ops. This is only a naming heuristic and does not block deletion."
     },
     "package_table_package": {
       "message": "Package"

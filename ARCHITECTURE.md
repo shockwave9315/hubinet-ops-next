@@ -169,7 +169,9 @@ button per eligible QEMU VM and LXC consumes the exact explicit choice from
 the existing selector, using Restore's collision-safe `selected_snapshot`
 identity lookup. Acceptance requires the current guest and existing selector
 permission boundary; execution freshly lists native snapshots and requires
-that exact name to remain present and eligible.
+that exact name to remain present and eligible. This accepted flow is
+implemented in the existing `snapshot_restore.py` orchestration and thin
+native adapter; the historical module name is retained.
 
 The thin stateless `snapshots.py` adapter submits exactly one ordinary native
 `DELETE /nodes/{node}/{qemu|lxc}/{vmid}/snapshot/{snapname}`, with no force
@@ -188,9 +190,10 @@ Delete neither rolls back the guest nor invalidates package or Health truth.
 It uses no package reservation or package snapshot cleanup helper; the latter
 retains its existing prefix protection. Native PVE locks and task semantics
 remain authoritative. No second selector, inventory, manager, persistent
-metadata, lifecycle framework, retry, scheduler, helper, or bootstrap change
-is accepted. The existing Create selector-refresh residual also applies to
-Delete: an already-running entity update can absorb the targeted refresh,
+metadata, lifecycle framework, retry, scheduler, helper, or bootstrap behavior
+change is accepted. The bootstrap's default release pin alone advances to
+2026.9.1.11 alongside the integration version, preserving release parity.
+The existing Create selector-refresh residual also applies to Delete: an already-running entity update can absorb the targeted refresh,
 with normal polling self-healing within approximately 300 seconds.
 
 ### Helper repair and explicit package cleanup boundary

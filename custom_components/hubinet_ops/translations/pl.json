@@ -276,6 +276,9 @@
       "snapshot_create": {
         "name": "Utwórz snapshot"
       },
+      "snapshot_delete": {
+        "name": "Usuń snapshot"
+      },
       "snapshot_restore": {
         "name": "Przywróć"
       },
@@ -544,6 +547,33 @@
     },
     "snapshot_create_uncertain_notification": {
       "message": "{target_type} {node}/{vmid}: nie udało się potwierdzić zakończenia natywnego zadania tworzenia snapshota o {timestamp}. Sprawdź zadanie PVE przed dalszym działaniem; zwykłe odpytywanie snapshotów może później pokazać snapshot."
+    },
+    "snapshot_delete_no_selection": {
+      "message": "Przed naciśnięciem Usuń snapshot wybierz jeden dokładny natywny snapshot."
+    },
+    "snapshot_delete_guest_missing": {
+      "message": "Nie można rozpocząć usuwania snapshota, ponieważ gościa nie ma już w bieżących danych Proxmox."
+    },
+    "snapshot_delete_permission_denied": {
+      "message": "Usuwanie snapshota wymaga istniejących uprawnień selektora: VM.Audit, VM.Snapshot i VM.PowerMgmt."
+    },
+    "snapshot_delete_notification_title": {
+      "message": "Wynik usuwania snapshota"
+    },
+    "snapshot_delete_success_notification": {
+      "message": "{target_type} {node}/{vmid}: snapshot **{snapshot}** został usunięty o {timestamp}."
+    },
+    "snapshot_delete_failed_notification": {
+      "message": "{target_type} {node}/{vmid}: PVE zgłosił błąd podczas usuwania snapshota **{snapshot}** o {timestamp}."
+    },
+    "snapshot_delete_not_started_notification": {
+      "message": "{target_type} {node}/{vmid}: usuwanie snapshota **{snapshot}** nie zostało rozpoczęte o {timestamp}."
+    },
+    "snapshot_delete_uncertain_notification": {
+      "message": "{target_type} {node}/{vmid}: nie udało się ustalić wyniku usuwania snapshota **{snapshot}** o {timestamp}. Sprawdź stan zadania PVE przed dalszym działaniem."
+    },
+    "snapshot_delete_external_warning": {
+      "message": "Ostrzeżenie dla {target_type} {node}/{vmid}, snapshot **{snapshot}**: ten snapshot nie wygląda na utworzony przez Hubinet-Ops. To tylko przypuszczenie na podstawie nazwy i nie blokuje usuwania."
     },
     "package_table_package": {
       "message": "Pakiet"

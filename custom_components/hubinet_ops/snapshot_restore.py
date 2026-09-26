@@ -1,4 +1,4 @@
-"""Explicit native snapshot Restore button orchestration."""
+"""Explicit native snapshot button orchestration."""
 
 import asyncio
 from hashlib import sha256
@@ -34,6 +34,7 @@ from .snapshots import (
     RestoreResult,
     SnapshotKind,
     SnapshotListError,
+    async_delete_snapshot,
     async_observe_task,
     async_rollback_snapshot,
     async_validate_snapshot,
@@ -46,6 +47,12 @@ SNAPSHOT_RESTORE_BUTTON = ButtonEntityDescription(
     entity_category=EntityCategory.CONFIG,
 )
 
+SNAPSHOT_DELETE_BUTTON = ButtonEntityDescription(
+    key="snapshot_delete",
+    translation_key="snapshot_delete",
+    entity_category=EntityCategory.CONFIG,
+)
+
 _LOGGER = logging.getLogger(__name__)
 
 
@@ -53,14 +60,17 @@ def setup_restore_buttons(
     coordinator: ProxmoxCoordinator,
     async_add_entities: AddConfigEntryEntitiesCallback,
 ) -> None:
-    """Set up fork-owned QEMU and LXC native Restore buttons."""
+    """Set up fork-owned QEMU and LXC native Restore and Delete buttons."""
 
     def _async_add_new_vms(
         vms: list[tuple[ProxmoxNodeData, dict[str, Any]]],
     ) -> None:
         async_add_entities(
-            ProxmoxVMSnapshotRestoreButton(coordinator, vm, node_data)
+            button_type(coordinator, vm, node_data)
             for node_data, vm in vms
+            for button_type in (
+                ProxmoxVMSnapshotRestoreButton, ProxmoxVMSnapshotDeleteButton
+            )
             if has_restore_permissions(coordinator, int(vm["vmid"]))
         )
 
@@ -68,10 +78,12 @@ def setup_restore_buttons(
         containers: list[tuple[ProxmoxNodeData, dict[str, Any]]],
     ) -> None:
         async_add_entities(
-            ProxmoxContainerSnapshotRestoreButton(
-                coordinator, container, node_data
-            )
+            button_type(coordinator, container, node_data)
             for node_data, container in containers
+            for button_type in (
+                ProxmoxContainerSnapshotRestoreButton,
+                ProxmoxContainerSnapshotDeleteButton,
+            )
             if has_restore_permissions(coordinator, int(container["vmid"]))
         )
 
@@ -356,8 +368,8 @@ def _notify_snapshot_restore(
     )
 
 
-class SnapshotRestoreButtonMixin(ButtonEntity):
-    """Accept and launch one explicit native snapshot Restore."""
+class SelectedSnapshotButtonMixin(ButtonEntity):
+    """Read the shared exact native snapshot choice and current target."""
 
     coordinator: ProxmoxCoordinator
     device_id: int
@@ -390,6 +402,10 @@ class SnapshotRestoreButtonMixin(ButtonEntity):
             else node_data.containers
         )
         return self.device_id in targets
+
+
+class SnapshotRestoreButtonMixin(SelectedSnapshotButtonMixin):
+    """Accept and launch one explicit native snapshot Restore."""
 
     @override
     async def async_press(self) -> None:
@@ -590,3 +606,223 @@ class ProxmoxContainerSnapshotRestoreButton(
         super().__init__(
             coordinator, SNAPSHOT_RESTORE_BUTTON, container_data, node_data
         )
+
+
+def snapshot_delete_notification_id(
+    entry_id: str, kind: SnapshotKind, node: str, vmid: int, snapshot_name: str
+) -> str:
+    """Scope Delete results to the exact entry, guest, and snapshot."""
+    identity = f"{entry_id}\0{kind}\0{node}\0{vmid}\0{snapshot_name}"
+    digest = sha256(identity.encode()).hexdigest()[:12]
+    return (
+        f"snapshot_delete_{_safe_restore_component(entry_id)}_{kind}_"
+        f"{_safe_restore_component(node)}_{vmid}_{digest}"
+    )
+
+
+def _notify_snapshot_delete(
+    hass: HomeAssistant,
+    entry_id: str,
+    kind: SnapshotKind,
+    node: str,
+    vmid: int,
+    snapshot_name: str,
+    result: RestoreResult,
+) -> None:
+    """Publish bounded localized evidence with an optional naming warning."""
+    placeholders = {
+        "target_type": _translate_restore(
+            hass,
+            "snapshot_restore_target_qemu"
+            if kind is SnapshotKind.QEMU
+            else "snapshot_restore_target_lxc",
+        ),
+        "node": escape(node),
+        "vmid": str(vmid),
+        "snapshot": escape(snapshot_name),
+        "timestamp": dt_util.utcnow().isoformat(),
+    }
+    message = _translate_restore(
+        hass, f"snapshot_delete_{result.outcome.value}_notification", **placeholders
+    )
+    if result.upid is not None:
+        message += "\n\n" + _translate_restore(
+            hass, "snapshot_restore_upid_detail", upid=escape(result.upid)
+        )
+    if result.reason:
+        message += "\n\n" + _translate_restore(
+            hass, "snapshot_restore_reason_detail", reason=escape(result.reason)
+        )
+    if not snapshot_name.startswith(("homeassistant_snapshot_", "hubinet-preupd-")):
+        message += "\n\n" + _translate_restore(
+            hass, "snapshot_delete_external_warning", **placeholders
+        )
+    persistent_notification.async_create(
+        hass,
+        message,
+        _translate_restore(hass, "snapshot_delete_notification_title"),
+        snapshot_delete_notification_id(entry_id, kind, node, vmid, snapshot_name),
+    )
+
+
+class SnapshotDeleteButtonMixin(SelectedSnapshotButtonMixin):
+    """Accept an exact operator choice without package lifecycle coupling."""
+
+    @override
+    async def async_press(self) -> None:
+        """Consume the choice and start config-entry-tracked background work."""
+        snapshot_name = self._selected_snapshot()
+        if snapshot_name is None:
+            raise HomeAssistantError(
+                translation_domain=DOMAIN,
+                translation_key="snapshot_delete_no_selection",
+            )
+        if not self._target_exists():
+            raise HomeAssistantError(
+                translation_domain=DOMAIN,
+                translation_key="snapshot_delete_guest_missing",
+            )
+        if not has_restore_permissions(self.coordinator, self.device_id):
+            raise HomeAssistantError(
+                translation_domain=DOMAIN,
+                translation_key="snapshot_delete_permission_denied",
+            )
+        async_dispatcher_send(
+            self.hass,
+            snapshot_selection_signal(
+                self.coordinator.config_entry.entry_id,
+                self._kind,
+                self._node_name,
+                self.device_id,
+            ),
+        )
+        operation = self._async_run_delete(snapshot_name)
+        try:
+            self.coordinator.config_entry.async_create_background_task(
+                self.hass,
+                operation,
+                f"snapshot Delete {self._node_name}/{self.device_id}",
+            )
+        except Exception:
+            operation.close()
+            raise
+
+    async def _async_run_delete(self, snapshot_name: str) -> None:
+        """Freshly validate, submit once, and observe through the native adapter."""
+        submission_may_have_started = False
+        cancelled = False
+        try:
+            valid = await async_validate_snapshot(
+                self.coordinator.proxmox,
+                self._node_name,
+                self.device_id,
+                self._kind,
+                snapshot_name,
+                executor=self.hass.async_add_executor_job,
+            )
+            if not valid:
+                result = RestoreResult(
+                    RestoreOutcome.NOT_STARTED,
+                    reason="the selected snapshot is no longer eligible or present",
+                )
+            else:
+                submission_may_have_started = True
+                result = await async_delete_snapshot(
+                    self.coordinator.proxmox,
+                    self._node_name,
+                    self.device_id,
+                    self._kind,
+                    snapshot_name,
+                    executor=self.hass.async_add_executor_job,
+                )
+        except SnapshotListError as err:
+            result = RestoreResult(RestoreOutcome.NOT_STARTED, reason=str(err))
+        except asyncio.CancelledError:
+            cancelled = True
+            result = RestoreResult(
+                RestoreOutcome.UNCERTAIN
+                if submission_may_have_started
+                else RestoreOutcome.NOT_STARTED,
+                reason="snapshot Delete observation was interrupted",
+            )
+        except Exception:
+            _LOGGER.exception(
+                "Unexpected native snapshot Delete failure for %s/%s",
+                self._node_name,
+                self.device_id,
+            )
+            result = RestoreResult(
+                RestoreOutcome.UNCERTAIN
+                if submission_may_have_started
+                else RestoreOutcome.NOT_STARTED,
+                reason="unexpected snapshot Delete failure",
+            )
+
+        try:
+            _notify_snapshot_delete(
+                self.hass,
+                self.coordinator.config_entry.entry_id,
+                self._kind,
+                self._node_name,
+                self.device_id,
+                snapshot_name,
+                result,
+            )
+        except Exception:
+            _LOGGER.exception(
+                "Could not publish snapshot Delete result for %s/%s",
+                self._node_name,
+                self.device_id,
+            )
+        if result.outcome is RestoreOutcome.SUCCESS:
+            async_dispatcher_send(
+                self.hass,
+                snapshot_choices_refresh_signal(
+                    self.coordinator.config_entry.entry_id,
+                    self._kind,
+                    self._node_name,
+                    self.device_id,
+                ),
+            )
+        if cancelled:
+            raise asyncio.CancelledError
+
+    @property
+    @override
+    def available(self) -> bool:
+        """Require only the existing selector's native permission boundary."""
+        return super().available and has_restore_permissions(
+            self.coordinator, self.device_id
+        )
+
+
+class ProxmoxVMSnapshotDeleteButton(SnapshotDeleteButtonMixin, ProxmoxVMEntity):
+    """Explicit QEMU native snapshot Delete button."""
+
+    _kind = SnapshotKind.QEMU
+
+    def __init__(
+        self,
+        coordinator: ProxmoxCoordinator,
+        vm_data: dict[str, Any],
+        node_data: ProxmoxNodeData,
+    ) -> None:
+        """Initialize one QEMU Delete button."""
+        super().__init__(coordinator, SNAPSHOT_DELETE_BUTTON, vm_data, node_data)
+
+
+class ProxmoxContainerSnapshotDeleteButton(
+    SnapshotDeleteButtonMixin, ProxmoxContainerEntity
+):
+    """Explicit LXC native snapshot Delete button."""
+
+    _kind = SnapshotKind.LXC
+
+    def __init__(
+        self,
+        coordinator: ProxmoxCoordinator,
+        container_data: dict[str, Any],
+        node_data: ProxmoxNodeData,
+    ) -> None:
+        """Initialize one LXC Delete button."""
+        super().__init__(coordinator, SNAPSHOT_DELETE_BUTTON, container_data, node_data)

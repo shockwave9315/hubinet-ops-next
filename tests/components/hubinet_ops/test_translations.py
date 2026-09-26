@@ -123,6 +123,7 @@ def _runtime_entity_translation_keys() -> dict[str, set[str]]:
             button.PACKAGE_AUTOREMOVE_BUTTON,
             button.PACKAGE_HEALTH_BUTTON,
             snapshot_restore.SNAPSHOT_RESTORE_BUTTON,
+            snapshot_restore.SNAPSHOT_DELETE_BUTTON,
         ),
         "select": (select.SNAPSHOT_SELECT,),
         "sensor": (
