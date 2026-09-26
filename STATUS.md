@@ -12,12 +12,12 @@ Status date: 2026-09-26
   subsystem, guided fresh-install enrollment, native snapshot Restore, and
   native snapshot Create observation and explicit native Delete documented in
   [ARCHITECTURE.md](ARCHITECTURE.md).
-- Integration after merge: `2026.9.1.12`, helper v5, protocol v1.
-- Latest tagged release: `2026.9.1.11`.
-- Starting merged baseline: release `2026.9.1.11`, merged PR #16, main commit
-  `6e3c1735f2635453a7e21675407ea2ff7438c54a`.
+- Integration after merge: `2026.9.1.13`, helper v5, protocol v1.
+- Latest tagged release: `2026.9.1.12`.
+- Starting merged baseline: release `2026.9.1.12`, merged PR #17, main commit
+  `8852a21cc2ba49c109a9d85863765253e3e6f39c`.
 - Git history is authoritative for the eventual feature merge SHA.
-- Feature validation: **844 tests and 213 snapshots passed**; repository Ruff,
+- Feature validation: **860 tests and 213 snapshots passed**; repository Ruff,
   translation and release-parity checks, helper SHA/protocol consistency,
   ShellCheck, and shell syntax passed.
 
@@ -220,7 +220,7 @@ Status date: 2026-09-26
 
 - Architecture: **ACCEPTED BY MAINTAINER BEFORE IMPLEMENTATION**; optional
   HA YAML composition over existing entities and entity actions only.
-- Implementation: **IMPLEMENTED / READY FOR REVIEW**. Documentation checkpoint:
+- Implementation: **MERGED IN PR #17 / RELEASED AS 2026.9.1.12**. Documentation checkpoint:
   `9f87618`. Automatic Scan automation blueprint, one-click Update script
   blueprint with opt-in Autoremove, Mushroom example, and Easy/YOLO/Manual
   instructions are shipped artifacts, validated with the pinned HA blueprint
@@ -236,11 +236,39 @@ Status date: 2026-09-26
   tests alone, and the final full run passed. Snapshot code/tests are unchanged.
 - Release target: `2026.9.1.12`.
 
+## 2026.9.1.13 Easy UX delivery + Scan All
+
+- Architecture: **ACCEPTED BY OWNER BEFORE IMPLEMENTATION**, as explicitly
+  directed for this task; see [ARCHITECTURE.md](ARCHITECTURE.md).
+- Implementation: **IMPLEMENTED / READY FOR MAINTAINER REVIEW**. Target:
+  `2026.9.1.13`. Pre-implementation documentation checkpoint: `ec877c8`.
+- Blueprint sources ship inside the HACS-installed integration package. Setup
+  and reload synchronize only the two owned files off-loop with atomic rename,
+  skip identical bytes, reset changed blueprint caches, and log delivery errors
+  without disabling native entities. User instances are never created/enabled.
+- The Polish Scan blueprint has no selector and calls only
+  `hubinet_ops.scan_all_packages`; one automation considers package-node LXCs
+  across loaded configured entries. Existing manager rejection and concurrency
+  rules isolate stopped/busy targets and remain authoritative.
+- The one-click Update runtime YAML remains byte-identical to 2026.9.1.12;
+  its blueprint-facing labels/descriptions are Polish. Mushroom is unchanged.
+- Validation: **50 focused delivery/Scan All/Easy UX tests passed**; full
+  `scripts/test.sh`: **860 tests and 213 snapshots passed**. Ruff, EN/PL parity,
+  release/helper SHA/protocol checks, ShellCheck, shell syntax, and
+  `git diff --check` passed.
+- Known delivery residual: old manually imported 2026.9.1.12 copies may appear
+  as duplicates until removed by the user. They are not searched or migrated.
+- Scope: integration-shipped/provisioned Polish blueprints and one targetless
+  Scan All action over existing loaded-entry PackageManagers.
+- Package backend delta: **NONE**; helper v5/protocol v1 unchanged.
+- Starting merged baseline: PR #17 / `2026.9.1.12`, main
+  `8852a21cc2ba49c109a9d85863765253e3e6f39c`.
+
 ## Next
 
-Maintainer review of the Easy Update UX draft PR. No merge, tag, or release is
+Maintainer review of the 2026.9.1.13 draft PR. No merge, tag, or release is
 performed by this task.
 
 ## Explicitly not started
 
-- Tagging and publishing `2026.9.1.12` await maintainer review and merge.
+- Tagging and publishing `2026.9.1.13` await maintainer review and merge.

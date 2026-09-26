@@ -1,0 +1,53 @@
+blueprint:
+  name: Hubinet-Ops — automatyczny skan aktualizacji
+  description: >-
+    Automatycznie sprawdza wszystkie obsługiwane przez Hubinet-Ops kontenery LXC
+    pod kątem dostępnych aktualizacji pakietów. Skan niczego nie aktualizuje ani
+    nie usuwa. Nie musisz wybierać poszczególnych kontenerów — Hubinet-Ops
+    sprawdzi wszystkie obsługiwane LXC.
+  domain: automation
+  homeassistant:
+    min_version: "2026.9.1"
+  input:
+    daily_scan_time:
+      name: Godzina codziennego skanowania
+      default: "04:00:00"
+      selector:
+        time: {}
+    scan_after_start:
+      name: Skanuj również po uruchomieniu Home Assistanta
+      default: true
+      selector:
+        boolean: {}
+    startup_delay:
+      name: Opóźnienie po uruchomieniu HA
+      description: Odczekaj tyle sekund, aby integracja zdążyła się uruchomić.
+      default: 60
+      selector:
+        number:
+          min: 0
+          max: 3600
+          step: 1
+          unit_of_measurement: s
+          mode: box
+mode: single
+max_exceeded: silent
+variables:
+  scan_after_start: !input scan_after_start
+triggers:
+  - trigger: time
+    at: !input daily_scan_time
+    id: daily
+  - trigger: homeassistant
+    event: start
+    id: startup
+actions:
+  - condition: template
+    value_template: "{{ trigger.id != 'startup' or scan_after_start }}"
+  - if:
+      - condition: template
+        value_template: "{{ trigger.id == 'startup' }}"
+    then:
+      - delay:
+          seconds: !input startup_delay
+  - action: hubinet_ops.scan_all_packages

@@ -8,11 +8,42 @@ provenance in [UPSTREAM.md](UPSTREAM.md).
 
 ## Accepted architecture today
 
+### Easy UX delivery and Scan All (2026.9.1.13)
+
+The owner explicitly accepted this narrow correction before implementation.
+The implemented setup hooks delegate to fork-owned `services.py` and
+`blueprint_delivery.py`; the documentation checkpoint is commit `ec877c8`.
+Blueprint YAML has one shipped source of truth inside the integration package.
+On integration setup/load, off-loop filesystem I/O synchronizes only the two
+managed files under `blueprints/{automation,script}/hubinet_ops/` in the HA
+configuration directory. Missing directories are created; identical files are
+left alone and changed managed copies are replaced atomically. Provisioning
+failure is logged and cannot disable native Proxmox functionality. No user
+automation or script instance is created or enabled; unrelated files and old
+manual imports are never searched or removed.
+
+The targetless `hubinet_ops.scan_all_packages` action considers upstream-
+discovered LXCs across currently loaded entries with configured package
+transport, scoped to each entry's existing package node. It delegates each
+request to the existing `PackageManager.async_start_scan` with current running
+state. Stopped or conflicting targets do not stop others; existing manager
+validation, task ownership, and scan semaphore remain authoritative. This adds
+no inventory, manager, scheduler, queue, persistence, policy, permission,
+helper, or package lifecycle change.
+
+The Polish automatic Scan blueprint has only daily time, startup enablement,
+and startup delay inputs, and calls Scan All without entity selection or button
+presses. One automation covers the installation. The Polish one-click Update
+blueprint remains one user-created script per chosen LXC with its unchanged
+2026.9.1.12 exact-token and optional Autoremove flow. Managed blueprint copies
+should be forked into a different namespace for customization. Old manual
+2026.9.1.12 imports may remain duplicates until the user removes them.
+
 ### Easy Update UX
 
 The maintainer accepted Easy Update UX for release 2026.9.1.12 before
 implementation. It is an optional Home Assistant YAML composition layer:
-an automation blueprint schedules presses of explicitly selected Scan buttons,
+an automation blueprint schedules Scan (using Scan All since 2026.9.1.13),
 a script blueprint composes one LXC's existing entity actions and buttons,
 and a Mushroom dashboard example presents existing summary facts.
 
@@ -37,8 +68,9 @@ Autoremove, and Health remain intact; viewing individual package rows is optiona
 UX. There is no Python scheduling, automatic backend approval/Autoremove,
 new manager/coordinator, persistent workflow, queue, worker, policy store,
 snapshot orchestration, or hidden endpoint. Python changes for this stage are
-limited to release metadata. The implementation uses native HA daily/start
-triggers, per-target `button.press` with `continue_on_error`, script `single`
+limited to release metadata for 2026.9.1.12; the accepted 2026.9.1.13 runtime
+additions are documented above. The implementation uses native HA daily/start
+triggers, the narrow Scan All action, script `single`
 mode, and one hour shared across terminal Update observation and Autoremove
 button availability. Existing `last_attempt` and cleanup `observed_at` facts
 distinguish the new attempt and fresh evidence; no new identity or state is

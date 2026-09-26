@@ -4,6 +4,8 @@
 # sensor for one LXC; every other Hubinet-Ops sensor does not support
 # them and is excluded natively via required entity features.
 
+scan_all_packages:
+
 get_package_plan:
   target:
     entity:
