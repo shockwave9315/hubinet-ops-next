@@ -17,7 +17,7 @@ Status date: 2026-09-26
 - Starting merged baseline: release `2026.9.1.10`, PR #15, main commit
   `87f4dc192690a82253582f8c40898f6df2c1c247`.
 - Git history is authoritative for the eventual feature merge SHA.
-- Feature validation: **788 tests and 213 snapshots passed**; repository Ruff,
+- Feature validation: **810 tests and 213 snapshots passed**; repository Ruff,
   translation and release-parity checks, helper SHA/protocol consistency,
   ShellCheck, and shell syntax passed.
 
@@ -194,13 +194,17 @@ Status date: 2026-09-26
 - Implementation: **IMPLEMENTED / READY FOR REVIEW**. The pre-implementation
   documentation checkpoint is commit `246baa7`.
 - Independent review correction: architecture **ACCEPTED CONDITIONALLY BY
-  MAINTAINER / CONDITION CONFIRMED**; implementation **IN PROGRESS**. Four
+  MAINTAINER / CONDITION CONFIRMED**; implementation **IMPLEMENTED / READY FOR
+  REVIEW**. Pre-runtime documentation checkpoint: `636136e`. Four
   reproductions establish false retained-snapshot reporting when generic Delete
   removes an active Update/Autoremove safety snapshot. The accepted correction
   uses only existing RUNNING records for the exact LXC target and
   `hubinet-preupd-*` choice, before acceptance and after fresh listing.
-- Validation: **199 focused tests and 213 snapshots passed**; full suite
-  **788 tests and 213 snapshots passed**. Translation/release parity,
+- Validation: **233 focused tests and 213 snapshots passed**; full suite
+  **810 tests and 213 snapshots passed**. The correction adds 22 regressions
+  covering both mutation outcomes, both package operations, the post-listing
+  conflict recheck, EN/PL results, and unrestricted owner choices outside the
+  narrow conflict. Translation/release parity,
   helper SHA/protocol consistency, Ruff, ShellCheck, and shell syntax passed.
 - Accepted scope: one explicit Delete button using the existing exact selector,
   fresh native validation, ordinary QEMU/LXC DELETE, bounded background UPID

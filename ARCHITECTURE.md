@@ -197,6 +197,8 @@ immediately before submission. This preserves the current transaction's own
 reporting; it is not ownership authority or a general deletion restriction.
 Other names, QEMU, Scan, Health, and completed package attempts do not participate.
 Use existing ephemeral records only, with no new reservation or persistent state.
+The correction is implemented in the existing Delete orchestration, with the
+pre-runtime documentation checkpoint recorded as commit `636136e`.
 
 Delete neither rolls back the guest nor invalidates package or Health truth.
 It uses no package reservation or package snapshot cleanup helper; the latter

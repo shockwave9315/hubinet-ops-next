@@ -45,7 +45,10 @@ Release 2026.9.1.11 extends the existing fork-owned snapshot adapter and
 orchestration with explicit QEMU/LXC Delete through the ordinary native PVE
 DELETE endpoint, without force. Delete shares the existing selector and
 bounded task observer, signals only the exact selector after confirmed
-success, and has no package-manager lifecycle coupling. The upstream-derived
+success, and does not mutate package-manager state. The fork-owned orchestration
+also reads existing Update/Autoremove RUNNING records for the narrow LXC
+`hubinet-preupd-*` deletion conflict that preserves in-flight reporting; it
+adds no package reservation or cleanup-helper reuse. The upstream-derived
 button platform's existing setup hook composes the additional buttons;
 Create and Restore behavior and the normal coordinator remain unchanged.
 

@@ -21,7 +21,8 @@ from homeassistant.util import dt as dt_util
 from .const import DOMAIN
 from .coordinator import ProxmoxCoordinator, ProxmoxNodeData
 from .entity import ProxmoxContainerEntity, ProxmoxVMEntity
-from .packages.models import PackageUpdateError
+from .packages.models import PackageUpdateError, PackageUpdateStatus
+from .packages.snapshots import SNAPSHOT_PREFIX
 from .select import (
     ATTR_SELECTED_SNAPSHOT,
     has_restore_permissions,
@@ -666,7 +667,22 @@ def _notify_snapshot_delete(
 
 
 class SnapshotDeleteButtonMixin(SelectedSnapshotButtonMixin):
-    """Accept an exact operator choice without package lifecycle coupling."""
+    """Accept an exact choice while preserving in-flight package reporting."""
+
+    def _package_snapshot_conflict(self, snapshot_name: str) -> bool:
+        """Read existing mutation records only for an LXC safety-snapshot choice."""
+        if self._kind is not SnapshotKind.LXC or not snapshot_name.startswith(
+            SNAPSHOT_PREFIX
+        ):
+            return False
+        manager = self.coordinator.package_manager
+        return any(
+            record.status is PackageUpdateStatus.RUNNING
+            for record in (
+                manager.update_record(self._node_name, self.device_id),
+                manager.cleanup_record(self._node_name, self.device_id),
+            )
+        )
 
     @override
     async def async_press(self) -> None:
@@ -686,6 +702,11 @@ class SnapshotDeleteButtonMixin(SelectedSnapshotButtonMixin):
             raise HomeAssistantError(
                 translation_domain=DOMAIN,
                 translation_key="snapshot_delete_permission_denied",
+            )
+        if self._package_snapshot_conflict(snapshot_name):
+            raise HomeAssistantError(
+                translation_domain=DOMAIN,
+                translation_key="snapshot_delete_package_running",
             )
         async_dispatcher_send(
             self.hass,
@@ -724,6 +745,13 @@ class SnapshotDeleteButtonMixin(SelectedSnapshotButtonMixin):
                 result = RestoreResult(
                     RestoreOutcome.NOT_STARTED,
                     reason="the selected snapshot is no longer eligible or present",
+                )
+            elif self._package_snapshot_conflict(snapshot_name):
+                result = RestoreResult(
+                    RestoreOutcome.NOT_STARTED,
+                    reason=_translate_restore(
+                        self.hass, "snapshot_delete_package_running"
+                    ),
                 )
             else:
                 submission_may_have_started = True

@@ -557,6 +557,9 @@
     "snapshot_delete_permission_denied": {
       "message": "Usuwanie snapshota wymaga istniejących uprawnień selektora: VM.Audit, VM.Snapshot i VM.PowerMgmt."
     },
+    "snapshot_delete_package_running": {
+      "message": "Dla tego LXC trwa aktualizacja pakietów lub Autoremove. Poczekaj na zakończenie tej operacji przed usunięciem snapshota bezpieczeństwa pakietów."
+    },
     "snapshot_delete_notification_title": {
       "message": "Wynik usuwania snapshota"
     },
