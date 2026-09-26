@@ -1,22 +1,23 @@
 # Status
 
-Status date: 2026-09-13
+Status date: 2026-09-26
 
 ## Current baseline
 
 - Upstream: Home Assistant Core tag `2026.9.1`, commit
   `fc034572d0216a04ed40a07154394908a594dfed`.
 - Baseline tag: `baseline-ha-2026.9.1`.
-- Merged runtime: a domain-isolated custom-integration fork of Home Assistant
+- Runtime after merge: a domain-isolated custom-integration fork of Home Assistant
   Core `proxmoxve`, plus the package scan, review, update, and LXC Health
   subsystem, guided fresh-install enrollment, native snapshot Restore, and
-  native snapshot Create observation documented in
+  native snapshot Create observation and explicit native Delete documented in
   [ARCHITECTURE.md](ARCHITECTURE.md).
-- Current merged integration: `2026.9.1.10`, helper v5, protocol v1.
-- Latest tagged release remains `2026.9.1.9` until the post-merge release step.
-- Baseline merge vehicle: PR #15; after merge, Git history is authoritative for
-  the exact merge commit SHA.
-- Baseline validation: **738 tests and 207 snapshots passed**; repository Ruff,
+- Integration after merge: `2026.9.1.11`, helper v5, protocol v1.
+- Latest tagged release: `2026.9.1.10`.
+- Starting merged baseline: release `2026.9.1.10`, PR #15, main commit
+  `87f4dc192690a82253582f8c40898f6df2c1c247`.
+- Git history is authoritative for the eventual feature merge SHA.
+- Feature validation: **810 tests and 213 snapshots passed**; repository Ruff,
   translation and release-parity checks, helper SHA/protocol consistency,
   ShellCheck, and shell syntax passed.
 
@@ -136,7 +137,7 @@ Status date: 2026-09-13
 
 - Architecture: **ACCEPTED BY MAINTAINER on 2026-09-13**; see the durable
   boundary in [ARCHITECTURE.md](ARCHITECTURE.md).
-- Implementation: **IMPLEMENTED / READY FOR REVIEW**.
+- Implementation: **MERGED IN RELEASE 2026.9.1.9**.
 - Accepted behavior: observe the exact native Create UPID in the background,
   publish a terminal result notification, and refresh only the exact guest's
   snapshot selector after confirmed success. The main coordinator remains
@@ -155,7 +156,7 @@ Status date: 2026-09-13
 - Architecture: **ACCEPTED BY MAINTAINER on 2026-09-13**, before runtime
   implementation; see the durable boundary in
   [ARCHITECTURE.md](ARCHITECTURE.md#lxc-health).
-- Implementation: **MERGED IN PR #15 / READY FOR TAG AND RELEASE**. Several
+- Implementation: **MERGED IN PR #15 / RELEASED AS 2026.9.1.10**. Several
   targeted reviews led to lifecycle, evidence, and availability corrections.
   A subsequent full independent architecture review judged the architecture
   sound and required only small fixes, applied in a final correction: a
@@ -181,17 +182,45 @@ Status date: 2026-09-13
   post-operation paths. `begin_restore()` and existing Update/Autoremove
   safety checks are unchanged.
 - Release state after merge: integration `2026.9.1.10`, helper v5, protocol v1;
-  tagging/publishing is the only remaining release step.
+  tagged and released as `2026.9.1.10`.
 - Validation: **738 tests and 207 snapshots passed**; repository Ruff,
   translation and release-parity checks, helper SHA/protocol consistency,
   ShellCheck, and shell syntax passed.
 
+## 2026.9.1.11 native snapshot Delete
+
+- Architecture: **ACCEPTED BY MAINTAINER on 2026-09-26**, before runtime
+  implementation; see [ARCHITECTURE.md](ARCHITECTURE.md#native-snapshot-delete).
+- Implementation: **IMPLEMENTED / READY FOR REVIEW**. The pre-implementation
+  documentation checkpoint is commit `246baa7`.
+- Independent review correction: architecture **ACCEPTED CONDITIONALLY BY
+  MAINTAINER / CONDITION CONFIRMED**; implementation **IMPLEMENTED / READY FOR
+  REVIEW**. Pre-runtime documentation checkpoint: `636136e`. Four
+  reproductions establish false retained-snapshot reporting when generic Delete
+  removes an active Update/Autoremove safety snapshot. The accepted correction
+  uses only existing RUNNING records for the exact LXC target and
+  `hubinet-preupd-*` choice, before acceptance and after fresh listing.
+- Validation: **233 focused tests and 213 snapshots passed**; full suite
+  **810 tests and 213 snapshots passed**. The correction adds 22 regressions
+  covering both mutation outcomes, both package operations, the post-listing
+  conflict recheck, EN/PL results, and unrestricted owner choices outside the
+  narrow conflict. Translation/release parity,
+  helper SHA/protocol consistency, Ruff, ShellCheck, and shell syntax passed.
+- Accepted scope: one explicit Delete button using the existing exact selector,
+  fresh native validation, ordinary QEMU/LXC DELETE, bounded background UPID
+  observation, localized results, and success-only exact selector refresh.
+  External/manual snapshots are equally deletable; the external naming warning
+  is warning-only. The sole package conflict is the active LXC transaction
+  described above.
+  Package truth, package cleanup protection, helper v5, and protocol v1 stay
+  unchanged.
+- Release target: integration `2026.9.1.11`, helper v5, protocol v1.
+
 ## Next
 
-Tag and publish `2026.9.1.10` from the merged PR #15 baseline. No additional
-runtime or architecture work is part of this release.
+Maintainer review of the native snapshot Delete draft pull request. After
+merge, tag and publish `2026.9.1.11`; no release is performed by this task.
 
 ## Explicitly not started
 
-- Nothing currently accepted and undesigned; `2026.9.1.10` only awaits the
-  post-merge tag/release step.
+- Tagging and publishing `2026.9.1.11` await maintainer review and merge.

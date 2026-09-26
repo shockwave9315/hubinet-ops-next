@@ -40,8 +40,8 @@ The current intended product scope is:
 3. explicit LXC package update;
 4. explicit operator-controlled cleanup of current APT autoremove
    candidates;
-5. operator-controlled native PVE snapshot selection and explicit Restore for
-   QEMU VMs and LXCs; and
+5. operator-controlled native PVE snapshot selection and explicit Restore and
+   Delete for QEMU VMs and LXCs; and
 6. post-update health.
 
 These are product intentions, not claims that the features or their
@@ -66,6 +66,16 @@ current state and [ARCHITECTURE.md](ARCHITECTURE.md) for accepted design.
   `UNKNOWN` until the operator explicitly scans again.
 - Snapshot Restore is never automatic. It requires selection of one exact
   native PVE snapshot followed by a separate explicit Restore button press.
+- Snapshot Delete is never automatic. It consumes an explicit exact choice
+  from the same native selector; manually created and Hubinet-created snapshots
+  are equally deletable. A naming warning never blocks deletion or adds a
+  confirmation step.
+- To preserve its own in-flight package reporting, Hubinet rejects deletion of
+  an LXC `hubinet-preupd-*` snapshot while the same target's Update or Autoremove
+  is RUNNING. This adds no ownership policy, confirmation, or persistent state;
+  after the attempt ends, explicit deletion is allowed.
+- Snapshot Delete does not roll back the guest or invalidate package/Health
+  evidence. Native PVE locks and normal deletion semantics are authoritative.
 - The native Proxmox VE API remains authoritative for snapshot operations.
 - Once Hubinet starts submitting an accepted LXC Restore, current package
   truth is invalid: pending and unused values become `UNKNOWN`, and a manual

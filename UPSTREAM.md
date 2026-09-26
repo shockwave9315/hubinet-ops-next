@@ -30,8 +30,8 @@ operator-facing Snapshot-to-restore select plus explicit Restore button. PR
 native PVE APIs. Snapshot enumeration remains outside the unchanged normal
 upstream-derived coordinator. Restore presentation and orchestration live in
 the fork-owned `snapshot_restore.py`; the upstream-derived `button.py` retains
-only a narrow setup hook and the package-control availability guards required
-by Restore exclusion. The package-specific LXC invalidation and Restore
+only a narrow setup hook for Restore and Delete and the package-control
+availability guards required by Restore exclusion. The package-specific LXC invalidation and Restore
 reservation are Hubinet-owned glue around the package extension, not a
 replacement for native PVE ownership.
 
@@ -40,6 +40,17 @@ Hubinet adds only a narrow post-POST hook in `button.py` that passes the returne
 UPID to fork-owned background task observation, terminal notification, and a
 confirmed-success signal for the exact guest's snapshot selector. This adds no
 snapshot inventory or main-coordinator refresh.
+
+Release 2026.9.1.11 extends the existing fork-owned snapshot adapter and
+orchestration with explicit QEMU/LXC Delete through the ordinary native PVE
+DELETE endpoint, without force. Delete shares the existing selector and
+bounded task observer, signals only the exact selector after confirmed
+success, and does not mutate package-manager state. The fork-owned orchestration
+also reads existing Update/Autoremove RUNNING records for the narrow LXC
+`hubinet-preupd-*` deletion conflict that preserves in-flight reporting; it
+adds no package reservation or cleanup-helper reuse. The upstream-derived
+button platform's existing setup hook composes the additional buttons;
+Create and Restore behavior and the normal coordinator remain unchanged.
 
 The fork-owned package-scan extension is isolated under
 `custom_components/hubinet_ops/packages` with a separately deployed forced-

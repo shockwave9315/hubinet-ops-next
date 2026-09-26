@@ -265,6 +265,36 @@ async def async_rollback_snapshot(
     )
 
 
+async def async_delete_snapshot(
+    proxmox: Any,
+    node: str,
+    vmid: int,
+    kind: SnapshotKind,
+    snapshot_name: str,
+    *,
+    executor: Executor,
+) -> RestoreResult:
+    """Submit one ordinary native DELETE and observe its returned task ID."""
+    if not snapshot_name_is_eligible(snapshot_name):
+        return RestoreResult(RestoreOutcome.NOT_STARTED, reason="invalid snapshot name")
+    try:
+        raw_upid = await executor(
+            lambda: _snapshot_endpoint(proxmox, node, vmid, kind)
+            (snapshot_name)
+            .delete()
+        )
+    except ResourceException as err:
+        if 400 <= err.status_code < 500 and err.status_code != 408:
+            return RestoreResult(
+                RestoreOutcome.NOT_STARTED, reason=_bounded_reason(err)
+            )
+        return RestoreResult(RestoreOutcome.UNCERTAIN, reason=_bounded_reason(err))
+    except Exception as err:  # noqa: BLE001  # any transport failure is uncertain
+        return RestoreResult(RestoreOutcome.UNCERTAIN, reason=_bounded_reason(err))
+
+    return await async_observe_task(proxmox, node, raw_upid, executor=executor)
+
+
 async def async_observe_task(
     proxmox: Any,
     node: str,

@@ -161,6 +161,55 @@ error behavior remains authoritative and normal selector polling may later
 reveal the created snapshot, without task reconstruction or transport
 ownership.
 
+### Native snapshot Delete
+
+On 2026-09-26, before runtime implementation, the maintainer explicitly
+accepted native snapshot Delete for release 2026.9.1.11. One **Delete snapshot**
+button per eligible QEMU VM and LXC consumes the exact explicit choice from
+the existing selector, using Restore's collision-safe `selected_snapshot`
+identity lookup. Acceptance requires the current guest and existing selector
+permission boundary; execution freshly lists native snapshots and requires
+that exact name to remain present and eligible. This accepted flow is
+implemented in the existing `snapshot_restore.py` orchestration and thin
+native adapter; the historical module name is retained.
+
+The thin stateless `snapshots.py` adapter submits exactly one ordinary native
+`DELETE /nodes/{node}/{qemu|lxc}/{vmid}/snapshot/{snapname}`, with no force
+argument. Existing bounded native UPID observation runs in a config-entry-
+tracked background task and publishes localized `SUCCESS`, `FAILED`,
+`NOT_STARTED`, or `UNCERTAIN` evidence. Only confirmed success signals the exact
+guest selector to refresh; no full coordinator refresh is introduced.
+
+Operator choice is authoritative: manually created and Hubinet-created native
+snapshots are equally deletable, with no prefix allowlist or confirmation
+workflow. Names outside `homeassistant_snapshot_` and `hubinet-preupd-` may
+receive only the non-blocking naming-heuristic warning that the snapshot does
+not appear to have been created by Hubinet-Ops. This is not ownership truth.
+
+The maintainer's independent-review instruction conditionally accepts one
+narrow in-flight package conflict check, now justified by executable evidence:
+deleting a safety snapshot during APT caused Update and Autoremove to publish
+false retained-snapshot records and notifications on both failure and successful
+mutation followed by cleanup. For LXC only, a selected `hubinet-preupd-*` name
+is rejected while that target's existing Update or Autoremove record is
+`RUNNING`. Check before consuming selection and again after fresh native listing,
+immediately before submission. This preserves the current transaction's own
+reporting; it is not ownership authority or a general deletion restriction.
+Other names, QEMU, Scan, Health, and completed package attempts do not participate.
+Use existing ephemeral records only, with no new reservation or persistent state.
+The correction is implemented in the existing Delete orchestration, with the
+pre-runtime documentation checkpoint recorded as commit `636136e`.
+
+Delete neither rolls back the guest nor invalidates package or Health truth.
+It uses no package reservation or package snapshot cleanup helper; the latter
+retains its existing prefix protection. Native PVE locks and task semantics
+remain authoritative. No second selector, inventory, manager, persistent
+metadata, lifecycle framework, retry, scheduler, helper, or bootstrap behavior
+change is accepted. The bootstrap's default release pin alone advances to
+2026.9.1.11 alongside the integration version, preserving release parity.
+The existing Create selector-refresh residual also applies to Delete: an already-running entity update can absorb the targeted refresh,
+with normal polling self-healing within approximately 300 seconds.
+
 ### Helper repair and explicit package cleanup boundary
 
 On 2026-09-10, before implementation, the maintainer accepted helper-upgrade
