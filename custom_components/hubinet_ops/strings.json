@@ -737,6 +737,10 @@
     "get_package_plan": {
       "name": "Get package plan",
       "description": "Returns the latest scan status for one LXC, and for a successful scan, its exact pending-package plan and a token to confirm it with. Never starts a scan and never changes review state."
+    },
+    "scan_all_packages": {
+      "name": "Scan all package LXCs",
+      "description": "Requests a package scan for all currently supported LXC containers across loaded Hubinet-Ops entries. Stopped or busy targets are skipped. Never updates or removes packages."
     }
   }
 }

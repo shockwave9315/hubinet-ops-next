@@ -737,6 +737,10 @@
     "get_package_plan": {
       "name": "Pobierz plan pakietów",
       "description": "Zwraca stan ostatniego skanu jednego LXC, a po pomyślnym skanie także dokładny plan oczekujących pakietów i token służący do potwierdzenia. Nigdy nie uruchamia skanu ani nie zmienia stanu przeglądu."
+    },
+    "scan_all_packages": {
+      "name": "Skanuj aktualizacje we wszystkich LXC",
+      "description": "Sprawdza dostępne aktualizacje we wszystkich obsługiwanych kontenerach LXC załadowanych integracji Hubinet-Ops. Pomija zatrzymane lub zajęte kontenery. Niczego nie aktualizuje ani nie usuwa."
     }
   }
 }

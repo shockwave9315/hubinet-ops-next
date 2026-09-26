@@ -85,7 +85,8 @@ current package evidence and review; Scan is needed after it runs again.
 The optional blueprints require Home Assistant `2026.9.1` or newer and the
 Hubinet-Ops package entities. All inputs in an Update script must belong to
 **the same LXC**. The selectors list Hubinet-Ops entities; choose the specified
-Scan/Update/Autoremove buttons and package sensors by their labels.
+Update/Autoremove buttons and package sensors by their labels. Automatic Scan
+requires no entity or LXC selection.
 
 | Profile | Scheduled Scan | Update | Autoremove after Update |
 | --- | --- | --- | --- |
@@ -97,33 +98,46 @@ There is no backend mode. All profiles use the existing backend. Manual
 controls and Health remain available. Inspecting individual package names is
 optional; hold the example card to open Review's full exact plan.
 
-### Import and configure the blueprints
+### Use the installed blueprints
 
-In **Settings > Automations & scenes > Blueprints**, import these GitHub file
-URLs (available on `main` after merge):
+1. Install or update Hubinet-Ops through HACS, then restart Home Assistant if
+   HACS requests it. Hubinet-Ops provisions the blueprints when it loads.
+2. Open **Settings > Automations & scenes > Blueprints**. Both Hubinet-Ops
+   blueprints are already available; no GitHub import is needed.
+3. Create **one automation for the whole installation** from
+   **Hubinet-Ops — automatyczny skan aktualizacji**. Configure only the daily
+   time, whether to scan after HA starts, and the startup delay. Defaults are
+   04:00 in HA's timezone, startup Scan enabled, and 60 seconds.
+4. Create **one script per chosen dashboard LXC** from
+   **Hubinet-Ops — aktualizacja LXC jednym kliknięciem**. Map that same LXC's
+   pending-package sensor, package-update sensor, Update button, unused-packages
+   sensor, and Autoremove button. Give it a recognizable name, for example
+   `script.nextcloud_easy_update`.
+5. Leave **Usuń automatycznie nieużywane pakiety po aktualizacji** off for EASY,
+   or turn it on for YOLO. This is your explicit choice; no second confirmation
+   is added.
 
-- [Daily package Scan](https://github.com/shockwave9315/hubinet-ops-next/blob/main/blueprints/automation/hubinet_ops_daily_package_scan.yaml)
-- [One-click LXC Update](https://github.com/shockwave9315/hubinet-ops-next/blob/main/blueprints/script/hubinet_ops_one_click_update.yaml)
+**Automatic Scan requires no LXC selection.** It always considers all currently
+supported Hubinet-Ops package LXCs across loaded integration entries. Stopped
+or busy targets do not prevent other targets from starting. The existing
+backend owns scan validation, background tasks, and concurrency; Scan never
+updates or removes packages. You can also request the same read-only operation
+with `hubinet_ops.scan_all_packages`, which takes no target or input.
 
-For testing the draft PR, replace `main` in those URLs with
-`feat/2026.9.1.12-easy-update-ux`. Alternatively, copy the files into
-`/config/blueprints/automation/hubinet_ops/` and
-`/config/blueprints/script/hubinet_ops/` respectively, then reload blueprints.
+Shipped sources live under `custom_components/hubinet_ops/blueprints/` so HACS
+installs them with the integration. Hubinet-Ops synchronizes its two managed
+copies under `/config/blueprints/automation/hubinet_ops/` and
+`/config/blueprints/script/hubinet_ops/` on setup/reload. Do not edit those
+managed copies: changes are replaced by the shipped version. To customize a
+blueprint, copy it under your own different namespace/name. Unrelated files
+are untouched. A manually imported 2026.9.1.12 GitHub copy may appear as a
+duplicate; remove that old copy yourself when it is no longer used.
 
-Create an automation from **Daily package Scan**, select each participating
-LXC's **Scan pending packages** button, and choose the daily time. Defaults are
-04:00 in Home Assistant's configured timezone, Scan after HA start enabled,
-and a 60-second startup delay. Each button is pressed separately; unavailable
-or rejected targets do not stop the remaining requests. Scans run in the
-existing backend, which owns concurrency. Nothing discovers targets or
-updates packages automatically.
-
-Create one script from **One-click LXC Update** for each chosen LXC. Map its
-pending-package sensor, package-update sensor, Update button, unused-packages
-sensor, and Autoremove button. Give it a recognizable name, for example
-`script.nextcloud_easy_update`. Leave **Autoremove after successful Update** off
-for EASY, or turn it on for YOLO. That option is your explicit policy choice;
-no second confirmation is added.
+Provisioning installs only blueprint templates. It never creates or enables
+user automations or script instances. If delivery fails, an error is logged
+and native Proxmox functionality continues. An integration-only reload refreshes
+the files and blueprint caches; reload automations/scripts or restart HA to
+apply changed templates to already-loaded user instances.
 
 A click uses the current successful non-empty Scan, calls
 `hubinet_ops.get_package_plan`, takes the response at the configured sensor's

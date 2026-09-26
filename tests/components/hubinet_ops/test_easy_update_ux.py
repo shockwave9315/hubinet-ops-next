@@ -1,7 +1,7 @@
 """Execute shipped Easy UX blueprints with the pinned Home Assistant engine."""
 
 import asyncio
-from contextlib import contextmanager
+from contextlib import asynccontextmanager
 from datetime import timedelta
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -10,21 +10,15 @@ from freezegun.api import FrozenDateTimeFactory
 import pytest
 from tests.common import MockConfigEntry, async_fire_time_changed  # noqa: TID251
 
+from custom_components.hubinet_ops.blueprint_delivery import async_provision_blueprints
 from custom_components.hubinet_ops.const import DOMAIN
 from custom_components.hubinet_ops.packages.models import (
     PackageScanRecord,
     PackageScanStatus,
     PackageUpdateStatus,
 )
-from homeassistant.components.automation.config import AUTOMATION_BLUEPRINT_SCHEMA
-from homeassistant.components.blueprint import (
-    BLUEPRINT_SCHEMA,
-    Blueprint,
-    DomainBlueprints,
-)
 from homeassistant.const import EVENT_HOMEASSISTANT_STARTED
 from homeassistant.core import HomeAssistant, ServiceCall, SupportsResponse
-from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.template import Template
 from homeassistant.setup import async_setup_component
 from homeassistant.util import dt as dt_util, yaml as yaml_util
@@ -33,6 +27,7 @@ from . import setup_integration
 from .test_packages import RESULT
 
 ROOT = Path(__file__).resolve().parents[3]
+SOURCE = ROOT / "custom_components" / DOMAIN / "blueprints"
 SCAN_PATH = "automation/hubinet_ops_daily_package_scan.yaml"
 UPDATE_PATH = "script/hubinet_ops_one_click_update.yaml"
 PENDING = "sensor.ct_nginx_pending_package_updates"
@@ -54,25 +49,15 @@ def enable_all_entities(entity_registry_enabled_by_default: None) -> None:
     """Keep package controls enabled in the real contract test."""
 
 
-@contextmanager
-def _load_shipped_blueprints():
-    """Use the real blueprint loader/schema with repository artifact paths."""
-
-    def load(domain_blueprints, path):
-        return Blueprint(
-            yaml_util.load_yaml(ROOT / "blueprints" / domain_blueprints.domain / path),
-            expected_domain=domain_blueprints.domain,
-            schema=AUTOMATION_BLUEPRINT_SCHEMA
-            if domain_blueprints.domain == "automation"
-            else BLUEPRINT_SCHEMA,
-        )
-
-    with patch.object(DomainBlueprints, "_load_blueprint", load):
-        yield
+@asynccontextmanager
+async def _load_shipped_blueprints(hass: HomeAssistant):
+    """Provision shipped bytes, then use the unpatched native HA loader."""
+    await async_provision_blueprints(hass)
+    yield
 
 
 async def _setup_script(hass: HomeAssistant, *, autoremove: bool = False) -> None:
-    with _load_shipped_blueprints():
+    async with _load_shipped_blueprints(hass):
         assert await async_setup_component(
             hass,
             "script",
@@ -80,7 +65,7 @@ async def _setup_script(hass: HomeAssistant, *, autoremove: bool = False) -> Non
                 "script": {
                     "easy_update": {
                         "use_blueprint": {
-                            "path": Path(UPDATE_PATH).name,
+                            "path": f"hubinet_ops/{Path(UPDATE_PATH).name}",
                             "input": {**INPUTS, "autoremove_after_update": autoremove},
                         }
                     }
@@ -354,8 +339,8 @@ async def test_easy_update_cleanup_wait_uses_remaining_hour(
 
 def test_easy_ux_artifacts_only_call_existing_ha_actions() -> None:
     """Blueprints contain no direct snapshot/helper/package mutation entry points."""
-    scan = yaml_util.load_yaml(ROOT / "blueprints" / SCAN_PATH)
-    update = yaml_util.load_yaml(ROOT / "blueprints" / UPDATE_PATH)
+    scan = yaml_util.load_yaml(SOURCE / SCAN_PATH)
+    update = yaml_util.load_yaml(SOURCE / UPDATE_PATH)
 
     def actions(value):
         if isinstance(value, dict):
@@ -367,7 +352,23 @@ def test_easy_ux_artifacts_only_call_existing_ha_actions() -> None:
             for child in value:
                 yield from actions(child)
 
-    assert set(actions(scan)) == {"button.press"}
+    assert set(actions(scan)) == {"hubinet_ops.scan_all_packages"}
+    assert "scan_buttons" not in scan["blueprint"]["input"]
+    assert "entity:" not in (SOURCE / SCAN_PATH).read_text()
+    assert set(scan["blueprint"]["input"]) == {
+        "daily_scan_time",
+        "scan_after_start",
+        "startup_delay",
+    }
+    assert scan["blueprint"]["name"] == "Hubinet-Ops — automatyczny skan aktualizacji"
+    assert "Skan niczego nie aktualizuje" in scan["blueprint"]["description"]
+    assert (
+        update["blueprint"]["name"]
+        == "Hubinet-Ops — aktualizacja LXC jednym kliknięciem"
+    )
+    assert update["blueprint"]["input"]["autoremove_after_update"]["name"] == (
+        "Usuń automatycznie nieużywane pakiety po aktualizacji"
+    )
     assert set(actions(update)) == {
         "hubinet_ops.get_package_plan",
         "hubinet_ops.confirm_package_review",
@@ -401,19 +402,16 @@ async def test_easy_update_old_success_and_fast_new_success(
 async def test_easy_scan_real_daily_and_startup_triggers(
     hass: HomeAssistant, freezer: FrozenDateTimeFactory, trigger: str
 ) -> None:
-    """Both real triggers target only chosen buttons and isolate target rejection."""
-    buttons = ["button.first_scan", "button.broken_scan", "button.last_scan"]
+    """Daily/startup triggers call targetless Scan All; disabled startup does not."""
     calls = []
 
-    async def press(call):
-        calls.append(call.data["entity_id"])
-        if call.data["entity_id"] == [buttons[1]]:
-            raise HomeAssistantError("broken target")
+    async def scan_all(call):
+        calls.append(dict(call.data))
 
-    hass.services.async_register("button", "press", press)
+    hass.services.async_register(DOMAIN, "scan_all_packages", scan_all)
     await hass.config.async_set_time_zone("UTC")
     freezer.move_to("2026-09-26T03:58:00+00:00")
-    with _load_shipped_blueprints():
+    async with _load_shipped_blueprints(hass):
         assert await async_setup_component(
             hass,
             "automation",
@@ -421,11 +419,10 @@ async def test_easy_scan_real_daily_and_startup_triggers(
                 "automation": {
                     "alias": "daily scans",
                     "use_blueprint": {
-                        "path": Path(SCAN_PATH).name,
+                        "path": f"hubinet_ops/{Path(SCAN_PATH).name}",
                         "input": {
-                            "scan_buttons": buttons,
                             "scan_after_start": trigger != "disabled",
-                            "startup_delay": 0,
+                            "startup_delay": 5,
                         },
                     },
                 }
@@ -438,8 +435,19 @@ async def test_easy_scan_real_daily_and_startup_triggers(
         )
     else:
         hass.bus.async_fire(EVENT_HOMEASSISTANT_STARTED)
+        # Let the real script enter its delay before advancing HA's clock.
+        for _ in range(10):
+            await asyncio.sleep(0)
+        assert calls == []
+        freezer.tick(timedelta(seconds=4))
+        async_fire_time_changed(hass, dt_util.utcnow())
+        for _ in range(10):
+            await asyncio.sleep(0)
+        assert calls == []
+        freezer.tick(timedelta(seconds=2))
+        async_fire_time_changed(hass, dt_util.utcnow())
     await hass.async_block_till_done()
-    assert calls == ([] if trigger == "disabled" else [[button] for button in buttons])
+    assert calls == ([] if trigger == "disabled" else [{}])
 
 
 @pytest.mark.parametrize(

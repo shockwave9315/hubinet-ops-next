@@ -11,6 +11,8 @@ provenance in [UPSTREAM.md](UPSTREAM.md).
 ### Easy UX delivery and Scan All (2026.9.1.13)
 
 The owner explicitly accepted this narrow correction before implementation.
+The implemented setup hooks delegate to fork-owned `services.py` and
+`blueprint_delivery.py`; the documentation checkpoint is commit `ec877c8`.
 Blueprint YAML has one shipped source of truth inside the integration package.
 On integration setup/load, off-loop filesystem I/O synchronizes only the two
 managed files under `blueprints/{automation,script}/hubinet_ops/` in the HA
@@ -41,7 +43,7 @@ should be forked into a different namespace for customization. Old manual
 
 The maintainer accepted Easy Update UX for release 2026.9.1.12 before
 implementation. It is an optional Home Assistant YAML composition layer:
-an automation blueprint schedules presses of explicitly selected Scan buttons,
+an automation blueprint schedules Scan (using Scan All since 2026.9.1.13),
 a script blueprint composes one LXC's existing entity actions and buttons,
 and a Mushroom dashboard example presents existing summary facts.
 
@@ -66,8 +68,9 @@ Autoremove, and Health remain intact; viewing individual package rows is optiona
 UX. There is no Python scheduling, automatic backend approval/Autoremove,
 new manager/coordinator, persistent workflow, queue, worker, policy store,
 snapshot orchestration, or hidden endpoint. Python changes for this stage are
-limited to release metadata. The implementation uses native HA daily/start
-triggers, per-target `button.press` with `continue_on_error`, script `single`
+limited to release metadata for 2026.9.1.12; the accepted 2026.9.1.13 runtime
+additions are documented above. The implementation uses native HA daily/start
+triggers, the narrow Scan All action, script `single`
 mode, and one hour shared across terminal Update observation and Autoremove
 button availability. Existing `last_attempt` and cleanup `observed_at` facts
 distinguish the new attempt and fresh evidence; no new identity or state is

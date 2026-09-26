@@ -1,57 +1,62 @@
 blueprint:
-  name: Hubinet-Ops — one-click LXC Update
+  name: Hubinet-Ops — aktualizacja LXC jednym kliknięciem
   description: >-
-    One explicit click approves the current successful non-empty scan via its
-    exact token and presses Update. It never scans or replaces a changed plan.
-    Choose all entities from the SAME LXC. Optional Autoremove uses fresh
-    post-Update evidence after this Update succeeds. Observation is bounded to
-    one hour, including waiting for the existing Autoremove button to become
-    available after automatic Health. Timeout stops only this script; backend
-    operations continue. Manual controls remain available.
+    Aktualizuje pakiety w wybranym LXC jednym kliknięciem, na podstawie
+    aktualnego skanu. Wybierz wszystkie czujniki i przyciski z tego samego LXC.
+    Jeśli lista aktualizacji się zmieni, wykonaj nowy skan i kliknij ponownie.
+    Opcjonalnie usuwa nieużywane pakiety po udanej aktualizacji. Oczekiwanie
+    trwa maksymalnie godzinę; jego zakończenie nie przerywa samej aktualizacji.
+    Ręczne przyciski nadal są dostępne.
   domain: script
   homeassistant:
     min_version: "2026.9.1"
   input:
     pending_packages_sensor:
-      name: Pending package updates sensor
+      name: Czujnik oczekujących aktualizacji
+      description: Wybierz czujnik liczby oczekujących aktualizacji tego LXC.
       selector:
         entity:
           filter:
             - domain: sensor
               integration: hubinet_ops
     package_update_sensor:
-      name: Package Update status sensor
+      name: Czujnik stanu aktualizacji pakietów
+      description: Wybierz czujnik stanu aktualizacji tego samego LXC.
       selector:
         entity:
           filter:
             - domain: sensor
               integration: hubinet_ops
     update_button:
-      name: Update packages button
+      name: Przycisk aktualizacji pakietów
+      description: Wybierz przycisk „Aktualizuj pakiety” tego LXC.
       selector:
         entity:
           filter:
             - domain: button
               integration: hubinet_ops
     unused_packages_sensor:
-      name: Unused packages sensor
+      name: Czujnik nieużywanych pakietów
+      description: Wybierz czujnik liczby nieużywanych pakietów tego LXC.
       selector:
         entity:
           filter:
             - domain: sensor
               integration: hubinet_ops
     autoremove_button:
-      name: Autoremove unused packages button
+      name: Przycisk usuwania nieużywanych pakietów
+      description: Wybierz przycisk „Usuń nieużywane pakiety” tego LXC.
       selector:
         entity:
           filter:
             - domain: button
               integration: hubinet_ops
     autoremove_after_update:
-      name: Autoremove after successful Update (YOLO)
+      name: Usuń automatycznie nieużywane pakiety po aktualizacji
       description: >-
-        Your explicit policy choice: press Autoremove with fresh positive
-        candidates after Update succeeds. Off means Update only.
+        Po udanej aktualizacji uruchomi istniejące bezpieczne Autoremove,
+        jeśli świeży skan wykryje pakiety do usunięcia. Wyłączone oznacza
+        tylko aktualizację.
       default: false
       selector:
         boolean: {}

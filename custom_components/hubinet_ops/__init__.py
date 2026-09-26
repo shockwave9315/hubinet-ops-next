@@ -8,7 +8,9 @@ import asyncssh
 from homeassistant.const import CONF_HOST, CONF_TOKEN, CONF_USERNAME, Platform
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import device_registry as dr, entity_registry as er
+from homeassistant.helpers.typing import ConfigType
 
+from .blueprint_delivery import async_provision_blueprints
 from .const import (
     AUTH_OTHER,
     AUTH_PAM,
@@ -30,6 +32,7 @@ from .packages.presentation import (
     dismiss_cleanup_candidates,
     dismiss_review_plan,
 )
+from .services import async_register_services
 
 PLATFORMS = [
     Platform.BINARY_SENSOR,
@@ -104,8 +107,16 @@ def _read_legacy_transport_data(
     }
 
 
+async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
+    """Expose Scan All and provision the optional managed blueprints."""
+    async_register_services(hass)
+    await async_provision_blueprints(hass)
+    return True
+
+
 async def async_setup_entry(hass: HomeAssistant, entry: ProxmoxConfigEntry) -> bool:
     """Set up a ProxmoxVE from a config entry."""
+    await async_provision_blueprints(hass)
     coordinator = ProxmoxCoordinator(hass, entry)
     await coordinator.async_config_entry_first_refresh()
 

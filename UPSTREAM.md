@@ -73,3 +73,11 @@ package-node gating. An advanced host change clears package trust bound to the
 old endpoint. Config-entry version 4 migrates only safe, unambiguous legacy
 file-based package trust, rejects files containing active OpenSSH marker lines,
 and never removes the old files.
+
+Release 2026.9.1.13 adds only two setup hooks to the upstream-derived integration
+entry module: register the fork-owned targetless Scan All HA action and
+provision the two integration-managed blueprints. Scan All reads existing
+coordinator/runtime_data and delegates to the unchanged package manager;
+blueprint delivery uses off-loop native HA file replacement. Native PVE
+behavior, discovery, coordinator, permissions, and package lifecycles are
+unchanged.

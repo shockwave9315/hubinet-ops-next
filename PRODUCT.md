@@ -65,7 +65,7 @@ current state and [ARCHITECTURE.md](ARCHITECTURE.md) for accepted design.
   updates.
 - A guest that leaves the running state invalidates its current package
   evidence; after it runs again, pending and unused package values remain
-  `UNKNOWN` until the operator explicitly scans again.
+  `UNKNOWN` until a new Scan runs.
 - Snapshot Restore is never automatic. It requires selection of one exact
   native PVE snapshot followed by a separate explicit Restore button press.
 - Snapshot Delete is never automatic. It consumes an explicit exact choice
@@ -92,8 +92,11 @@ not sufficient justification.
 
 ## Optional Easy Update UX
 
-Easy Update UX composes existing Home Assistant entities and actions outside
-the integration runtime. A daily Scan automation keeps summary evidence useful;
+Easy Update UX composes Home Assistant entities and actions. The integration
+ships and provisions its own blueprint templates; the user creates and enables
+their automation and script instances. One automatic Scan automation uses the
+thin Scan All action for every currently supported package LXC across loaded
+entries, with no per-LXC selection. It keeps summary evidence useful;
 an explicit Update click confirms the exact current plan token and presses the
 existing Update button. Viewing individual package names is optional UX: the
 count, security count, operation result, and Health summarize the decision,
