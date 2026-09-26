@@ -220,7 +220,7 @@ Status date: 2026-09-26
 
 - Architecture: **ACCEPTED BY MAINTAINER BEFORE IMPLEMENTATION**; optional
   HA YAML composition over existing entities and entity actions only.
-- Implementation: **IMPLEMENTED / READY FOR REVIEW**. Documentation checkpoint:
+- Implementation: **MERGED IN PR #17 / RELEASED AS 2026.9.1.12**. Documentation checkpoint:
   `9f87618`. Automatic Scan automation blueprint, one-click Update script
   blueprint with opt-in Autoremove, Mushroom example, and Easy/YOLO/Manual
   instructions are shipped artifacts, validated with the pinned HA blueprint
@@ -236,11 +236,22 @@ Status date: 2026-09-26
   tests alone, and the final full run passed. Snapshot code/tests are unchanged.
 - Release target: `2026.9.1.12`.
 
+## 2026.9.1.13 Easy UX delivery + Scan All
+
+- Architecture: **ACCEPTED BY OWNER BEFORE IMPLEMENTATION**, as explicitly
+  directed for this task; see [ARCHITECTURE.md](ARCHITECTURE.md).
+- Implementation: **NOT STARTED**. Target: `2026.9.1.13`.
+- Scope: integration-shipped/provisioned Polish blueprints and one targetless
+  Scan All action over existing loaded-entry PackageManagers.
+- Package backend delta: **NONE**; helper v5/protocol v1 unchanged.
+- Starting merged baseline: PR #17 / `2026.9.1.12`, main
+  `8852a21cc2ba49c109a9d85863765253e3e6f39c`.
+
 ## Next
 
-Maintainer review of the Easy Update UX draft PR. No merge, tag, or release is
+Implement the accepted 2026.9.1.13 correction. No merge, tag, or release is
 performed by this task.
 
 ## Explicitly not started
 
-- Tagging and publishing `2026.9.1.12` await maintainer review and merge.
+- Tagging and publishing `2026.9.1.13` await maintainer review and merge.

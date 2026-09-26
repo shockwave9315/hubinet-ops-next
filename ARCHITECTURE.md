@@ -8,6 +8,35 @@ provenance in [UPSTREAM.md](UPSTREAM.md).
 
 ## Accepted architecture today
 
+### Easy UX delivery and Scan All (2026.9.1.13)
+
+The owner explicitly accepted this narrow correction before implementation.
+Blueprint YAML has one shipped source of truth inside the integration package.
+On integration setup/load, off-loop filesystem I/O synchronizes only the two
+managed files under `blueprints/{automation,script}/hubinet_ops/` in the HA
+configuration directory. Missing directories are created; identical files are
+left alone and changed managed copies are replaced atomically. Provisioning
+failure is logged and cannot disable native Proxmox functionality. No user
+automation or script instance is created or enabled; unrelated files and old
+manual imports are never searched or removed.
+
+The targetless `hubinet_ops.scan_all_packages` action considers upstream-
+discovered LXCs across currently loaded entries with configured package
+transport, scoped to each entry's existing package node. It delegates each
+request to the existing `PackageManager.async_start_scan` with current running
+state. Stopped or conflicting targets do not stop others; existing manager
+validation, task ownership, and scan semaphore remain authoritative. This adds
+no inventory, manager, scheduler, queue, persistence, policy, permission,
+helper, or package lifecycle change.
+
+The Polish automatic Scan blueprint has only daily time, startup enablement,
+and startup delay inputs, and calls Scan All without entity selection or button
+presses. One automation covers the installation. The Polish one-click Update
+blueprint remains one user-created script per chosen LXC with its unchanged
+2026.9.1.12 exact-token and optional Autoremove flow. Managed blueprint copies
+should be forked into a different namespace for customization. Old manual
+2026.9.1.12 imports may remain duplicates until the user removes them.
+
 ### Easy Update UX
 
 The maintainer accepted Easy Update UX for release 2026.9.1.12 before
