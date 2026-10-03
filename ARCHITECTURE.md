@@ -16,12 +16,8 @@ artifacts is not required.
 
 - **One-click Update script blueprint removed.** The Easy Update card is the
   only Easy path. The blueprint source, its provisioning, the Mushroom example,
-  and their documentation are removed. Provisioning deletes only its own
-  previously managed copy at
-  `blueprints/script/hubinet_ops/hubinet_ops_one_click_update.yaml` and resets
-  the script blueprint cache; no other file is searched or touched. The Scan
-  automation blueprint stays until the planned integration-owned automatic Scan
-  replaces it.
+  and their documentation are removed. The integration never deletes files in
+  the user's configuration; old copies are the user's own business.
 - **Card shows missing data honestly.** The Easy Update card distinguishes a
   stopped LXC (native container status `stopped`/`suspended`) from missing
   current Proxmox data (entities unavailable because the latest refresh failed)

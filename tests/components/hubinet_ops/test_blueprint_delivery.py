@@ -16,9 +16,6 @@ from homeassistant.components.automation.helpers import (
     async_get_blueprints as automation_blueprints,
 )
 from homeassistant.components.blueprint import Blueprint
-from homeassistant.components.script.helpers import (
-    async_get_blueprints as script_blueprints,
-)
 from homeassistant.config_entries import ConfigEntryState
 from homeassistant.core import HomeAssistant
 
@@ -146,28 +143,3 @@ async def test_blueprint_delivery_failed_replace_preserves_previous_file(
     assert "Could not provision" in caplog.text
     assert list(destination.parent.iterdir()) == [destination]
 
-
-async def test_retired_one_click_copy_is_removed_exactly(
-    hass: HomeAssistant, tmp_path: Path
-) -> None:
-    """Only the formerly managed script copy is deleted; its cache is reset."""
-    hass.config.config_dir = str(tmp_path)
-    namespace = tmp_path / "blueprints/script/hubinet_ops"
-    namespace.mkdir(parents=True)
-    retired = namespace / "hubinet_ops_one_click_update.yaml"
-    retired.write_bytes(b"old managed copy")
-    user_copy = namespace / "my_own_script.yaml"
-    user_copy.write_bytes(b"user-owned")
-    manager = script_blueprints(hass)
-    with patch.object(
-        manager, "async_reset_cache", wraps=manager.async_reset_cache
-    ) as reset:
-        await delivery.async_provision_blueprints(hass)
-        reset.assert_awaited_once()
-    assert not retired.exists()
-    assert user_copy.read_bytes() == b"user-owned"
-    assert not (delivery._SOURCE / "script").exists()
-    # Absent retired copy: nothing to remove, nothing to reset.
-    with patch.object(manager, "async_reset_cache") as reset:
-        await delivery.async_provision_blueprints(hass)
-        reset.assert_not_awaited()

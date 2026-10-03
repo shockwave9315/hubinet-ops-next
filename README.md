@@ -154,9 +154,7 @@ HACS installs it with the integration. Hubinet-Ops synchronizes its managed copy
 under `/config/blueprints/automation/hubinet_ops/` on setup/reload. Do not edit
 that copy: changes are replaced by the shipped version. To customize it, copy it
 under your own namespace/name. Provisioning never creates or enables user
-automations. A previously provisioned One-click Update script blueprint copy at
-`/config/blueprints/script/hubinet_ops/hubinet_ops_one_click_update.yaml` is
-removed automatically; other files are untouched.
+automations.
 
 See [PRODUCT.md](PRODUCT.md) for product scope,
 [DEVELOPMENT.md](DEVELOPMENT.md) for the local development workflow, and
