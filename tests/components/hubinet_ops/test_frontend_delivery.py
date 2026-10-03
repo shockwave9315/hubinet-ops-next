@@ -157,6 +157,10 @@ def test_guest_cards_ship_with_the_easy_update_card() -> None:
         encoding="utf-8"
     )
     assert "./hubinet-ops-guest-cards.js${new URL(import.meta.url).search}" in card
+    # Nothing is defined before Home Assistant's app (and its registry polyfill).
+    wait = card.index('customElements.whenDefined("home-assistant")')
+    assert wait < card.index("customElements.define(")
+    assert wait < card.index("./hubinet-ops-guest-cards.js")
     for card_type in (
         "hubinet-ops-lxc-card",
         "hubinet-ops-lxc-mini-card",

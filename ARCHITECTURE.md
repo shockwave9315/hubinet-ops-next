@@ -45,6 +45,14 @@ mini Start when stopped or Shut down (confirmed) when running. The previous
 or Space on it, opens Home Assistant's native more-info dialog for that sensor,
 which shows its history. It is navigation only and never calls a service.
 
+**Load order.** Home Assistant imports the card module in parallel with its own
+app bundle, which can install a scoped custom-element registry polyfill that
+replaces `window.customElements`; cards defined before it are invisible to
+Home Assistant ("Custom element doesn't exist", endless spinner in the card
+picker), depending on which download finishes first. The card module therefore
+declares and defines nothing until `<home-assistant>` is defined (with a
+10-second fallback). This race also existed in 2026.9.1.14 to 2026.9.1.16.
+
 ### Setup connection resilience (2026.9.1.16)
 
 On 2026-10-03 the owner decided this divergence from upstream `proxmoxve`.

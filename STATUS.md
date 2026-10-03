@@ -376,7 +376,11 @@ Scan All remains.
   from `hubinet-ops-lxc-card.js`) registers the four card types on one element.
   Node logic and element tests cover VM power and confirmation, More, mini
   cards, history taps, picker registration, and saved `compact: true` cards; a
-  Chromium smoke test drove all four cards.
+  Chromium smoke test drove all four cards. Live testing found a load-order
+  race with Home Assistant's scoped custom-element registry polyfill (cards
+  intermittently "doesn't exist" / endless picker spinner, per device); it was
+  reproduced in a real Home Assistant by delaying its app bundle and fixed by
+  defining the cards only after `<home-assistant>` is defined.
 - Scope: the VM card and the LXC/VM mini cards on one shared implementation,
   and tapping a stat tile to open the native history; frontend only. Pause,
   Resume, and `qmpstatus` are deferred.
