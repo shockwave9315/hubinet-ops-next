@@ -12,14 +12,15 @@ Status date: 2026-10-03
   subsystem, guided fresh-install enrollment, native snapshot Restore, and
   native snapshot Create observation and explicit native Delete documented in
   [ARCHITECTURE.md](ARCHITECTURE.md).
-- Integration after merge: `2026.9.1.18`, helper v5, protocol v1.
-- Latest tagged release: `2026.9.1.17` (merged PR #22, main `e7c03e6`).
+- Integration after merge: `2026.9.1.19`, helper v5, protocol v1.
+- Latest tagged release: `2026.9.1.18` (merged PR #23, main `05b0e20`).
   `2026.9.1.15` (PR #20, `b865968`): the owner reported the post-merge live
   tests passed.
 - Starting merged baseline for 2026.9.1.16: main `b865968`.
 - `2026.9.1.16` merged in PR #21 (main `0409d76`), not yet tagged.
 - Starting merged baseline for 2026.9.1.17: main `0409d76`.
 - Starting merged baseline for 2026.9.1.18: main `e7c03e6`.
+- Starting merged baseline for 2026.9.1.19: main `05b0e20`.
 - Git history is authoritative for the eventual feature merge SHA.
 
 ## Merged
@@ -392,18 +393,77 @@ Scan All remains.
   Home Assistant imports the card module in parallel with its app bundle, whose
   scoped custom-element registry polyfill replaces `window.customElements`;
   cards defined before it are invisible to Home Assistant.
-- Implementation: **IMPLEMENTED IN THIS PR**. Reproduced in a real Home
-  Assistant (frontend 20260826.6) by delaying its app bundle; the card module
-  now defines nothing until `<home-assistant>` is defined (10-second
-  fallback). A Node test fails on the previous module and passes now. The new
-  release version also changes the module URL, so browsers drop cached copies.
+- Implementation: **MERGED IN PR #23 / TAGGED AS 2026.9.1.18**. Reproduced in
+  a real Home Assistant (frontend 20260826.6) by delaying its app bundle; the
+  released module waited until `<home-assistant>` was defined, with a 10-second
+  fallback. The initial Node test failed on the previous module and passed on
+  this release. Its new version also changed the module URL for cached clients.
+
+## 2026.9.1.19 card slow-start correction
+
+- Tester report: the same saved VM card works in desktop and mobile browsers,
+  but Android Companion App reports `Custom element doesn't exist:
+  hubinet-ops-vm-card`, including after app reinstallation and token reset.
+- Owner reproduction: after installing 2026.9.1.18, laptop and phone worked
+  while connected through the home VPN; disconnecting that VPN while away
+  from home then made all cards fail in the phone app. VPN disconnection is
+  a required live-validation case. The delayed-start lab does not simulate
+  that network transition or establish whether the app changed HA URLs.
+- The 2026.9.1.18 fallback reproduced the same race when the app started after
+  ten seconds: all five cards were defined in the native registry before the
+  app installed its polyfill, leaving none visible to Home Assistant.
+- Implementation: **IMPLEMENTED IN THIS DRAFT / OWNER LIVE TESTING PENDING** on
+  `fix/cards-slow-mobile-start`, within the existing frontend
+  delivery. The module waits for `home-assistant` with no timeout fallback;
+  the polyfill's native stand-in resolves an already-pending native wait.
+  No delivery, card configuration, backend, helper, or protocol change.
+- Node regressions exercise a slow app, a registry installed after ten seconds,
+  replacement during a native wait, and an app already ready before importing
+  the cards, including duplicate resource imports.
+- Validation: full `scripts/test.sh` passed with **877 Python tests, 66 Node
+  tests, and 213 snapshots**; Ruff and `git diff --check` passed. The two
+  slow-start regressions failed on the unchanged 2026.9.1.18 module and passed
+  after removing the fallback.
+- After the 2026.9.1.19 metadata bump,
+  `scripts/test.sh -k 'bootstrap or frontend_delivery or config_flow'` passed
+  **110 Python tests and all 66 Node tests**, plus Ruff. The release pins and
+  versioned frontend delivery remain consistent.
+- The restarted Docker instance served all four card modules with
+  `?v=2026.9.1.19` and HTTP 200; the saved VM and all five picker previews
+  passed the 14-second startup/V2 bridge case again with this draft version.
+- Runtime validation: official Home Assistant Container **2026.9.4**, frontend
+  **20260826.7**, with the integration mounted read-only and one saved VM tile
+  opened by fresh Chromium contexts. Unchanged 2026.9.1.18 worked at normal
+  desktop startup; delaying the real app bundle by **14 seconds** with the
+  Android V2 authentication/message bridge reproduced the exact VM element
+  error and five indefinitely loading picker previews with no card names.
+  All four frontend modules returned HTTP 200: delivery succeeded, but the
+  app registry lost all five definitions.
+- The corrected module registered all five elements and rendered the saved VM
+  tile plus all five native picker previews with the same delay and V2 bridge.
+  It also passed the V1 bridge, mobile browser, and delayed desktop cases.
+  All six runtime comparisons met their expected results, with no console or
+  page errors. The lab has no Proxmox host: card creation is verified with its
+  native choose-device state, not live guest data or power operations.
+- Live confirmation of the correction on owner/tester Android apps:
+  **PENDING**. The runtime lab uses Chromium mobile emulation and HA's actual
+  external-app frontend path, not an Android WebView. The reproduction proves
+  the timeout defect, not the tester's exact cause. The isolated container and
+  evidence are under ignored `.dev/frontend-lab-2026.9.4`; the standard test
+  environment remains pinned to Core 2026.9.1.
+- Release metadata is `2026.9.1.19` in the manifest, integration constant, and
+  bootstrap pin. The native extra-module URL and its dependency queries change
+  to `?v=2026.9.1.19` so clients fetch the corrected code. This is a draft test
+  build; no merge, tag, or published release is part of this handoff.
 
 ## Next
 
-Tag `2026.9.1.16` (main `0409d76`) if still wanted; after this PR merges, tag
-and release `2026.9.1.18` and validate the cards live on every device.
+Validate the 2026.9.1.19 draft on owner/tester Android apps, including the same
+saved dashboard before and after disconnecting the home VPN; check the native
+Add card picker as well. Review and release after live validation. Tag
+`2026.9.1.16` (main `0409d76`) if still wanted.
 
 ## Explicitly not started
 
-- Tag of `2026.9.1.16`; tag and release of `2026.9.1.18`.
+- Tag of `2026.9.1.16`; tag/release of `2026.9.1.19`.
 - Pause and Resume in the VM card, and reading `qmpstatus`.
