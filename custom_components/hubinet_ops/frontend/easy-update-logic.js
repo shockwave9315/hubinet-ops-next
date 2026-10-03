@@ -24,6 +24,8 @@ const STRINGS = {
     not_found: "Hubinet-Ops LXC not found",
     ambiguous: "Hubinet-Ops LXC entities are ambiguous",
     stopped: "LXC is not running",
+    no_data: "No current data from Proxmox",
+    no_data_detail: "The LXC may still be running",
     updating: "Update in progress…",
     autoremoving: "Removing unused packages…",
     scanning: "Scanning…",
@@ -70,6 +72,8 @@ const STRINGS = {
     not_found: "Nie znaleziono LXC Hubinet-Ops",
     ambiguous: "Niejednoznaczne encje LXC Hubinet-Ops",
     stopped: "LXC nie działa",
+    no_data: "Brak aktualnych danych z Proxmox",
+    no_data_detail: "LXC może nadal działać",
     updating: "Aktualizacja w toku…",
     autoremoving: "Usuwanie nieużywanych pakietów…",
     scanning: "Skanowanie…",
@@ -254,12 +258,17 @@ export const deriveView = ({ states, entities, devices, config, now, lang }) => 
     : { kind: "none" };
   const result = (v) => ({ ...v, name });
 
+  // Native container status tells "stopped" apart from missing current data:
+  // a failed Proxmox refresh makes every entity of the host unavailable.
   const pending = state("pending");
-  if (
-    !pending ||
-    pending.state === "unavailable" ||
-    (ids.status && value("status") !== undefined && value("status") !== "running")
-  ) {
+  const status = ids.status ? value("status") : undefined;
+  if (status === "stopped" || status === "suspended") {
+    return result(view("grey", "mdi:stop-circle-outline", s.stopped, ""));
+  }
+  if (ids.status && status !== "running") {
+    return result(view("orange", "mdi:cloud-alert", s.no_data, s.no_data_detail));
+  }
+  if (!pending || pending.state === "unavailable") {
     return result(view("grey", "mdi:stop-circle-outline", s.stopped, ""));
   }
 

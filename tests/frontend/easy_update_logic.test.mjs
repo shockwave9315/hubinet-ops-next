@@ -264,3 +264,20 @@ test("Polish plurals and English texts", () => {
     "wczoraj 04:00"
   );
 });
+
+test("orange: missing Proxmox data is not reported as a stopped LXC", () => {
+  for (const status of ["unavailable", "unknown"]) {
+    const result = render((s) => {
+      s["sensor.renamed_e"].state = status;
+      s["sensor.renamed_a"].state = "unavailable";
+    });
+    assert.equal(result.tone, "orange");
+    assert.equal(result.primary, "Brak aktualnych danych z Proxmox");
+    assert.equal(result.secondary, "LXC może nadal działać");
+    assert.deepEqual(result.action, { kind: "none" });
+  }
+  const suspended = render((s) => {
+    s["sensor.renamed_e"].state = "suspended";
+  });
+  assert.equal(suspended.primary, "LXC nie działa");
+});
