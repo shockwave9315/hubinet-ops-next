@@ -4,6 +4,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import timedelta
 import logging
+import ssl
 import time
 from typing import Any, override
 
@@ -73,6 +74,33 @@ def _retryable(err: Exception) -> bool:
     return isinstance(err, requests.exceptions.Timeout) and not isinstance(
         err, ConnectTimeout
     )
+
+
+def _tls_eof(err: BaseException) -> bool:
+    """Return whether a TLS failure is an abrupt EOF (connection dropped).
+
+    requests wraps the stdlib error as requests SSLError -> urllib3
+    MaxRetryError -> urllib3 SSLError -> ssl.SSLEOFError, linked through
+    __cause__/__context__ and args[0]/.reason; match only that exact type.
+    """
+    pending: list[BaseException] = [err]
+    seen: set[int] = set()
+    while pending and len(seen) < 16:
+        current = pending.pop()
+        if id(current) in seen:
+            continue
+        seen.add(id(current))
+        if isinstance(current, ssl.SSLEOFError):
+            return True
+        linked = (
+            current.__cause__,
+            current.__context__,
+            getattr(current, "reason", None),
+        )
+        pending.extend(
+            e for e in (*linked, *current.args) if isinstance(e, BaseException)
+        )
+    return False
 
 
 def _read[_T](request: str, call: Callable[[], _T]) -> _T:
@@ -233,6 +261,13 @@ class ProxmoxCoordinator(DataUpdateCoordinator[dict[str, ProxmoxNodeData]]):
                 translation_key="invalid_auth",
             ) from err
         except SSLError as err:
+            if _tls_eof(err):
+                # The connection dropped mid-handshake: transient, retry setup.
+                raise UpdateFailed(
+                    translation_domain=DOMAIN,
+                    translation_key="cannot_connect",
+                ) from err
+            # Certificate verification and other TLS errors need the user.
             raise ConfigEntryError(
                 translation_domain=DOMAIN,
                 translation_key="ssl_error",
@@ -258,7 +293,9 @@ class ProxmoxCoordinator(DataUpdateCoordinator[dict[str, ProxmoxNodeData]]):
                 translation_key="no_nodes_found",
             ) from err
         except requests.exceptions.ConnectionError as err:
-            raise ConfigEntryError(
+            # Transient, as during refresh: Home Assistant retries setup
+            # (upstream fails the entry permanently here).
+            raise UpdateFailed(
                 translation_domain=DOMAIN,
                 translation_key="cannot_connect",
             ) from err

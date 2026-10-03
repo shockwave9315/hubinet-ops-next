@@ -12,10 +12,10 @@ Status date: 2026-10-03
   subsystem, guided fresh-install enrollment, native snapshot Restore, and
   native snapshot Create observation and explicit native Delete documented in
   [ARCHITECTURE.md](ARCHITECTURE.md).
-- Integration after merge: `2026.9.1.15`, helper v5, protocol v1.
-- Latest tagged release: `2026.9.1.14` (merged PR #19, main commit
-  `06c94cc077e7dd07d724d39f3dd97104209d4a27`), live-tested by the owner.
-- Starting merged baseline for 2026.9.1.15: main `06c94cc`.
+- Integration after merge: `2026.9.1.16`, helper v5, protocol v1.
+- Latest tagged release: `2026.9.1.15` (merged PR #20, main commit
+  `b865968`); the owner reported the post-merge live tests passed.
+- Starting merged baseline for 2026.9.1.16: main `b865968`.
 - Git history is authoritative for the eventual feature merge SHA.
 
 ## Merged
@@ -331,7 +331,8 @@ Scan All remains.
 
 - Architecture: **ACCEPTED BY OWNER BEFORE IMPLEMENTATION on 2026-10-03**; see
   [ARCHITECTURE.md](ARCHITECTURE.md#automatic-scan-option-and-lxc-card-20269115).
-- Implementation: **MERGED IN PR #20, NOT YET LIVE-VALIDATED**: the
+- Implementation: **MERGED IN PR #20 / RELEASED AS 2026.9.1.15**; the owner
+  reported the post-merge live tests passed. Contents: the
   options flow and daily trigger (`auto_scan.py`), and the LXC card
   (`frontend/hubinet-ops-lxc-card.js`, `frontend/lxc-card-logic.js`) with Node
   logic tests and a browser smoke test of second-tap arming.
@@ -345,12 +346,27 @@ Scan All remains.
   Scan blueprint), and the Hubinet-Ops LXC card from the approved mockup with
   second-tap confirmation for Stop, Restart, Restore, and Delete.
 
+## 2026.9.1.16 setup connection resilience
+
+- Architecture: **ACCEPTED BY OWNER BEFORE IMPLEMENTATION on 2026-10-03**; see
+  [ARCHITECTURE.md](ARCHITECTURE.md#setup-connection-resilience-20269116).
+- Implementation: **IMPLEMENTED IN THIS PR**. Documentation checkpoint:
+  `011d735`. `coordinator.py` maps a setup-time `ConnectionError`, and a
+  `SSLError` caused by `ssl.SSLEOFError` (TLS handshake cut off), to
+  `UpdateFailed`; certificate verification and other TLS errors stay
+  permanent. Tests cover the permissions and nodes probes (`SETUP_RETRY`),
+  certificate and other TLS errors (`SETUP_ERROR`), and recovery to `LOADED`
+  on Home Assistant's retry for both a dropped connection and a TLS EOF.
+- Scope: a setup-time transport drop (`ConnectionError`, abrupt TLS EOF)
+  retries setup (`SETUP_RETRY`) instead of failing the entry permanently.
+  Owner-approved divergence from upstream, recorded in UPSTREAM.md. Password
+  `/access/ticket` 5xx reported as `AuthenticationError` is a known residual
+  upstream risk, not changed.
+
 ## Next
 
-Tag and release of `2026.9.1.15`, then live validation on a real Home
-Assistant installation of the automatic Scan option, the LXC card, and a live
-Easy Update with and without YOLO.
+Tag and release of `2026.9.1.16` after merge.
 
 ## Explicitly not started
 
-- Tag and release of `2026.9.1.15`.
+- Tag and release of `2026.9.1.16`.
