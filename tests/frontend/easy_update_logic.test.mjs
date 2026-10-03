@@ -1,0 +1,266 @@
+// Run with: node --test tests/frontend
+import assert from "node:assert/strict";
+import { test } from "node:test";
+
+import {
+  deriveView,
+  firstEligibleDevice,
+  formatTime,
+  formatUpdates,
+  resolveEntities,
+} from "../../custom_components/hubinet_ops/frontend/easy-update-logic.js";
+
+const DEVICE = "device-ct106";
+const NOW = new Date(2026, 9, 3, 12, 0).getTime();
+const SCAN_AT = new Date(2026, 9, 3, 4, 0).toISOString();
+
+// Deliberately renamed entity IDs: identity comes from registry metadata.
+const entry = (entity_id, translation_key, device_id = DEVICE) => ({
+  entity_id,
+  translation_key,
+  device_id,
+  platform: "hubinet_ops",
+});
+
+const ENTITIES = {
+  "sensor.renamed_a": entry("sensor.renamed_a", "pending_packages"),
+  "sensor.renamed_b": entry("sensor.renamed_b", "package_update_status"),
+  "sensor.renamed_c": entry("sensor.renamed_c", "unused_packages"),
+  "sensor.renamed_d": entry("sensor.renamed_d", "package_health"),
+  "sensor.renamed_e": entry("sensor.renamed_e", "container_status"),
+  "button.renamed_f": entry("button.renamed_f", "package_scan"),
+  "sensor.other_lxc": entry("sensor.other_lxc", "pending_packages", "other"),
+  "sensor.foreign": {
+    entity_id: "sensor.foreign",
+    translation_key: "pending_packages",
+    device_id: DEVICE,
+    platform: "other_integration",
+  },
+};
+
+const DEVICES = { [DEVICE]: { name: "nextcloud", name_by_user: "CT106" } };
+
+const baseStates = () => ({
+  "sensor.renamed_a": {
+    state: "7",
+    attributes: {
+      scan_status: "success",
+      last_attempt: SCAN_AT,
+      security_updates: 2,
+    },
+  },
+  "sensor.renamed_b": { state: "never", attributes: { update_status: "never" } },
+  "sensor.renamed_c": {
+    state: "0",
+    attributes: { autoremove_status: "never", running: false },
+  },
+  "sensor.renamed_d": { state: "unknown", attributes: { check_status: "never" } },
+  "sensor.renamed_e": { state: "running", attributes: {} },
+  "button.renamed_f": { state: "unknown", attributes: {} },
+});
+
+const render = (mutate = () => {}, config = {}, lang = "pl") => {
+  const states = baseStates();
+  mutate(states);
+  return deriveView({
+    states,
+    entities: ENTITIES,
+    devices: DEVICES,
+    config: { device_id: DEVICE, autoremove: false, ...config },
+    now: NOW,
+    lang,
+  });
+};
+
+test("resolves entities by device, platform and translation key only", () => {
+  assert.deepEqual(resolveEntities(ENTITIES, DEVICE).entities, {
+    pending: "sensor.renamed_a",
+    update: "sensor.renamed_b",
+    unused: "sensor.renamed_c",
+    health: "sensor.renamed_d",
+    status: "sensor.renamed_e",
+    scan: "button.renamed_f",
+  });
+  assert.equal(resolveEntities(ENTITIES, "missing").error, "not_found");
+  const duplicate = {
+    ...ENTITIES,
+    "sensor.dup": entry("sensor.dup", "pending_packages"),
+  };
+  assert.equal(resolveEntities(duplicate, DEVICE).error, "ambiguous");
+});
+
+test("stub config picks a package-capable LXC; new devices appear", () => {
+  assert.equal(firstEligibleDevice({}), null);
+  const added = { "sensor.new": entry("sensor.new", "pending_packages", "new") };
+  assert.equal(firstEligibleDevice(added), "new");
+});
+
+test("amber: updates available start Easy Update with the displayed scan", () => {
+  const result = render(undefined, { autoremove: true });
+  assert.equal(result.tone, "amber");
+  assert.equal(result.name, "CT106");
+  assert.equal(result.primary, "7 aktualizacji");
+  assert.match(result.secondary, /w tym 2 bezpieczeństwa/);
+  assert.match(result.secondary, /skan: dziś 04:00/);
+  assert.match(result.secondary, /\+ autoremove/);
+  assert.deepEqual(result.action, {
+    kind: "easy_update",
+    data: { device_id: DEVICE, autoremove: true, expected_scan_attempt: SCAN_AT },
+  });
+});
+
+test("YOLO off is passed explicitly", () => {
+  assert.equal(render().action.data.autoremove, false);
+});
+
+test("green: system current shows last scan and offers Scan", () => {
+  const result = render((s) => {
+    s["sensor.renamed_a"].state = "0";
+  });
+  assert.equal(result.tone, "green");
+  assert.equal(result.primary, "System aktualny");
+  assert.equal(result.secondary, "Ostatni skan: dziś 04:00");
+  assert.deepEqual(result.action, { kind: "scan", entity_id: "button.renamed_f" });
+});
+
+test("orange: Health degraded means restart required, not failure", () => {
+  const result = render((s) => {
+    s["sensor.renamed_a"].state = "0";
+    s["sensor.renamed_d"].state = "degraded";
+  });
+  assert.equal(result.tone, "orange");
+  assert.equal(result.primary, "Wymagany restart");
+});
+
+test("blue: running operations never offer another start", () => {
+  const cases = [
+    [(s) => (s["sensor.renamed_b"].state = "running"), "Aktualizacja w toku…"],
+    [
+      (s) => (s["sensor.renamed_c"].attributes.autoremove_status = "running"),
+      "Usuwanie nieużywanych pakietów…",
+    ],
+    [(s) => (s["sensor.renamed_a"].attributes.scan_status = "running"), "Skanowanie…"],
+    [
+      (s) => (s["sensor.renamed_d"].attributes.check_status = "running"),
+      "Sprawdzanie stanu systemu…",
+    ],
+  ];
+  for (const [mutate, text] of cases) {
+    const result = render(mutate);
+    assert.equal(result.tone, "blue");
+    assert.equal(result.primary, text);
+    assert.deepEqual(result.action, { kind: "none" });
+  }
+});
+
+test("red: failed update until a newer successful scan exists", () => {
+  const failedAt = new Date(2026, 9, 3, 5, 0).toISOString();
+  const failed = (s) => {
+    s["sensor.renamed_b"] = {
+      state: "failed",
+      attributes: {
+        last_attempt: failedAt,
+        outcome: "plan_changed",
+        retained_snapshot_name: "hubinet-preupd-x",
+      },
+    };
+    s["sensor.renamed_a"] = { state: "unknown", attributes: { scan_status: "never" } };
+  };
+  const result = render(failed);
+  assert.equal(result.tone, "red");
+  assert.equal(result.primary, "Aktualizacja nie powiodła się");
+  assert.match(result.secondary, /plan się zmienił/);
+  assert.match(result.secondary, /hubinet-preupd-x/);
+  assert.deepEqual(result.action, { kind: "details" });
+
+  const rescanned = render((s) => {
+    failed(s);
+    s["sensor.renamed_a"] = {
+      state: "3",
+      attributes: {
+        scan_status: "success",
+        last_attempt: new Date(2026, 9, 3, 6, 0).toISOString(),
+      },
+    };
+  });
+  assert.equal(rescanned.tone, "amber");
+});
+
+test("red: failed Autoremove and failed Health use backend facts", () => {
+  const cleanup = render((s) => {
+    s["sensor.renamed_c"].attributes = {
+      autoremove_status: "failed",
+      last_attempt: new Date(2026, 9, 3, 5, 0).toISOString(),
+    };
+  });
+  assert.equal(cleanup.primary, "Usuwanie pakietów nie powiodło się");
+  const health = render((s) => {
+    s["sensor.renamed_d"].state = "failed";
+  });
+  assert.equal(health.tone, "red");
+  assert.equal(health.primary, "Problem z systemem (Health)");
+});
+
+test("grey: no current scan after a successful update offers Scan", () => {
+  const result = render((s) => {
+    s["sensor.renamed_a"] = { state: "unknown", attributes: { scan_status: "never" } };
+    s["sensor.renamed_b"] = {
+      state: "success",
+      attributes: {
+        last_attempt: new Date(2026, 9, 3, 11, 0).toISOString(),
+        changed_package_count: 7,
+      },
+    };
+  });
+  assert.equal(result.tone, "grey");
+  assert.equal(result.primary, "Brak aktualnego skanu");
+  assert.equal(result.secondary, "Zaktualizowano pakiety: 7 · dziś 11:00");
+  assert.equal(result.action.kind, "scan");
+});
+
+test("grey: failed scan and stopped LXC", () => {
+  const failed = render((s) => {
+    s["sensor.renamed_a"] = {
+      state: "unknown",
+      attributes: { scan_status: "failed", last_error: "dpkg_unfinished" },
+    };
+  });
+  assert.equal(failed.primary, "Skan nieudany");
+  assert.equal(failed.secondary, "dpkg_unfinished");
+  const stopped = render((s) => {
+    s["sensor.renamed_e"].state = "stopped";
+    s["sensor.renamed_a"].state = "unavailable";
+  });
+  assert.equal(stopped.primary, "LXC nie działa");
+  assert.deepEqual(stopped.action, { kind: "none" });
+});
+
+test("configuration errors fail closed", () => {
+  assert.equal(
+    deriveView({ states: {}, entities: {}, devices: {}, config: {}, now: NOW, lang: "en" })
+      .primary,
+    "Choose a Hubinet-Ops LXC"
+  );
+  const missing = deriveView({
+    states: {},
+    entities: ENTITIES,
+    devices: {},
+    config: { device_id: "gone" },
+    now: NOW,
+    lang: "en",
+  });
+  assert.equal(missing.tone, "error");
+  assert.equal(missing.action.kind, "none");
+});
+
+test("Polish plurals and English texts", () => {
+  assert.equal(formatUpdates(1, "pl"), "1 aktualizacja");
+  assert.equal(formatUpdates(3, "pl"), "3 aktualizacje");
+  assert.equal(formatUpdates(7, "pl"), "7 aktualizacji");
+  assert.equal(formatUpdates(1, "en"), "1 update");
+  assert.equal(render(undefined, {}, "en").primary, "7 updates");
+  assert.equal(
+    formatTime(new Date(2026, 9, 2, 4, 0).toISOString(), NOW, "pl"),
+    "wczoraj 04:00"
+  );
+});

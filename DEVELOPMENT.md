@@ -55,8 +55,11 @@ scripts/test.sh
 ```
 
 The script runs Ruff against `custom_components/hubinet_ops` using Home
-Assistant's pinned configuration, then runs the integration tests through the
-pinned Home Assistant harness. Extra arguments are passed to pytest:
+Assistant's pinned configuration, runs the dashboard card logic tests in
+`tests/frontend` with Node's built-in test runner (`node --test`, Node 20 or
+newer, no npm packages), then runs the integration tests through the pinned Home
+Assistant harness. Without `node` the card tests are skipped with a warning; run
+them before handing off card changes. Extra arguments are passed to pytest:
 
 ```bash
 scripts/test.sh -k diagnostics
