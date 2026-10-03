@@ -1,4 +1,4 @@
-"""Provision only the integration's shipped, managed blueprint files."""
+"""Provision only the integration's shipped, managed blueprint file."""
 
 import logging
 from pathlib import Path
@@ -10,15 +10,26 @@ from .const import DOMAIN
 
 _LOGGER = logging.getLogger(__name__)
 _SOURCE = Path(__file__).parent / "blueprints"
-_FILES = (
-    ("automation", "hubinet_ops_daily_package_scan.yaml"),
-    ("script", "hubinet_ops_one_click_update.yaml"),
-)
+_FILES = (("automation", "hubinet_ops_daily_package_scan.yaml"),)
+# Formerly managed copies; only these exact owned paths are ever removed.
+_RETIRED = (("script", "hubinet_ops_one_click_update.yaml"),)
 
 
 def _provision(config_dir: Path) -> set[str]:
-    """Synchronize the two owned destinations, without enumerating other files."""
+    """Synchronize owned destinations, without enumerating other files."""
     changed: set[str] = set()
+    for domain, filename in _RETIRED:
+        retired = config_dir / "blueprints" / domain / DOMAIN / filename
+        try:
+            retired.unlink()
+        except FileNotFoundError:
+            continue
+        except OSError:
+            _LOGGER.exception(
+                "Could not remove retired Hubinet-Ops blueprint %s", retired
+            )
+            continue
+        changed.add(domain)
     for domain, filename in _FILES:
         destination = config_dir / "blueprints" / domain / DOMAIN / filename
         try:
@@ -43,7 +54,7 @@ def _provision(config_dir: Path) -> set[str]:
 
 
 async def async_provision_blueprints(hass: HomeAssistant) -> None:
-    """Make managed blueprints available without creating user instances."""
+    """Make the managed blueprint available without creating user instances."""
     changed = await hass.async_add_executor_job(_provision, Path(hass.config.path()))
     # An integration reload may replace a blueprint that HA already cached.
     for domain in changed:

@@ -28,7 +28,7 @@ from . import setup_integration
 async def test_blueprint_delivery_creates_exact_files_idempotently(
     hass: HomeAssistant, tmp_path: Path
 ) -> None:
-    """Ship both files, leave unrelated copies alone, and never rewrite equal bytes."""
+    """Ship the Scan file, leave unrelated copies alone, never rewrite equal bytes."""
     hass.config.config_dir = str(tmp_path)
     unrelated = tmp_path / "blueprints/automation/user/own.yaml"
     unrelated.parent.mkdir(parents=True)
@@ -40,7 +40,7 @@ async def test_blueprint_delivery_creates_exact_files_idempotently(
         delivery, "write_utf8_file", wraps=delivery.write_utf8_file
     ) as write:
         await delivery.async_provision_blueprints(hass)
-        assert write.call_count == 2
+        assert write.call_count == 1
         stamps = {}
         for domain, filename in delivery._FILES:
             destination = tmp_path / "blueprints" / domain / "hubinet_ops" / filename
@@ -65,16 +65,13 @@ async def test_blueprint_delivery_creates_exact_files_idempotently(
 async def test_blueprint_delivery_native_discovery_and_changed_source(
     hass: HomeAssistant, tmp_path: Path
 ) -> None:
-    """Both domain managers discover provisioned YAML and drop cached old content."""
+    """The automation manager discovers provisioned YAML and drops old content."""
     hass.config.config_dir = str(tmp_path / "config")
     shipped = tmp_path / "shipped"
     shutil.copytree(delivery._SOURCE, shipped)
     with patch.object(delivery, "_SOURCE", shipped):
         await delivery.async_provision_blueprints(hass)
-        for domain, manager in (
-            ("automation", automation_blueprints(hass)),
-            ("script", script_blueprints(hass)),
-        ):
+        for domain, manager in (("automation", automation_blueprints(hass)),):
             filename = next(name for kind, name in delivery._FILES if kind == domain)
             path = f"hubinet_ops/{filename}"
             found = await manager.async_get_blueprints()
@@ -126,7 +123,7 @@ async def test_blueprint_delivery_failure_preserves_native_setup(
 async def test_blueprint_delivery_failed_replace_preserves_previous_file(
     hass: HomeAssistant, tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
-    """Replacement failure retains the old file and still considers the other domain."""
+    """Replacement failure retains the old file and logs it."""
     hass.config.config_dir = str(tmp_path)
     destination = (
         tmp_path
@@ -146,8 +143,31 @@ async def test_blueprint_delivery_failed_replace_preserves_previous_file(
     with patch.object(file_util.os, "replace", replace):
         await delivery.async_provision_blueprints(hass)
     assert destination.read_bytes() == b"previous-copy"
-    assert (
-        tmp_path / "blueprints/script/hubinet_ops/hubinet_ops_one_click_update.yaml"
-    ).is_file()
     assert "Could not provision" in caplog.text
     assert list(destination.parent.iterdir()) == [destination]
+
+
+async def test_retired_one_click_copy_is_removed_exactly(
+    hass: HomeAssistant, tmp_path: Path
+) -> None:
+    """Only the formerly managed script copy is deleted; its cache is reset."""
+    hass.config.config_dir = str(tmp_path)
+    namespace = tmp_path / "blueprints/script/hubinet_ops"
+    namespace.mkdir(parents=True)
+    retired = namespace / "hubinet_ops_one_click_update.yaml"
+    retired.write_bytes(b"old managed copy")
+    user_copy = namespace / "my_own_script.yaml"
+    user_copy.write_bytes(b"user-owned")
+    manager = script_blueprints(hass)
+    with patch.object(
+        manager, "async_reset_cache", wraps=manager.async_reset_cache
+    ) as reset:
+        await delivery.async_provision_blueprints(hass)
+        reset.assert_awaited_once()
+    assert not retired.exists()
+    assert user_copy.read_bytes() == b"user-owned"
+    assert not (delivery._SOURCE / "script").exists()
+    # Absent retired copy: nothing to remove, nothing to reset.
+    with patch.object(manager, "async_reset_cache") as reset:
+        await delivery.async_provision_blueprints(hass)
+        reset.assert_not_awaited()
