@@ -329,14 +329,16 @@ Status date: 2026-10-03
   options flow and daily trigger (`auto_scan.py`), and the LXC card
   (`frontend/hubinet-ops-lxc-card.js`, `frontend/lxc-card-logic.js`) with Node
   logic tests and a browser smoke test of second-tap arming.
+  The Scan blueprint, `blueprint_delivery.py`, and their tests are removed.
 - Scope: per-host daily automatic Scan in the integration options (replacing the
   Scan blueprint), and the Hubinet-Ops LXC card from the approved mockup with
   second-tap confirmation for Stop, Restart, Restore, and Delete.
 
 ## Next
 
-Owner review of the 2026.9.1.14 draft pull request and live validation of the
-card on a real Home Assistant installation. No merge, tag, or release is
+Owner review of the 2026.9.1.15 draft pull request #20 and live validation of
+the automatic Scan option and the LXC card on a real Home Assistant
+installation. No merge, tag, or release is
 performed by this task.
 
 ## Explicitly not started

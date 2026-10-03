@@ -80,7 +80,9 @@ provision the two integration-managed blueprints. Scan All reads existing
 coordinator/runtime_data and delegates to the unchanged package manager;
 blueprint delivery uses off-loop native HA file replacement. Native PVE
 behavior, discovery, coordinator, permissions, and package lifecycles are
-unchanged.
+unchanged. Release 2026.9.1.15 removes the blueprint provisioning hook again;
+the per-host automatic Scan option adds one options-flow hook to the
+upstream-derived `config_flow.py` and one setup call in the entry module.
 
 Release 2026.9.1.14 (owner-accepted Easy Update card and action) adds one more
 setup hook to the upstream-derived entry module: `async_setup` also delivers the

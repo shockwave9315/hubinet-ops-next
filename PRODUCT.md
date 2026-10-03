@@ -108,10 +108,9 @@ evidence; the Health result itself is not a gate. Rendering a card never
 mutates anything, and a successful Update leaves the pending count unknown until
 the next Scan.
 
-The integration ships and provisions one Scan automation blueprint; the user
-creates its automation once. It uses the thin Scan All action for every
-currently supported package LXC across loaded entries, with no per-LXC
-selection, and keeps summary evidence useful. Viewing individual package names
+Automatic Scan is an option of each Proxmox host entry: off by default, once a
+day at a chosen local time, for every supported package LXC on that host, with
+no per-LXC selection, and keeps summary evidence useful. Viewing individual package names
 is optional UX: the count, security count, operation result, and Health
 summarize the decision, while Review continues to expose the full exact plan on
 demand.

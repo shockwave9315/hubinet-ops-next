@@ -98,7 +98,7 @@ resource URL, Mushroom, YAML, or entity mapping is needed.
 
 1. Install or update Hubinet-Ops through HACS and restart Home Assistant, then
    **refresh the browser** (or the companion app) once so the new card loads.
-2. Create the automatic Scan automation once (see below).
+2. Turn on the automatic package scan once per host (see below).
 3. Open a dashboard, choose **Edit -> Add card**, and search for **Hubinet**.
 4. Choose **Hubinet-Ops Easy Update**, pick **one LXC**, optionally enable
    **YOLO** (remove unused packages after a successful update), and save.
@@ -158,29 +158,8 @@ Proxmox host, turn on **Scan automatically every day**, and choose the time
 supported LXC on that host. Stopped or busy LXCs are skipped until the next day.
 Scan never updates or removes packages; it is off until you turn it on.
 
-### Automatic Scan blueprint
-
-1. Install or update Hubinet-Ops through HACS, then restart Home Assistant if
-   HACS requests it. Hubinet-Ops provisions the blueprint when it loads.
-2. Open **Settings > Automations & scenes > Blueprints** and create **one
-   automation for the whole installation** from
-   **Hubinet-Ops — automatyczny skan aktualizacji**. Configure only the daily
-   time, whether to scan after HA starts, and the startup delay. Defaults are
-   04:00 in HA's timezone, startup Scan enabled, and 60 seconds.
-
-**Automatic Scan requires no LXC selection.** It always considers all currently
-supported Hubinet-Ops package LXCs across loaded integration entries. Stopped
-or busy targets do not prevent other targets from starting. The existing
-backend owns scan validation, background tasks, and concurrency; Scan never
-updates or removes packages. You can also request the same read-only operation
-with `hubinet_ops.scan_all_packages`, which takes no target or input.
-
-The shipped source lives under `custom_components/hubinet_ops/blueprints/` so
-HACS installs it with the integration. Hubinet-Ops synchronizes its managed copy
-under `/config/blueprints/automation/hubinet_ops/` on setup/reload. Do not edit
-that copy: changes are replaced by the shipped version. To customize it, copy it
-under your own namespace/name. Provisioning never creates or enables user
-automations.
+`hubinet_ops.scan_all_packages` requests the same read-only Scan for every
+supported LXC on every host at once; it takes no target or input.
 
 See [PRODUCT.md](PRODUCT.md) for product scope,
 [DEVELOPMENT.md](DEVELOPMENT.md) for the local development workflow, and

@@ -1,4 +1,4 @@
-"""YOLO continuation: blueprint-equivalent semantics over the real manager."""
+"""YOLO continuation over the real package manager."""
 
 # ruff: noqa: SLF001 -- inspect existing ephemeral records and entry tasks
 
@@ -287,7 +287,7 @@ async def test_unload_cancels_the_continuation(
 async def test_stale_coordinator_data_ends_the_follower(
     hass: HomeAssistant, mock_config_entry: MockConfigEntry
 ) -> None:
-    """A failed Proxmox refresh stops YOLO, like unavailable blueprint entities."""
+    """A failed Proxmox refresh stops YOLO."""
     transport = _held_health()
     with _patched():
         manager, coordinator = await _updated(hass, mock_config_entry, transport)

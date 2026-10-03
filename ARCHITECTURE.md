@@ -171,6 +171,11 @@ implementation lives in the fork-owned `easy_update.py`, `services.py`,
 
 ### Easy UX delivery and Scan All (2026.9.1.13)
 
+Historical record: in 2026.9.1.15 the owner replaced the Scan blueprint with the
+per-host automatic Scan option; `blueprint_delivery.py`, the shipped blueprint,
+and its setup hooks are removed, and no blueprint is provisioned anymore. Scan
+All remains.
+
 The owner explicitly accepted this narrow correction before implementation.
 The implemented setup hooks delegate to fork-owned `services.py` and
 `blueprint_delivery.py`; the documentation checkpoint is commit `ec877c8`.
@@ -204,7 +209,7 @@ should be forked into a different namespace for customization. Old manual
 The maintainer accepted Easy Update UX for release 2026.9.1.12 before
 implementation. Historical record: since 2026.9.1.14 the Easy Update card is
 the Easy path, and in 2026.9.1.15 the owner removed the script blueprint and
-Mushroom example described below; only the Scan automation blueprint remains.
+Mushroom example described below, and then the Scan automation blueprint.
 It was an optional Home Assistant YAML composition layer:
 an automation blueprint schedules Scan (using Scan All since 2026.9.1.13),
 a script blueprint composes one LXC's existing entity actions and buttons,
