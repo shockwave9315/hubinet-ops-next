@@ -4,6 +4,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import timedelta
 import logging
+import time
 from typing import Any, override
 
 from proxmoxer import AuthenticationError, ProxmoxAPI
@@ -55,8 +56,39 @@ from .packages.transport import AsyncSSHPackageTransport
 type ProxmoxConfigEntry = ConfigEntry[ProxmoxCoordinator]
 
 DEFAULT_UPDATE_INTERVAL = timedelta(seconds=60)
+# One short retry absorbs PVE's transient server-side failures, e.g. while a
+# guest is locked by a snapshot rollback (owner-approved, see UPSTREAM.md).
+READ_RETRY_DELAY_SECONDS = 2.0
 
 _LOGGER = logging.getLogger(__name__)
+
+
+def _retryable(err: Exception) -> bool:
+    """Return whether one read failure is transient: PVE 5xx or a read timeout."""
+    if isinstance(err, ResourceException):
+        try:
+            return int(err.status_code) >= 500
+        except TypeError, ValueError:
+            return False
+    return isinstance(err, requests.exceptions.Timeout) and not isinstance(
+        err, ConnectTimeout
+    )
+
+
+def _read[_T](request: str, call: Callable[[], _T]) -> _T:
+    """Run one blocking Proxmox read, retrying once after a transient failure."""
+    try:
+        return call()
+    except Exception as err:
+        if not _retryable(err):
+            raise
+        _LOGGER.debug("Retrying Proxmox read %s after: %s", request, err)
+    time.sleep(READ_RETRY_DELAY_SECONDS)
+    try:
+        return call()
+    except Exception as err:
+        _LOGGER.warning("Proxmox read %s failed after one retry: %s", request, err)
+        raise
 
 
 @dataclass(slots=True, kw_only=True)
@@ -252,10 +284,11 @@ class ProxmoxCoordinator(DataUpdateCoordinator[dict[str, ProxmoxNodeData]]):
                 translation_domain=DOMAIN,
                 translation_key="timeout_connect",
             ) from err
-        except ResourceException as err:
+        except (ResourceException, requests.exceptions.Timeout) as err:
             raise UpdateFailed(
                 translation_domain=DOMAIN,
-                translation_key="no_nodes_found",
+                translation_key="api_read_failed",
+                translation_placeholders={"error": str(err)[:300]},
             ) from err
         except requests.exceptions.ConnectionError as err:
             raise UpdateFailed(
@@ -321,7 +354,7 @@ class ProxmoxCoordinator(DataUpdateCoordinator[dict[str, ProxmoxNodeData]]):
 
     def _fetch_all_nodes(self) -> list[tuple[dict[str, Any], NodeResources]]:
         """Fetch all nodes with their VMs, containers, storages, and backups."""
-        nodes = self.proxmox.nodes.get() or []
+        nodes = _read("nodes", self.proxmox.nodes.get) or []
         return [(node, self._get_node_data(node)) for node in nodes]
 
     def _get_node_data(
@@ -336,13 +369,32 @@ class ProxmoxCoordinator(DataUpdateCoordinator[dict[str, ProxmoxNodeData]]):
             )
             return NodeResources(vms=[], containers=[], storages=[], backups=[])
 
-        vms = self.proxmox.nodes(node[CONF_NODE]).qemu.get() or []
-        containers = self.proxmox.nodes(node[CONF_NODE]).lxc.get() or []
-        storages = self.proxmox.nodes(node[CONF_NODE]).storage.get() or []
-        backups = (
-            self.proxmox.nodes(node[CONF_NODE]).tasks.get(typefilter="vzdump", limit=1)
-            or []
-        )
+        name = node[CONF_NODE]
+        api = self.proxmox.nodes(name)
+        # Guest lists are required current truth: a failure still fails the
+        # refresh rather than presenting old guests as current.
+        vms = _read(f"nodes/{name}/qemu", api.qemu.get) or []
+        containers = _read(f"nodes/{name}/lxc", api.lxc.get) or []
+        previous = (self.data or {}).get(name)
+        try:
+            storages = _read(f"nodes/{name}/storage", api.storage.get) or []
+        except (ResourceException, requests.exceptions.Timeout):
+            if previous is None:
+                raise
+            # Informational only; dropping it would delete storage devices.
+            storages = list(previous.storages.values())
+        try:
+            backups = (
+                _read(
+                    f"nodes/{name}/tasks",
+                    lambda: api.tasks.get(typefilter="vzdump", limit=1),
+                )
+                or []
+            )
+        except (ResourceException, requests.exceptions.Timeout):
+            if previous is None:
+                raise
+            backups = previous.backups
 
         return NodeResources(
             vms=vms, containers=containers, storages=storages, backups=backups

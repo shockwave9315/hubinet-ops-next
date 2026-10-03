@@ -253,6 +253,7 @@ PACKAGE_APPROVE_BUTTON = ButtonEntityDescription(
 PACKAGE_UPDATE_BUTTON = ButtonEntityDescription(
     key="package_update",
     translation_key="package_update",
+    device_class=ButtonDeviceClass.UPDATE,
     entity_category=EntityCategory.CONFIG,
 )
 PACKAGE_AUTOREMOVE_BUTTON = ButtonEntityDescription(

@@ -164,13 +164,5 @@
         "default": "mdi:server"
       }
     }
-  },
-  "services": {
-    "confirm_package_review": {
-      "service": "mdi:check-decagram-outline"
-    },
-    "get_package_plan": {
-      "service": "mdi:package-variant"
-    }
   }
 }

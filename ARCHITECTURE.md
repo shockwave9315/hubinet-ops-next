@@ -8,6 +8,86 @@ provenance in [UPSTREAM.md](UPSTREAM.md).
 
 ## Accepted architecture today
 
+### Automatic Scan option and LXC card (2026.9.1.15)
+
+On 2026-10-03, before implementation, the owner accepted two additions.
+
+**Automatic Scan as an integration option.** Each config entry (Proxmox host)
+gets an options flow with "automatic Scan" on/off (default off) and one daily
+time. When on, the entry registers one Home Assistant `async_track_time_change`
+callback at that local time; it is removed on entry unload, and changing the
+options reloads the entry. The callback requests the same per-entry Scan that
+Scan All performs, through the existing `PackageManager.async_start_scan` with
+its validation, concurrency, and stopped/busy isolation. This is the only
+accepted scheduler: a native HA time trigger with no queue, persistence, retry,
+catch-up after downtime, or state beyond the entry options. It explicitly
+supersedes the earlier "no Python scheduling" statements for this daily Scan
+only; Update and Autoremove are never scheduled. With the option in place the
+Scan automation blueprint and its provisioning are removed.
+
+**Hubinet-Ops LXC card.** A second card, `custom:hubinet-ops-lxc-card`, ships in
+its own module that the delivered card module imports with the same release
+query, so no extra resource is needed. It is configured by one LXC Container
+device, the YOLO choice, an optional name, and `compact`. It presents existing facts only: container status and uptime,
+CPU and RAM with 24-hour sparklines read from Home Assistant history, disk and
+network when those optional sensors are enabled, the Easy Update package state,
+Health and unused packages, the native snapshot selector, and power controls. It
+invokes existing entities and actions only: Easy Update, Scan, snapshot Create,
+selecting a snapshot then pressing the existing Restore or Delete button, and
+Start, Stop, Restart. Stop, Restart, Restore, and Delete require a second tap
+within four seconds; nothing acts on render. Entities are resolved by
+`device_id`, platform, and translation key (Restart by its `restart` device
+class), never by names. Shutdown for LXC is out of scope.
+
+### Cleanup and refresh resilience (2026.9.1.15)
+
+On 2026-10-03, before implementation, the owner decided the following. Nothing
+has been released to other users, so backward compatibility for the removed
+artifacts is not required.
+
+- **One-click Update script blueprint removed.** The Easy Update card is the
+  only Easy path. The blueprint source, its provisioning, the Mushroom example,
+  and their documentation are removed. The integration never deletes files in
+  the user's configuration; old copies are the user's own business.
+- **Card shows missing data honestly.** The Easy Update card distinguishes a
+  stopped LXC (native container status `stopped`/`suspended`) from missing
+  current Proxmox data (entities unavailable because the latest refresh failed)
+  and shows the latter as "no current data from Proxmox", never as "LXC is not
+  running".
+- **Refresh resilience (owner-approved divergence from upstream `proxmoxve`).**
+  A live Restore made one refresh take 22 s and an earlier one fail with an
+  HTTP error, which upstream reports as `no_nodes_found` and which makes every
+  entity of the host unavailable until the next poll. The coordinator therefore
+  retries one failed read once after a short delay when the failure is a
+  server-side error (HTTP 5xx) or a read timeout; never for 4xx. When the node's
+  storage or backup read still fails, that node keeps its previous storage and
+  backup values for this refresh instead of failing the whole host; those are
+  informational and dropping them would delete storage devices. When the node
+  list, VM list, or LXC list still fails, the refresh fails as before, because
+  presenting old guest lists as current would violate current-truth rules; the
+  error now names the failed request and the Proxmox status instead of "no
+  active nodes". No cache, queue, background retry, or new state is added.
+- **Package-review actions removed (owner decision after review).** The
+  response-only actions `hubinet_ops.get_package_plan` and
+  `hubinet_ops.confirm_package_review` existed only for the removed script
+  blueprint. They, their service definitions, translations, icons, and the
+  `PackageReviewEntityFeature` bit are removed. The scan token, Review/Approve
+  buttons, and `easy_update` (which confirms its own exact plan in Python) are
+  unchanged. The Easy Update card picker now lists Container devices that have
+  the package Update button, whose native device class is `update`
+  (`ButtonDeviceClass.UPDATE`, used by no other Hubinet-Ops entity); Easy
+  Update needs the same snapshot permission as that button. The same button is
+  the single Easy Update eligibility criterion in the frontend: the picker,
+  the default device of a new card, and whether a card offers the Easy Update
+  action (without it the card shows the count and opens details). The public
+  actions are `easy_update` and `scan_all_packages`.
+- **LXC card confirmation is bound to its target.** An armed tap records the
+  action, its exact target (this LXC's button; for Restore and Delete also the
+  backend's `selected_snapshot` identity), and its 4 s deadline. A second tap
+  runs only if all three still match; disconnecting the card, choosing another
+  snapshot, expiry, or any change of target cancels it. The card reads the
+  selection only from `selected_snapshot`, never from the select's state.
+
 ### Easy Update card and action (Variant C, 2026.9.1.14)
 
 On 2026-10-03, before implementation, the owner explicitly accepted Variant C:
@@ -94,8 +174,8 @@ Scan button, or opening the device. It never calculates plans, security, or
 mutation truth, never acts on render, and the user click remains the
 authorization event.
 
-The One-click Update script blueprint remains shipped, provisioned, and
-supported unchanged as an advanced/backward-compatible alternative; the Scan
+The One-click Update script blueprint was kept here as an advanced
+alternative; the 2026.9.1.15 owner decision above removed it. The Scan
 blueprint and Scan All are unchanged. New LXCs become selectable automatically
 through normal discovery; dashboards are never edited by the integration.
 
@@ -110,6 +190,11 @@ implementation lives in the fork-owned `easy_update.py`, `services.py`,
 `frontend.py`, and `frontend/`.
 
 ### Easy UX delivery and Scan All (2026.9.1.13)
+
+Historical record: in 2026.9.1.15 the owner replaced the Scan blueprint with the
+per-host automatic Scan option; `blueprint_delivery.py`, the shipped blueprint,
+and its setup hooks are removed, and no blueprint is provisioned anymore. Scan
+All remains.
 
 The owner explicitly accepted this narrow correction before implementation.
 The implemented setup hooks delegate to fork-owned `services.py` and
@@ -134,19 +219,18 @@ helper, or package lifecycle change.
 
 The Polish automatic Scan blueprint has only daily time, startup enablement,
 and startup delay inputs, and calls Scan All without entity selection or button
-presses. One automation covers the installation. The Polish one-click Update
-blueprint remains one user-created script per chosen LXC with its unchanged
-2026.9.1.12 exact-token and optional Autoremove flow. Managed blueprint copies
+presses. One automation covers the installation. The one-click Update script
+blueprint provisioned here was removed in 2026.9.1.15. Managed blueprint copies
 should be forked into a different namespace for customization. Old manual
 2026.9.1.12 imports may remain duplicates until the user removes them.
 
 ### Easy Update UX
 
 The maintainer accepted Easy Update UX for release 2026.9.1.12 before
-implementation. Since the 2026.9.1.14 owner decision above, the Easy Update card
-is the primary Easy path and this script composition remains an unchanged
-advanced/backward-compatible alternative. It is an optional Home Assistant YAML
-composition layer:
+implementation. Historical record: since 2026.9.1.14 the Easy Update card is
+the Easy path, and in 2026.9.1.15 the owner removed the script blueprint and
+Mushroom example described below, and then the Scan automation blueprint.
+It was an optional Home Assistant YAML composition layer:
 an automation blueprint schedules Scan (using Scan All since 2026.9.1.13),
 a script blueprint composes one LXC's existing entity actions and buttons,
 and a Mushroom dashboard example presents existing summary facts.
@@ -964,6 +1048,11 @@ health machinery.
 
 ## Package review architecture
 
+Historical note: the `get_package_plan` and `confirm_package_review` actions
+described in this section were removed in 2026.9.1.15 and are not a supported
+API. The scan token, review state, and the Review and Approve buttons remain as
+described.
+
 This section describes the implemented form of the package-review
 architecture accepted by the maintainer and independently red-teamed
 against Home Assistant Core `2026.9.1`; see [STATUS.md](STATUS.md) for
@@ -1082,7 +1171,7 @@ and `packages: []`. Confirming an empty plan does not create review state; it
 always returns `{"reviewed": false}`. There is no `reviewed = True` state for
 a zero-package plan.
 
-### Action surface
+### Action surface (historical, removed in 2026.9.1.15)
 
 Exactly two package-review entity actions exist:
 

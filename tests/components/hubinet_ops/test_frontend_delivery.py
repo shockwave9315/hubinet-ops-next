@@ -1,11 +1,16 @@
 """The dashboard card ships with the integration without a manual resource."""
 
+import re
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from tests.common import MockConfigEntry  # noqa: TID251
 
-from custom_components.hubinet_ops.button import PACKAGE_SCAN_BUTTON
+from custom_components.hubinet_ops.button import (
+    CONTAINER_BUTTONS,
+    PACKAGE_SCAN_BUTTON,
+    PACKAGE_UPDATE_BUTTON,
+)
 from custom_components.hubinet_ops.const import INTEGRATION_VERSION
 from custom_components.hubinet_ops.frontend import (
     CARD_MODULE,
@@ -13,13 +18,17 @@ from custom_components.hubinet_ops.frontend import (
     STATIC_URL,
     card_module_url,
 )
+from custom_components.hubinet_ops.select import SNAPSHOT_SELECT
 from custom_components.hubinet_ops.sensor import (
     CONTAINER_SENSORS,
     PACKAGE_HEALTH_SENSOR,
     PACKAGE_SCAN_SENSOR,
     PACKAGE_UPDATE_SENSOR,
     UNUSED_PACKAGES_SENSOR,
-    PackageReviewEntityFeature,
+)
+from custom_components.hubinet_ops.snapshot_restore import (
+    SNAPSHOT_DELETE_BUTTON,
+    SNAPSHOT_RESTORE_BUTTON,
 )
 from homeassistant.components.http import StaticPathConfig
 from homeassistant.config_entries import ConfigEntryState
@@ -116,6 +125,8 @@ def test_card_roles_match_integration_translation_keys() -> None:
         ("sensor", UNUSED_PACKAGES_SENSOR.translation_key),
         ("sensor", PACKAGE_HEALTH_SENSOR.translation_key),
         ("button", PACKAGE_SCAN_BUTTON.translation_key),
+        # Eligibility: the same button the picker selects by its update class.
+        ("button", PACKAGE_UPDATE_BUTTON.translation_key),
         (
             "sensor",
             next(
@@ -127,6 +138,45 @@ def test_card_roles_match_integration_translation_keys() -> None:
     }
     for domain, key in expected:
         assert f'["{domain}", "{key}"]' in logic
-    assert f"PACKAGE_REVIEW_FEATURE = {int(PackageReviewEntityFeature.REVIEW)}" in (
-        (FRONTEND_DIRECTORY / CARD_MODULE).read_text(encoding="utf-8")
+    # The picker offers only devices with the package Update button.
+    card = (FRONTEND_DIRECTORY / CARD_MODULE).read_text(encoding="utf-8")
+    assert PACKAGE_UPDATE_BUTTON.device_class == "update"
+    assert 'domain: "button",\n                device_class: "update",' in card
+    assert "supported_features" not in card
+
+
+def test_lxc_card_ships_with_the_easy_update_card() -> None:
+    """The LXC card loads from the same delivered module with its release query."""
+    card = (FRONTEND_DIRECTORY / CARD_MODULE).read_text(encoding="utf-8")
+    lxc_card = (FRONTEND_DIRECTORY / "hubinet-ops-lxc-card.js").read_text(
+        encoding="utf-8"
     )
+    lxc_logic = (FRONTEND_DIRECTORY / "lxc-card-logic.js").read_text(encoding="utf-8")
+    assert "./hubinet-ops-lxc-card.js${new URL(import.meta.url).search}" in card
+    assert 'LXC_CARD_TYPE = "hubinet-ops-lxc-card"' in lxc_logic
+    assert 'name: "Hubinet-Ops LXC"' in lxc_card
+    assert "static getConfigForm()" in lxc_card
+    for source in (lxc_card, lxc_logic):
+        assert "http://" not in source
+        assert 'from "' not in source
+        assert "unpkg" not in source
+        assert "cdn" not in source
+
+
+def test_lxc_card_roles_match_integration_translation_keys() -> None:
+    """Every LXC card role names a key the container entities really define."""
+    logic = (FRONTEND_DIRECTORY / "lxc-card-logic.js").read_text(encoding="utf-8")
+    roles = re.findall(r'^  \w+: \["(\w+)", "(\w+)"\],$', logic, re.MULTILINE)
+    assert len(roles) == 16
+    defined = {
+        *(("sensor", d.translation_key) for d in CONTAINER_SENSORS),
+        *(("button", d.translation_key) for d in CONTAINER_BUTTONS),
+        ("button", SNAPSHOT_RESTORE_BUTTON.translation_key),
+        ("button", SNAPSHOT_DELETE_BUTTON.translation_key),
+        ("select", SNAPSHOT_SELECT.translation_key),
+    }
+    assert set(roles) <= defined
+    # Restart has no translation key; the card matches its device class.
+    restart = next(d for d in CONTAINER_BUTTONS if d.key == "restart")
+    assert restart.translation_key is None
+    assert restart.device_class == "restart"

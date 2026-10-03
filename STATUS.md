@@ -12,10 +12,10 @@ Status date: 2026-10-03
   subsystem, guided fresh-install enrollment, native snapshot Restore, and
   native snapshot Create observation and explicit native Delete documented in
   [ARCHITECTURE.md](ARCHITECTURE.md).
-- Integration after merge: `2026.9.1.14`, helper v5, protocol v1.
-- Latest tagged release: `2026.9.1.13` (merged PR #18, main commit
-  `3bc525cad3d107fc77436b76fd876ba36172da9f`).
-- Starting merged baseline for 2026.9.1.14: main `3bc525c`.
+- Integration after merge: `2026.9.1.15`, helper v5, protocol v1.
+- Latest tagged release: `2026.9.1.14` (merged PR #19, main commit
+  `06c94cc077e7dd07d724d39f3dd97104209d4a27`), live-tested by the owner.
+- Starting merged baseline for 2026.9.1.15: main `06c94cc`.
 - Git history is authoritative for the eventual feature merge SHA.
 
 ## Merged
@@ -28,11 +28,10 @@ Status date: 2026-10-03
   using AsyncSSH transport, a root-owned forced-command helper, ephemeral
   state, bounded summary entities, and package-specific concurrency.
 - Package review: ephemeral scan-token confirmation on the existing
-  `PackageScanRecord`, exposed as the two response-only sensor-platform
-  actions `hubinet_ops.get_package_plan` and
-  `hubinet_ops.confirm_package_review`, restricted to the package sensor
-  via a native supported-feature bit, plus the native Review and Approve
-  operator buttons.
+  `PackageScanRecord` through the native Review and Approve operator buttons.
+  (Historical: the response-only actions `hubinet_ops.get_package_plan` and
+  `hubinet_ops.confirm_package_review` and their supported-feature bit were
+  removed in 2026.9.1.15.)
 - Package Update: execution-time exact-plan gating, one native retained safety
   snapshot, one fixed hardened bare APT upgrade, post-mutation dpkg sanity,
   generic LXC liveness, exact snapshot cleanup, bounded outcome sensor, and
@@ -215,6 +214,9 @@ Status date: 2026-10-03
 
 ## 2026.9.1.12 Easy Update UX
 
+Historical record: the blueprints and Mushroom example below were removed in
+2026.9.1.15.
+
 - Architecture: **ACCEPTED BY MAINTAINER BEFORE IMPLEMENTATION**; optional
   HA YAML composition over existing entities and entity actions only.
 - Implementation: **MERGED IN PR #17 / RELEASED AS 2026.9.1.12**. Documentation checkpoint:
@@ -234,6 +236,9 @@ Status date: 2026-10-03
 - Release target: `2026.9.1.12`.
 
 ## 2026.9.1.13 Easy UX delivery + Scan All
+
+Historical record: blueprint provisioning below was removed in 2026.9.1.15;
+Scan All remains.
 
 - Architecture: **ACCEPTED BY OWNER BEFORE IMPLEMENTATION**, as explicitly
   directed for this task; see [ARCHITECTURE.md](ARCHITECTURE.md).
@@ -267,7 +272,8 @@ Status date: 2026-10-03
   see [ARCHITECTURE.md](ARCHITECTURE.md#easy-update-card-and-action-variant-c-20269114).
   The decision explicitly supersedes the earlier "no custom frontend / no custom
   card / no custom target resolver" statements for this card and action only.
-- Implementation: **IMPLEMENTED / DRAFT PR FOR OWNER REVIEW**. Pre-implementation
+- Implementation: **MERGED IN PR #19 / RELEASED AS 2026.9.1.14** and live-tested
+  by the owner (card picker, editor, states). Pre-implementation
   documentation checkpoint: `7d38bf8`. Implemented in the accepted order: the
   action without YOLO, the YOLO continuation, frontend delivery, then the card.
 - One recorded refinement of the checkpoint: the manifest lists `frontend` and
@@ -296,8 +302,10 @@ Status date: 2026-10-03
   tests added (905 Python tests total). Cloud-container run after the fix:
   860 passed, the same 45 container-only baseline failures; 13/13 Node card
   tests; Ruff and `git diff --check` passed.
-- Live Home Assistant validation of the card (HACS install, card picker, states,
-  Easy Update with and without YOLO): **NOT YET PERFORMED**.
+- Live Home Assistant validation: the owner live-tested the released card
+  (card picker, editor, states); that live run also surfaced the Restore
+  refresh failure fixed in 2026.9.1.15. A live Easy Update with and without
+  YOLO was **not performed**; it moves to the 2026.9.1.15 live validation.
 - Accepted scope: the `hubinet_ops.easy_update` action with an exact `device_id`
   target, synchronous confirm-and-start over existing `PackageManager` entry
   points, an optional bounded YOLO Autoremove continuation with the unchanged
@@ -306,15 +314,43 @@ Status date: 2026-10-03
   delivery without a manual dashboard resource, and the Hubinet-Ops Easy Update
   card configured by one LXC device.
 - Package backend delta: **NONE**; `packages/*`, helper v5, protocol v1, and
-  Scan All are unchanged. The One-click Update blueprint stays as an advanced
-  alternative.
+  Scan All are unchanged. The One-click Update blueprint stayed as an advanced
+  alternative (removed in 2026.9.1.15).
+
+## 2026.9.1.15 cleanup and refresh resilience
+
+- Architecture: **ACCEPTED BY OWNER BEFORE IMPLEMENTATION on 2026-10-03**; see
+  [ARCHITECTURE.md](ARCHITECTURE.md#cleanup-and-refresh-resilience-20269115).
+- Implementation: **MERGED IN PR #20**. Documentation checkpoint: `8c024d0`.
+- Scope: remove the One-click Update script blueprint and Mushroom example,
+  show "no current data from Proxmox" in the Easy Update card, and make one
+  slow or failing Proxmox read during Restore no longer take every entity of
+  the host offline. Package backend, helper, and protocol are unchanged.
+
+## 2026.9.1.15 automatic Scan option and LXC card
+
+- Architecture: **ACCEPTED BY OWNER BEFORE IMPLEMENTATION on 2026-10-03**; see
+  [ARCHITECTURE.md](ARCHITECTURE.md#automatic-scan-option-and-lxc-card-20269115).
+- Implementation: **MERGED IN PR #20, NOT YET LIVE-VALIDATED**: the
+  options flow and daily trigger (`auto_scan.py`), and the LXC card
+  (`frontend/hubinet-ops-lxc-card.js`, `frontend/lxc-card-logic.js`) with Node
+  logic tests and a browser smoke test of second-tap arming.
+  The Scan blueprint, `blueprint_delivery.py`, and their tests are removed.
+  Owner-requested cleanup: the `get_package_plan` and `confirm_package_review`
+  actions and the `PackageReviewEntityFeature` bit are removed; the Easy
+  Update picker now lists devices with the package Update button
+  (`ButtonDeviceClass.UPDATE`). LXC card confirmation is bound to the exact
+  action and target (selected snapshot identity from `selected_snapshot`).
+- Scope: per-host daily automatic Scan in the integration options (replacing the
+  Scan blueprint), and the Hubinet-Ops LXC card from the approved mockup with
+  second-tap confirmation for Stop, Restart, Restore, and Delete.
 
 ## Next
 
-Owner review of the 2026.9.1.14 draft pull request and live validation of the
-card on a real Home Assistant installation. No merge, tag, or release is
-performed by this task.
+Tag and release of `2026.9.1.15`, then live validation on a real Home
+Assistant installation of the automatic Scan option, the LXC card, and a live
+Easy Update with and without YOLO.
 
 ## Explicitly not started
 
-- Merge, tag, and release of `2026.9.1.14`.
+- Tag and release of `2026.9.1.15`.

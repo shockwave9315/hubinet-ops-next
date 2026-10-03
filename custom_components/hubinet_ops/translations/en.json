@@ -724,6 +724,9 @@
     },
     "easy_update_scan_changed": {
       "message": "A different package scan is now current. Check the new result and click again."
+    },
+    "api_read_failed": {
+      "message": "A Proxmox VE API request failed: {error}"
     }
   },
   "issues": {
@@ -742,20 +745,6 @@
     }
   },
   "services": {
-    "confirm_package_review": {
-      "name": "Confirm package review",
-      "description": "Confirms the exact package plan previously returned by Get package plan as reviewed, if it is still the current one. The token is not a password; it only proves the plan being confirmed is still the one shown, not a newer or different scan.",
-      "fields": {
-        "token": {
-          "name": "Token",
-          "description": "The token returned alongside the plan by Get package plan. Confirmation is rejected, without raising an error, if a new scan has since replaced it."
-        }
-      }
-    },
-    "get_package_plan": {
-      "name": "Get package plan",
-      "description": "Returns the latest scan status for one LXC, and for a successful scan, its exact pending-package plan and a token to confirm it with. Never starts a scan and never changes review state."
-    },
     "scan_all_packages": {
       "name": "Scan all package LXCs",
       "description": "Requests a package scan for all currently supported LXC containers across loaded Hubinet-Ops entries. Stopped or busy targets are skipped. Never updates or removes packages."
@@ -775,6 +764,21 @@
         "expected_scan_attempt": {
           "name": "Expected scan",
           "description": "Optional last_attempt of the scan the user saw; the update is refused if a different scan is current."
+        }
+      }
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Automatic package scan",
+        "description": "Scan every supported LXC on this Proxmox host for pending package updates once a day. Scanning never updates or removes packages.",
+        "data": {
+          "auto_scan": "Scan automatically every day",
+          "auto_scan_time": "Time"
+        },
+        "data_description": {
+          "auto_scan_time": "Local Home Assistant time. Stopped or busy LXCs are skipped until the next day."
         }
       }
     }

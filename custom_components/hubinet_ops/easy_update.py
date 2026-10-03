@@ -27,7 +27,7 @@ from .packages.models import (
 )
 
 _LOGGER = logging.getLogger(__name__)
-# Shared observation bound, as in the One-click Update blueprint's YOLO branch.
+# How long YOLO waits for the Update and Health to finish.
 AUTOREMOVE_OBSERVATION_SECONDS = 3600
 
 
@@ -160,8 +160,8 @@ def async_start_post_update_autoremove(
 ) -> None:
     """Optionally follow one accepted Update with the existing Autoremove.
 
-    This is the blueprint's YOLO ``wait_template`` in Python: one bounded,
-    ephemeral, entry-tracked wait bound to the exact Update attempt. Health
+    One bounded, ephemeral, entry-tracked wait bound to the exact Update
+    attempt. Health
     only has to stop running; its result is not a gate. Every other check
     stays in ``async_start_autoremove``.
     """

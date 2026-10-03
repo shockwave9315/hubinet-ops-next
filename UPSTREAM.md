@@ -80,7 +80,9 @@ provision the two integration-managed blueprints. Scan All reads existing
 coordinator/runtime_data and delegates to the unchanged package manager;
 blueprint delivery uses off-loop native HA file replacement. Native PVE
 behavior, discovery, coordinator, permissions, and package lifecycles are
-unchanged.
+unchanged. Release 2026.9.1.15 removes the blueprint provisioning hook again;
+the per-host automatic Scan option adds one options-flow hook to the
+upstream-derived `config_flow.py` and one setup call in the entry module.
 
 Release 2026.9.1.14 (owner-accepted Easy Update card and action) adds one more
 setup hook to the upstream-derived entry module: `async_setup` also delivers the
@@ -92,3 +94,17 @@ fork-owned `services.py` and `easy_update.py`; they read the device registry,
 existing coordinator/runtime data, and call only existing `PackageManager` entry
 points. Upstream-derived entities, device identifiers, coordinator, buttons,
 sensors, permissions, and native PVE behavior are unchanged.
+
+Release 2026.9.1.15 adds an owner-approved divergence to the upstream-derived
+coordinator. Each refresh read (nodes, per-node QEMU, LXC, storage, and the
+latest vzdump task) is retried once after a short delay when it fails with an
+HTTP 5xx or a read timeout, never for 4xx. When a node's storage or backup read
+still fails, that node keeps its previous storage and backup values for that
+refresh instead of failing the whole host; node, QEMU, and LXC list failures
+still fail the refresh. The setup probe (`nodes` and `access/permissions` in
+`_init_proxmox`) is unchanged upstream code without this retry: a transient 5xx
+or read timeout there already ends in Home Assistant's own setup retry. Refresh
+read failures now report the failed request and
+Proxmox error (`api_read_failed`) instead of upstream's `no_nodes_found`. The
+change exists because a live LXC Restore made Proxmox answer slowly or with an
+error and upstream then marked every entity of the host unavailable.

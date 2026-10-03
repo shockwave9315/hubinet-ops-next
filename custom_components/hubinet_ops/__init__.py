@@ -10,7 +10,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers import device_registry as dr, entity_registry as er
 from homeassistant.helpers.typing import ConfigType
 
-from .blueprint_delivery import async_provision_blueprints
+from .auto_scan import async_setup_auto_scan
 from .const import (
     AUTH_OTHER,
     AUTH_PAM,
@@ -109,16 +109,14 @@ def _read_legacy_transport_data(
 
 
 async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
-    """Expose actions, deliver the card, and provision managed blueprints."""
+    """Expose actions and deliver the dashboard cards."""
     async_register_services(hass)
     await async_register_frontend(hass)
-    await async_provision_blueprints(hass)
     return True
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ProxmoxConfigEntry) -> bool:
     """Set up a ProxmoxVE from a config entry."""
-    await async_provision_blueprints(hass)
     coordinator = ProxmoxCoordinator(hass, entry)
     await coordinator.async_config_entry_first_refresh()
 
@@ -134,6 +132,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ProxmoxConfigEntry) -> b
         )
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
+    async_setup_auto_scan(hass, entry)
 
     return True
 

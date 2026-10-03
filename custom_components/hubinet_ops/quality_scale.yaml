@@ -33,15 +33,11 @@ rules:
 
   # Silver
   action-exceptions:
-    status: exempt
+    status: done
     comment: |
-      get_package_plan and confirm_package_review return every expected
-      business outcome (including a stale/wrong token, no current
-      successful scan, and an empty plan) as response data, per the
-      accepted package-review architecture; they do not raise for those
-      cases so one target's rejection cannot fail a multi-target call
-      that also targets other package sensors. Only unexpected
-      programming/runtime failures would raise.
+      easy_update raises translated ServiceValidationError or
+      HomeAssistantError; scan_all_packages only requests scans and logs
+      targets that could not start.
   config-entry-unloading: done
   docs-configuration-parameters: done
   docs-installation-parameters: done
