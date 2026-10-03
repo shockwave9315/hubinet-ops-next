@@ -1,6 +1,6 @@
 # Status
 
-Status date: 2026-09-26
+Status date: 2026-10-03
 
 ## Current baseline
 
@@ -12,14 +12,11 @@ Status date: 2026-09-26
   subsystem, guided fresh-install enrollment, native snapshot Restore, and
   native snapshot Create observation and explicit native Delete documented in
   [ARCHITECTURE.md](ARCHITECTURE.md).
-- Integration after merge: `2026.9.1.13`, helper v5, protocol v1.
-- Latest tagged release: `2026.9.1.12`.
-- Starting merged baseline: release `2026.9.1.12`, merged PR #17, main commit
-  `8852a21cc2ba49c109a9d85863765253e3e6f39c`.
+- Integration on `main`: `2026.9.1.13`, helper v5, protocol v1.
+- Latest tagged release: `2026.9.1.13` (merged PR #18, main commit
+  `3bc525cad3d107fc77436b76fd876ba36172da9f`).
+- Next target: `2026.9.1.14` Easy Update card and action (see below).
 - Git history is authoritative for the eventual feature merge SHA.
-- Feature validation: **860 tests and 213 snapshots passed**; repository Ruff,
-  translation and release-parity checks, helper SHA/protocol consistency,
-  ShellCheck, and shell syntax passed.
 
 ## Merged
 
@@ -240,8 +237,8 @@ Status date: 2026-09-26
 
 - Architecture: **ACCEPTED BY OWNER BEFORE IMPLEMENTATION**, as explicitly
   directed for this task; see [ARCHITECTURE.md](ARCHITECTURE.md).
-- Implementation: **IMPLEMENTED / READY FOR MAINTAINER REVIEW**. Target:
-  `2026.9.1.13`. Pre-implementation documentation checkpoint: `ec877c8`.
+- Implementation: **MERGED IN PR #18 / RELEASED AS 2026.9.1.13** (main
+  `3bc525c`). Pre-implementation documentation checkpoint: `ec877c8`.
 - Blueprint sources ship inside the HACS-installed integration package. Setup
   and reload synchronize only the two owned files off-loop with atomic rename,
   skip identical bytes, reset changed blueprint caches, and log delivery errors
@@ -264,11 +261,30 @@ Status date: 2026-09-26
 - Starting merged baseline: PR #17 / `2026.9.1.12`, main
   `8852a21cc2ba49c109a9d85863765253e3e6f39c`.
 
+## 2026.9.1.14 Easy Update card and action (Variant C)
+
+- Architecture: **ACCEPTED BY OWNER BEFORE IMPLEMENTATION on 2026-10-03**;
+  see [ARCHITECTURE.md](ARCHITECTURE.md#easy-update-card-and-action-variant-c-20269114).
+  The decision explicitly supersedes the earlier "no custom frontend / no custom
+  card / no custom target resolver" statements for this card and action only.
+- Implementation: **NOT STARTED** at the documentation checkpoint.
+- Accepted scope: the `hubinet_ops.easy_update` action with an exact `device_id`
+  target, synchronous confirm-and-start over existing `PackageManager` entry
+  points, an optional bounded YOLO Autoremove continuation with the unchanged
+  blueprint semantics (same successful Update, Health no longer running, Health
+  result not a gate, fresh cleanup evidence), integration-shipped frontend
+  delivery without a manual dashboard resource, and the Hubinet-Ops Easy Update
+  card configured by one LXC device.
+- Package backend delta: **NONE**; `packages/*`, helper v5, protocol v1, and
+  Scan All are unchanged. The One-click Update blueprint stays as an advanced
+  alternative.
+
 ## Next
 
-Maintainer review of the 2026.9.1.13 draft PR. No merge, tag, or release is
-performed by this task.
+Implement 2026.9.1.14 in the accepted order: `easy_update` without YOLO, the
+YOLO continuation, frontend delivery, the card, then full validation and a draft
+pull request for owner review.
 
 ## Explicitly not started
 
-- Tagging and publishing `2026.9.1.13` await maintainer review and merge.
+- Merge, tag, and release of `2026.9.1.14`.

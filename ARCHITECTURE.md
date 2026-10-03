@@ -8,6 +8,101 @@ provenance in [UPSTREAM.md](UPSTREAM.md).
 
 ## Accepted architecture today
 
+### Easy Update card and action (Variant C, 2026.9.1.14)
+
+On 2026-10-03, before implementation, the owner explicitly accepted Variant C:
+a native Hubinet-Ops dashboard card that a user finds through **Dashboard ->
+Add card -> search "Hubinet"**, configures by choosing one LXC device and an
+optional YOLO Autoremove switch, and saves. Manual mapping of five entities is
+no longer the primary Easy Update path. This decision explicitly supersedes, for
+this card and action only, the earlier "no custom frontend", "no custom card or
+panel", and "no custom target resolver" statements recorded below in the package
+review and package update sections. Every other rejection in those sections
+still stands.
+
+**Action.** One fork-owned domain action, `hubinet_ops.easy_update`, registered
+once in `async_setup` beside Scan All, takes `device_id` (required), `autoremove`
+(default false), and an optional `expected_scan_attempt`. Its target identity is
+the Home Assistant `device_id` of one Hubinet-Ops Container device. Resolution is
+exact and read-only: device registry entry -> a loaded `hubinet_ops` config entry
+among its config entries -> that entry's existing coordinator `package_node` data
+-> the one current container whose existing device identifier
+`(hubinet_ops, f"{entry_id}_container_{vmid}")` is on the device. QEMU, node,
+storage, other-integration, other-node, unloaded-entry, and unconfigured-transport
+targets are rejected. No names, entity IDs, prefixes, or substrings are used, and
+no inventory or mapping is stored. This narrow resolver is the only custom target
+resolution accepted; the package-review actions keep native entity targeting.
+
+In one synchronous event-loop callback, with no `await` between the steps, the
+action requires the current successful non-empty `PackageScanRecord`; when
+`expected_scan_attempt` is given it must equal that record's existing
+`last_attempt`, so a click authorizes only the scan observation it displayed.
+It then calls the existing `PackageManager.confirm_review()` with the record's
+own token and the existing `async_start_update()`. Cheap read-only prechecks of
+running state, `VM.Snapshot` permission, Restore reservation, and same-target
+running work avoid leaving review state behind on predictable rejections; the
+manager remains authoritative for every check. Accepted work runs as the
+existing background Update, so the action returns immediately after acceptance
+and its errors are translated user-facing exceptions.
+
+**YOLO continuation.** Only when `autoremove` is true, the action starts one
+bounded, ephemeral, config-entry-tracked continuation bound to the exact Update
+attempt it just started. It keeps the 2026.9.1.12 blueprint semantics exactly:
+
+- it waits while that same Update attempt is running, then requires that same
+  attempt (unchanged `last_attempt`) to have finished `SUCCESS`;
+- it waits until Health for that LXC is no longer `running`; the Health result
+  (`healthy`, `degraded`, `failed`, or unknown) is not a new gate, and Health
+  never changes mutation truth;
+- it requires fresh positive cleanup evidence (`observed_at` not earlier than the
+  Update attempt, non-empty candidates) plus the existing Autoremove conditions
+  (running guest, `VM.Snapshot`, no Restore reservation, no running Scan, Update,
+  Autoremove, or Health), then calls the existing `async_start_autoremove()` once.
+
+It is woken through the existing coordinator listener that the manager already
+notifies, shares the blueprint's one-hour observation bound, stops on any failed,
+uncertain, changed, or stale fact, never retries, and is cancelled by entry
+unload. A failed or uncertain Update, timeout, Home Assistant restart, or reload
+never starts Autoremove. The continuation adds no record, status, persistence,
+queue, scheduler, worker, or manager state; it is the Python equivalent of the
+blueprint's `wait_template`, not a second lifecycle.
+
+**Frontend delivery.** The card is one dependency-free ES module (plus a pure
+logic module) shipped inside `custom_components/hubinet_ops/frontend/`, so HACS
+installs it with the integration. `async_setup` serves that directory through
+`hass.http.async_register_static_paths` with cache headers and registers the
+card module through `frontend.add_extra_js_url` with a `?v=<integration version>`
+query, so no manual dashboard resource is needed in storage or YAML dashboards.
+Lovelace resource storage is not written. Delivery failure is logged and never
+disables native or package functionality. The manifest declares the `http` and
+`frontend` dependencies. A browser refresh is needed after install or update
+because the frontend imports extra modules at page load.
+
+**Card.** `custom:hubinet-ops-easy-update-card` registers in `window.customCards`
+(name "Hubinet-Ops Easy Update") and uses the built-in `getConfigForm` editor: a
+device selector filtered to `integration: hubinet_ops`, `model: Container`, and
+devices with a package-review-capable sensor, plus the `autoremove` switch and an
+optional name. The card stores only `device_id`. At runtime it finds display
+entities through the frontend entity registry by `device_id`, platform
+`hubinet_ops`, and fixed translation key, so entity renames do not matter. It
+only presents existing backend facts (pending count, `scan_status`,
+`last_attempt`, `security_updates`, update status and outcome, unused count,
+Health, container status) and invokes existing actions: Easy Update, the existing
+Scan button, or opening the device. It never calculates plans, security, or
+mutation truth, never acts on render, and the user click remains the
+authorization event.
+
+The One-click Update script blueprint remains shipped, provisioned, and
+supported unchanged as an advanced/backward-compatible alternative; the Scan
+blueprint and Scan All are unchanged. New LXCs become selectable automatically
+through normal discovery; dashboards are never edited by the integration.
+
+Accepted residuals: one browser refresh after install or update; the
+package-capable device filter is client-side and degrades to all Hubinet LXCs
+with backend rejection; a reused VMID can restore the same `device_id` and the
+card then shows the new LXC with fresh state; a start rejected after
+confirmation leaves the same exact plan reviewed, as with the blueprint.
+
 ### Easy UX delivery and Scan All (2026.9.1.13)
 
 The owner explicitly accepted this narrow correction before implementation.
@@ -42,7 +137,10 @@ should be forked into a different namespace for customization. Old manual
 ### Easy Update UX
 
 The maintainer accepted Easy Update UX for release 2026.9.1.12 before
-implementation. It is an optional Home Assistant YAML composition layer:
+implementation. Since the 2026.9.1.14 owner decision above, the Easy Update card
+is the primary Easy path and this script composition remains an unchanged
+advanced/backward-compatible alternative. It is an optional Home Assistant YAML
+composition layer:
 an automation blueprint schedules Scan (using Scan All since 2026.9.1.13),
 a script blueprint composes one LXC's existing entity actions and buttons,
 and a Mushroom dashboard example presents existing summary facts.
@@ -1067,16 +1165,19 @@ stores only that rendered record's token as ephemeral `viewed_token[(node,
 vmid)]`. The separate Approve button calls the existing confirmation logic
 with exactly that stored token, so it never means "approve whatever is current
 now." A new scan invalidates `viewed_token`, and successful approval clears it.
-There is still no review entity, review binary sensor, or custom frontend.
+There is still no review entity or review binary sensor. (The former "no custom
+frontend" rule is superseded only by the owner-accepted Easy Update card; see
+[Easy Update card and action](#easy-update-card-and-action-variant-c-20269114).)
 
 ### Exact rows are transient response data
 
 Exact package rows returned by `get_package_plan` are primitive JSON
 dictionaries and are transient action-response data only: they are not
 sensor state, not sensor attributes, not recorder history, and not
-persistent review storage. This design adds no custom WebSocket API, no
-custom frontend, and no custom card or panel. The reviewable plan is never
-truncated.
+persistent review storage. This design adds no custom WebSocket API and no
+panel. Its original "no custom frontend, no custom card" statement is
+superseded only by the owner-accepted Easy Update card, which never shows or
+stores exact rows or tokens. The reviewable plan is never truncated.
 
 ### Cross-target and restart token behavior
 
@@ -1118,9 +1219,11 @@ generation authority; resource UUID authority; fencing; reconciliation; a
 review database; SQLite; backend HTTP; `hostd`; a worker; a scheduler; a
 queue; a review TTL; a review timer; cryptographic plan attestation; token
 authority; a content-derived confirmation hash; a duplicate reviewed-plan
-copy; a generalized workflow/state machine; a custom frontend; a review
-entity; a custom WebSocket API; a second inventory; a custom target resolver;
-a cross-target transaction; or post-update health architecture.
+copy; a generalized workflow/state machine; a review entity; a custom
+WebSocket API; a second inventory; a cross-target transaction; or post-update
+health architecture. The former rejections of "a custom frontend" and "a custom
+target resolver" are superseded only for the owner-accepted Easy Update card and
+its exact `device_id` resolver; package-review actions remain natively targeted.
 
 ## Package Update maintainer decision record
 
@@ -1278,5 +1381,6 @@ Package Update introduces no database, SQLite store, backend service, host
 daemon, durable job, journal, scheduler, worker, queue, startup recovery,
 incarnation/generation authority, reconciliation framework, snapshot ownership
 framework, rollback framework, automatic rollback, automatic snapshot cleanup,
-application-health framework, custom frontend, duplicate Proxmox coordinator,
-or duplicate API wrapper.
+application-health framework, duplicate Proxmox coordinator, or duplicate API
+wrapper. Its original "custom frontend" exclusion is superseded only by the
+owner-accepted Easy Update card and action, which add no Update lifecycle.
