@@ -63,22 +63,17 @@ password and SSH-agent authentication remain disabled.
 
 ## Package review
 
-Two actions, available on each LXC's pending-package-updates sensor, let an
-operator view and confirm the exact plan behind that sensor's count:
-
-- **`hubinet_ops.get_package_plan`** returns the latest scan status and,
-  only for a successful scan, its exact package rows and a token. It never
-  starts a scan and never changes review state.
-- **`hubinet_ops.confirm_package_review`** takes that `token` and confirms
-  the plan it belongs to as reviewed, if it is still the current one.
-
-The token is not a password or a secret; it only ties a confirmation to one
-specific scan observation. A later scan — even one with identical package
-rows — issues a new token and clears review, so confirming with an old token is
-rejected (as `reviewed: false`, not an error). Review state lives only in
+On each LXC's device page, **Review** shows the exact plan behind the pending
+count as a notification, and **Approve** then confirms exactly that plan. A
+later scan, even one with identical package rows, replaces the plan and clears
+review, so an older Review cannot approve it. Review state lives only in
 memory: it is gone after Home Assistant restarts, the integration reloads, or
 the LXC's scan record is otherwise replaced. An observed stopped LXC loses
 current package evidence and review; Scan is needed after it runs again.
+
+The public actions are `hubinet_ops.easy_update` and
+`hubinet_ops.scan_all_packages`. The former `get_package_plan` and
+`confirm_package_review` actions were removed in 2026.9.1.15.
 
 ## Easy Update UX
 
@@ -103,7 +98,8 @@ resource URL, Mushroom, YAML, or entity mapping is needed.
 4. Choose **Hubinet-Ops Easy Update**, pick **one LXC**, optionally enable
    **YOLO** (remove unused packages after a successful update), and save.
 
-The card stores only the LXC device, so renaming entities does not break it.
+The picker lists only LXCs that have the package Update button. The card
+stores only the LXC device, so renaming entities does not break it.
 A newly created LXC becomes selectable automatically after Hubinet-Ops
 discovers it; add a card for it if you want it on the dashboard. Nothing has
 to be recreated, and the integration never edits dashboards.
@@ -144,7 +140,10 @@ optionally enable YOLO or the compact layout. It shows for that one LXC:
 - power: Start, Stop, and Restart.
 
 **Stop, Restart, Restore, and Delete need a second tap** within 4 seconds; the
-first tap only arms the button ("Na pewno? Dotknij ponownie"). Start, Create,
+first tap only arms the button ("Na pewno? Dotknij ponownie"). The
+confirmation covers only that exact operation: choosing another snapshot,
+leaving the dashboard, or waiting longer cancels it, and the next tap arms
+again. Start, Create,
 Scan, and Update run on the first tap. Restore and Delete stay disabled until a
 snapshot is selected. When the latest Proxmox refresh failed, the card shows
 the orange no-data state and disables every action. Hold the card, or tap its

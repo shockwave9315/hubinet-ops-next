@@ -745,20 +745,6 @@
     }
   },
   "services": {
-    "confirm_package_review": {
-      "name": "Confirm package review",
-      "description": "Confirms the exact package plan previously returned by Get package plan as reviewed, if it is still the current one. The token is not a password; it only proves the plan being confirmed is still the one shown, not a newer or different scan.",
-      "fields": {
-        "token": {
-          "name": "Token",
-          "description": "The token returned alongside the plan by Get package plan. Confirmation is rejected, without raising an error, if a new scan has since replaced it."
-        }
-      }
-    },
-    "get_package_plan": {
-      "name": "Get package plan",
-      "description": "Returns the latest scan status for one LXC, and for a successful scan, its exact pending-package plan and a token to confirm it with. Never starts a scan and never changes review state."
-    },
     "scan_all_packages": {
       "name": "Scan all package LXCs",
       "description": "Requests a package scan for all currently supported LXC containers across loaded Hubinet-Ops entries. Stopped or busy targets are skipped. Never updates or removes packages."

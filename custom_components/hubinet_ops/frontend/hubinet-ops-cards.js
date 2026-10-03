@@ -21,7 +21,6 @@ const {
 } = logic;
 
 const HOLD_MS = 500;
-const PACKAGE_REVIEW_FEATURE = 1;
 
 const formLanguage = () =>
   language(
@@ -70,11 +69,12 @@ class HubinetOpsEasyUpdateCard extends HTMLElement {
           selector: {
             device: {
               filter: { integration: DOMAIN, model: "Container" },
-              // Only devices with the package-review sensor are package LXCs.
+              // Only package LXCs have the package Update button, the
+              // integration's only button with the native update class.
               entity: {
                 integration: DOMAIN,
-                domain: "sensor",
-                supported_features: PACKAGE_REVIEW_FEATURE,
+                domain: "button",
+                device_class: "update",
               },
             },
           },

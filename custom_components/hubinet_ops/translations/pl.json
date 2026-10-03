@@ -745,20 +745,6 @@
     }
   },
   "services": {
-    "confirm_package_review": {
-      "name": "Potwierdź przegląd pakietów",
-      "description": "Oznacza dokładny plan pakietów zwrócony wcześniej przez Pobierz plan pakietów jako przejrzany, jeśli nadal jest bieżący. Token nie jest hasłem; potwierdza jedynie, że zatwierdzany plan jest nadal tym samym planem, który wyświetlono, a nie nowszym lub innym skanem.",
-      "fields": {
-        "token": {
-          "name": "Token",
-          "description": "Token zwrócony wraz z planem przez Pobierz plan pakietów. Jeśli od tego czasu zastąpił go nowy skan, potwierdzenie zostanie odrzucone bez zgłaszania błędu."
-        }
-      }
-    },
-    "get_package_plan": {
-      "name": "Pobierz plan pakietów",
-      "description": "Zwraca stan ostatniego skanu jednego LXC, a po pomyślnym skanie także dokładny plan oczekujących pakietów i token służący do potwierdzenia. Nigdy nie uruchamia skanu ani nie zmienia stanu przeglądu."
-    },
     "scan_all_packages": {
       "name": "Skanuj aktualizacje we wszystkich LXC",
       "description": "Sprawdza dostępne aktualizacje we wszystkich obsługiwanych kontenerach LXC załadowanych integracji Hubinet-Ops. Pomija zatrzymane lub zajęte kontenery. Niczego nie aktualizuje ani nie usuwa."

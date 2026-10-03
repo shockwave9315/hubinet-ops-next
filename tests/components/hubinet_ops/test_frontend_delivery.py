@@ -6,7 +6,11 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from tests.common import MockConfigEntry  # noqa: TID251
 
-from custom_components.hubinet_ops.button import CONTAINER_BUTTONS, PACKAGE_SCAN_BUTTON
+from custom_components.hubinet_ops.button import (
+    CONTAINER_BUTTONS,
+    PACKAGE_SCAN_BUTTON,
+    PACKAGE_UPDATE_BUTTON,
+)
 from custom_components.hubinet_ops.const import INTEGRATION_VERSION
 from custom_components.hubinet_ops.frontend import (
     CARD_MODULE,
@@ -21,7 +25,6 @@ from custom_components.hubinet_ops.sensor import (
     PACKAGE_SCAN_SENSOR,
     PACKAGE_UPDATE_SENSOR,
     UNUSED_PACKAGES_SENSOR,
-    PackageReviewEntityFeature,
 )
 from custom_components.hubinet_ops.snapshot_restore import (
     SNAPSHOT_DELETE_BUTTON,
@@ -133,9 +136,11 @@ def test_card_roles_match_integration_translation_keys() -> None:
     }
     for domain, key in expected:
         assert f'["{domain}", "{key}"]' in logic
-    assert f"PACKAGE_REVIEW_FEATURE = {int(PackageReviewEntityFeature.REVIEW)}" in (
-        (FRONTEND_DIRECTORY / CARD_MODULE).read_text(encoding="utf-8")
-    )
+    # The picker offers only devices with the package Update button.
+    card = (FRONTEND_DIRECTORY / CARD_MODULE).read_text(encoding="utf-8")
+    assert PACKAGE_UPDATE_BUTTON.device_class == "update"
+    assert 'domain: "button",\n                device_class: "update",' in card
+    assert "supported_features" not in card
 
 
 def test_lxc_card_ships_with_the_easy_update_card() -> None:

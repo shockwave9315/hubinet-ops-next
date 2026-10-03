@@ -28,11 +28,10 @@ Status date: 2026-10-03
   using AsyncSSH transport, a root-owned forced-command helper, ephemeral
   state, bounded summary entities, and package-specific concurrency.
 - Package review: ephemeral scan-token confirmation on the existing
-  `PackageScanRecord`, exposed as the two response-only sensor-platform
-  actions `hubinet_ops.get_package_plan` and
-  `hubinet_ops.confirm_package_review`, restricted to the package sensor
-  via a native supported-feature bit, plus the native Review and Approve
-  operator buttons.
+  `PackageScanRecord` through the native Review and Approve operator buttons.
+  (Historical: the response-only actions `hubinet_ops.get_package_plan` and
+  `hubinet_ops.confirm_package_review` and their supported-feature bit were
+  removed in 2026.9.1.15.)
 - Package Update: execution-time exact-plan gating, one native retained safety
   snapshot, one fixed hardened bare APT upgrade, post-mutation dpkg sanity,
   generic LXC liveness, exact snapshot cleanup, bounded outcome sensor, and
@@ -330,6 +329,11 @@ Status date: 2026-10-03
   (`frontend/hubinet-ops-lxc-card.js`, `frontend/lxc-card-logic.js`) with Node
   logic tests and a browser smoke test of second-tap arming.
   The Scan blueprint, `blueprint_delivery.py`, and their tests are removed.
+  Owner-requested cleanup: the `get_package_plan` and `confirm_package_review`
+  actions and the `PackageReviewEntityFeature` bit are removed; the Easy
+  Update picker now lists devices with the package Update button
+  (`ButtonDeviceClass.UPDATE`). LXC card confirmation is bound to the exact
+  action and target (selected snapshot identity from `selected_snapshot`).
 - Scope: per-host daily automatic Scan in the integration options (replacing the
   Scan blueprint), and the Hubinet-Ops LXC card from the approved mockup with
   second-tap confirmation for Stop, Restart, Restore, and Delete.

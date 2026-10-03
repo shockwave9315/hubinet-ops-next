@@ -67,6 +67,23 @@ artifacts is not required.
   presenting old guest lists as current would violate current-truth rules; the
   error now names the failed request and the Proxmox status instead of "no
   active nodes". No cache, queue, background retry, or new state is added.
+- **Package-review actions removed (owner decision after review).** The
+  response-only actions `hubinet_ops.get_package_plan` and
+  `hubinet_ops.confirm_package_review` existed only for the removed script
+  blueprint. They, their service definitions, translations, icons, and the
+  `PackageReviewEntityFeature` bit are removed. The scan token, Review/Approve
+  buttons, and `easy_update` (which confirms its own exact plan in Python) are
+  unchanged. The Easy Update card picker now lists Container devices that have
+  the package Update button, whose native device class is `update`
+  (`ButtonDeviceClass.UPDATE`, used by no other Hubinet-Ops entity); Easy
+  Update needs the same snapshot permission as that button. The public actions
+  are `easy_update` and `scan_all_packages`.
+- **LXC card confirmation is bound to its target.** An armed tap records the
+  action, its exact target (this LXC's button; for Restore and Delete also the
+  backend's `selected_snapshot` identity), and its 4 s deadline. A second tap
+  runs only if all three still match; disconnecting the card, choosing another
+  snapshot, expiry, or any change of target cancels it. The card reads the
+  selection only from `selected_snapshot`, never from the select's state.
 
 ### Easy Update card and action (Variant C, 2026.9.1.14)
 
@@ -1028,6 +1045,11 @@ health machinery.
 
 ## Package review architecture
 
+Historical note: the `get_package_plan` and `confirm_package_review` actions
+described in this section were removed in 2026.9.1.15 and are not a supported
+API. The scan token, review state, and the Review and Approve buttons remain as
+described.
+
 This section describes the implemented form of the package-review
 architecture accepted by the maintainer and independently red-teamed
 against Home Assistant Core `2026.9.1`; see [STATUS.md](STATUS.md) for
@@ -1146,7 +1168,7 @@ and `packages: []`. Confirming an empty plan does not create review state; it
 always returns `{"reviewed": false}`. There is no `reviewed = True` state for
 a zero-package plan.
 
-### Action surface
+### Action surface (historical, removed in 2026.9.1.15)
 
 Exactly two package-review entity actions exist:
 
