@@ -26,8 +26,9 @@ only; Update and Autoremove are never scheduled. With the option in place the
 Scan automation blueprint and its provisioning are removed.
 
 **Hubinet-Ops LXC card.** A second card, `custom:hubinet-ops-lxc-card`, ships in
-the same module and is configured by one LXC Container device, an optional name,
-and `compact`. It presents existing facts only: container status and uptime,
+its own module that the delivered card module imports with the same release
+query, so no extra resource is needed. It is configured by one LXC Container
+device, the YOLO choice, an optional name, and `compact`. It presents existing facts only: container status and uptime,
 CPU and RAM with 24-hour sparklines read from Home Assistant history, disk and
 network when those optional sensors are enabled, the Easy Update package state,
 Health and unused packages, the native snapshot selector, and power controls. It

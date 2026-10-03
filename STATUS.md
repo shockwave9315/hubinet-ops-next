@@ -325,7 +325,10 @@ Status date: 2026-10-03
 
 - Architecture: **ACCEPTED BY OWNER BEFORE IMPLEMENTATION on 2026-10-03**; see
   [ARCHITECTURE.md](ARCHITECTURE.md#automatic-scan-option-and-lxc-card-20269115).
-- Implementation: **NOT STARTED** at the documentation checkpoint.
+- Implementation: **IMPLEMENTED, NOT LIVE-VALIDATED** in draft PR #20: the
+  options flow and daily trigger (`auto_scan.py`), and the LXC card
+  (`frontend/hubinet-ops-lxc-card.js`, `frontend/lxc-card-logic.js`) with Node
+  logic tests and a browser smoke test of second-tap arming.
 - Scope: per-host daily automatic Scan in the integration options (replacing the
   Scan blueprint), and the Hubinet-Ops LXC card from the approved mockup with
   second-tap confirmation for Stop, Restart, Restore, and Delete.

@@ -132,6 +132,24 @@ Automations may call `hubinet_ops.easy_update` with `device_id`, optional
 `autoremove`, and optional `expected_scan_attempt`; updates are still never
 automatic unless you build such an automation yourself.
 
+### LXC card
+
+The **Hubinet-Ops LXC** card loads together with the Easy Update card. Add it
+the same way (**Edit -> Add card**, search **Hubinet**), pick one LXC, and
+optionally enable YOLO or the compact layout. It shows for that one LXC:
+
+- status and uptime, CPU and RAM with 24-hour sparklines, disk and network;
+- the Easy Update row (same tap behavior as the Easy Update card);
+- snapshots: choose one, then Create, Restore, or Delete;
+- power: Start, Stop, and Restart.
+
+**Stop, Restart, Restore, and Delete need a second tap** within 4 seconds; the
+first tap only arms the button ("Na pewno? Dotknij ponownie"). Start, Create,
+Scan, and Update run on the first tap. Restore and Delete stay disabled until a
+snapshot is selected. When the latest Proxmox refresh failed, the card shows
+the orange no-data state and disables every action. Hold the card, or tap its
+header, to open the LXC device page (administrators) or the status details.
+
 ### Automatic package scan
 
 Open **Settings > Devices & services > Hubinet-Ops > Configure** for each
