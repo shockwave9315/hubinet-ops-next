@@ -351,12 +351,17 @@ Scan All remains.
 - Architecture: **ACCEPTED BY OWNER BEFORE IMPLEMENTATION on 2026-10-03**; see
   [ARCHITECTURE.md](ARCHITECTURE.md#setup-connection-resilience-20269116).
 - Implementation: **IMPLEMENTED IN THIS PR**. Documentation checkpoint:
-  `011d735`. `coordinator.py` maps a setup-time `ConnectionError` to
-  `UpdateFailed`; tests cover the permissions and nodes probes (`SETUP_RETRY`)
-  and recovery to `LOADED` on Home Assistant's retry.
-- Scope: a setup-time `requests` `ConnectionError` retries setup
-  (`SETUP_RETRY`) instead of failing the entry permanently. Owner-approved
-  divergence from upstream, recorded in UPSTREAM.md.
+  `011d735`. `coordinator.py` maps a setup-time `ConnectionError`, and a
+  `SSLError` caused by `ssl.SSLEOFError` (TLS handshake cut off), to
+  `UpdateFailed`; certificate verification and other TLS errors stay
+  permanent. Tests cover the permissions and nodes probes (`SETUP_RETRY`),
+  certificate and other TLS errors (`SETUP_ERROR`), and recovery to `LOADED`
+  on Home Assistant's retry for both a dropped connection and a TLS EOF.
+- Scope: a setup-time transport drop (`ConnectionError`, abrupt TLS EOF)
+  retries setup (`SETUP_RETRY`) instead of failing the entry permanently.
+  Owner-approved divergence from upstream, recorded in UPSTREAM.md. Password
+  `/access/ticket` 5xx reported as `AuthenticationError` is a known residual
+  upstream risk, not changed.
 
 ## Next
 

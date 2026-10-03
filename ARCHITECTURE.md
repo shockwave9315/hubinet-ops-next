@@ -20,12 +20,20 @@ the entry, which makes that easy to hit.
 
 A setup-time `ConnectionError` is therefore mapped to `UpdateFailed` with the
 existing `cannot_connect` translation, exactly as the refresh already does, so
-Home Assistant keeps the entry in `SETUP_RETRY` and retries setup itself. The
-subclasses handled before it keep their behavior: `SSLError` stays a permanent
-`ConfigEntryError` (a certificate problem needs the user) and `ConnectTimeout`
-already retries. Authentication, permission, and node 4xx outcomes are
-unchanged. No retry loop, delay, cache, or state is added; Home Assistant's
-own setup retry is the only retry.
+Home Assistant keeps the entry in `SETUP_RETRY` and retries setup itself.
+
+TLS errors arrive as `requests` `SSLError`, a `ConnectionError` subclass
+handled first. An abrupt TLS EOF during setup (the peer closes the socket
+mid-handshake) is a transient connection loss and is retried the same way: it is
+recognized only by an `ssl.SSLEOFError` object in the exception chain
+(`requests` `SSLError` -> urllib3 `MaxRetryError` -> urllib3 `SSLError` ->
+`ssl.SSLEOFError`, linked through `__cause__`/`__context__` and
+`args`/`.reason`), never by message text. Certificate verification
+(`ssl.SSLCertVerificationError`) and every other TLS error remain a permanent
+`ConfigEntryError`, because they need the user. `ConnectTimeout` already
+retries. Authentication, permission, and node 4xx outcomes are unchanged. No
+retry loop, delay, cache, or state is added; Home Assistant's own setup retry is
+the only retry.
 
 ### Automatic Scan option and LXC card (2026.9.1.15)
 

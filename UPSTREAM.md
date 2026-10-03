@@ -114,6 +114,16 @@ upstream-derived coordinator's setup: a `requests` `ConnectionError` during the
 setup probe raises `UpdateFailed` (`cannot_connect`), as the refresh already
 does, instead of upstream's permanent `ConfigEntryError`. Home Assistant then
 keeps the entry in `SETUP_RETRY` and retries setup itself; upstream left the
-entry failed until a manual reload after one dropped connection. `SSLError`
-(still `ConfigEntryError`), `ConnectTimeout`, authentication, permission, and
-node 4xx handling are unchanged.
+entry failed until a manual reload after one dropped connection. The same
+applies to a TLS handshake cut off by the peer: a `requests` `SSLError` whose
+exception chain contains an `ssl.SSLEOFError` object (matched by type, not by
+message) raises `UpdateFailed` (`cannot_connect`). Certificate verification
+and every other `SSLError` stay upstream's permanent `ConfigEntryError`.
+`ConnectTimeout`, authentication, permission, and node 4xx handling are
+unchanged.
+
+Residual upstream risk, deliberately not changed: with password (ticket)
+authentication, proxmoxer reports an HTTP 5xx from `/access/ticket` as
+`AuthenticationError`, which upstream maps to reauth. Telling it apart would
+need fragile matching of proxmoxer internals; guided enrollment uses an API
+token, which does not request a ticket.

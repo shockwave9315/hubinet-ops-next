@@ -1,6 +1,7 @@
 """Tests for the Proxmox VE integration initialization."""
 
 from pathlib import Path
+import ssl
 from unittest.mock import MagicMock
 
 import asyncssh
@@ -23,6 +24,7 @@ from homeassistant.helpers import entity_registry as er
 from proxmoxer import AuthenticationError
 from proxmoxer.core import ResourceException
 from requests.exceptions import ConnectTimeout, SSLError
+import urllib3
 from tests.common import (
     MockConfigEntry,
     async_fire_time_changed,
@@ -197,6 +199,41 @@ async def test_invalid_stored_package_trust_does_not_block_native_setup(
     assert "Reconfigure → Re-enroll" in caplog.text
 
 
+def _requests_tls_error(leaf: ssl.SSLError) -> SSLError:
+    """Wrap a stdlib TLS error exactly as requests/urllib3 do.
+
+    Measured with proxmoxer 2.3.0, requests 2.34.2, urllib3 2.8.0: requests
+    SSLError -> urllib3 MaxRetryError -> urllib3 SSLError -> ssl error, linked
+    by __context__/__cause__ and args[0]/.reason.
+    """
+
+    def handshake() -> None:
+        raise leaf
+
+    def urllib3_wrap() -> None:
+        try:
+            handshake()
+        except ssl.SSLError as err:
+            # urllib3 chains implicitly here (__context__), not with "from".
+            raise urllib3.exceptions.SSLError(err)  # noqa: B904
+
+    def requests_wrap() -> None:
+        try:
+            urllib3_wrap()
+        except urllib3.exceptions.SSLError as err:
+            raise urllib3.exceptions.MaxRetryError(
+                None, "/api2/json/access/permissions", err
+            ) from err
+
+    try:
+        requests_wrap()
+    except urllib3.exceptions.MaxRetryError as err:
+        wrapped = SSLError(err)
+        wrapped.__context__ = err
+        return wrapped
+    raise AssertionError("unreachable")
+
+
 @pytest.mark.parametrize(
     ("exception", "expected_state", "target"),
     [
@@ -207,6 +244,32 @@ async def test_invalid_stored_package_trust_does_not_block_native_setup(
         ),
         (
             SSLError("SSL handshake failed"),
+            ConfigEntryState.SETUP_ERROR,
+            "access.permissions.get",
+        ),
+        (
+            _requests_tls_error(
+                ssl.SSLEOFError(8, "EOF occurred in violation of protocol")
+            ),
+            ConfigEntryState.SETUP_RETRY,
+            "access.permissions.get",
+        ),
+        (
+            _requests_tls_error(ssl.SSLEOFError(8, "EOF occurred")),
+            ConfigEntryState.SETUP_RETRY,
+            "nodes.get",
+        ),
+        (
+            _requests_tls_error(
+                ssl.SSLCertVerificationError(1, "certificate verify failed")
+            ),
+            ConfigEntryState.SETUP_ERROR,
+            "access.permissions.get",
+        ),
+        (
+            # Only the type counts: an EOF-like message on another TLS error
+            # stays permanent.
+            _requests_tls_error(ssl.SSLError(1, "EOF occurred, wrong version")),
             ConfigEntryState.SETUP_ERROR,
             "access.permissions.get",
         ),
@@ -259,6 +322,10 @@ async def test_invalid_stored_package_trust_does_not_block_native_setup(
     ids=[
         "auth_error",
         "ssl_error",
+        "tls_eof_permissions",
+        "tls_eof_nodes",
+        "tls_cert_verification",
+        "tls_other_error",
         "connect_timeout",
         "resource_exception_permissions_403",
         "resource_exception_permissions_500",
@@ -718,6 +785,28 @@ async def test_setup_connection_error_recovers_on_retry(
     permissions = mock_proxmox_client.access.permissions.get
     working = permissions.return_value
     permissions.side_effect = requests.exceptions.ConnectionError("pveproxy restart")
+
+    await setup_integration(hass, mock_config_entry)
+    assert mock_config_entry.state is ConfigEntryState.SETUP_RETRY
+
+    permissions.side_effect = None
+    permissions.return_value = working
+    freezer.tick(6)
+    async_fire_time_changed(hass)
+    await hass.async_block_till_done(wait_background_tasks=True)
+    assert mock_config_entry.state is ConfigEntryState.LOADED
+
+
+async def test_setup_tls_eof_recovers_on_retry(
+    hass: HomeAssistant,
+    mock_proxmox_client: MagicMock,
+    mock_config_entry: MockConfigEntry,
+    freezer: FrozenDateTimeFactory,
+) -> None:
+    """One TLS handshake cut off by the peer retries instead of failing."""
+    permissions = mock_proxmox_client.access.permissions.get
+    working = permissions.return_value
+    permissions.side_effect = _requests_tls_error(ssl.SSLEOFError(8, "EOF"))
 
     await setup_integration(hass, mock_config_entry)
     assert mock_config_entry.state is ConfigEntryState.SETUP_RETRY
