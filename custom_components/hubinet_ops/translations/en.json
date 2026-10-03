@@ -724,6 +724,9 @@
     },
     "easy_update_scan_changed": {
       "message": "A different package scan is now current. Check the new result and click again."
+    },
+    "api_read_failed": {
+      "message": "A Proxmox VE API request failed: {error}"
     }
   },
   "issues": {

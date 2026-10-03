@@ -127,8 +127,8 @@ Scan button, or opening the device. It never calculates plans, security, or
 mutation truth, never acts on render, and the user click remains the
 authorization event.
 
-The One-click Update script blueprint remains shipped, provisioned, and
-supported unchanged as an advanced/backward-compatible alternative; the Scan
+The One-click Update script blueprint was kept here as an advanced
+alternative; the 2026.9.1.15 owner decision above removed it. The Scan
 blueprint and Scan All are unchanged. New LXCs become selectable automatically
 through normal discovery; dashboards are never edited by the integration.
 
@@ -167,19 +167,18 @@ helper, or package lifecycle change.
 
 The Polish automatic Scan blueprint has only daily time, startup enablement,
 and startup delay inputs, and calls Scan All without entity selection or button
-presses. One automation covers the installation. The Polish one-click Update
-blueprint remains one user-created script per chosen LXC with its unchanged
-2026.9.1.12 exact-token and optional Autoremove flow. Managed blueprint copies
+presses. One automation covers the installation. The one-click Update script
+blueprint provisioned here was removed in 2026.9.1.15. Managed blueprint copies
 should be forked into a different namespace for customization. Old manual
 2026.9.1.12 imports may remain duplicates until the user removes them.
 
 ### Easy Update UX
 
 The maintainer accepted Easy Update UX for release 2026.9.1.12 before
-implementation. Since the 2026.9.1.14 owner decision above, the Easy Update card
-is the primary Easy path and this script composition remains an unchanged
-advanced/backward-compatible alternative. It is an optional Home Assistant YAML
-composition layer:
+implementation. Historical record: since 2026.9.1.14 the Easy Update card is
+the Easy path, and in 2026.9.1.15 the owner removed the script blueprint and
+Mushroom example described below; only the Scan automation blueprint remains.
+It was an optional Home Assistant YAML composition layer:
 an automation blueprint schedules Scan (using Scan All since 2026.9.1.13),
 a script blueprint composes one LXC's existing entity actions and buttons,
 and a Mushroom dashboard example presents existing summary facts.

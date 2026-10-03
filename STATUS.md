@@ -12,10 +12,10 @@ Status date: 2026-10-03
   subsystem, guided fresh-install enrollment, native snapshot Restore, and
   native snapshot Create observation and explicit native Delete documented in
   [ARCHITECTURE.md](ARCHITECTURE.md).
-- Integration after merge: `2026.9.1.14`, helper v5, protocol v1.
-- Latest tagged release: `2026.9.1.13` (merged PR #18, main commit
-  `3bc525cad3d107fc77436b76fd876ba36172da9f`).
-- Starting merged baseline for 2026.9.1.14: main `3bc525c`.
+- Integration after merge: `2026.9.1.15`, helper v5, protocol v1.
+- Latest tagged release: `2026.9.1.14` (merged PR #19, main commit
+  `06c94cc077e7dd07d724d39f3dd97104209d4a27`), live-tested by the owner.
+- Starting merged baseline for 2026.9.1.15: main `06c94cc`.
 - Git history is authoritative for the eventual feature merge SHA.
 
 ## Merged
@@ -267,7 +267,8 @@ Status date: 2026-10-03
   see [ARCHITECTURE.md](ARCHITECTURE.md#easy-update-card-and-action-variant-c-20269114).
   The decision explicitly supersedes the earlier "no custom frontend / no custom
   card / no custom target resolver" statements for this card and action only.
-- Implementation: **IMPLEMENTED / DRAFT PR FOR OWNER REVIEW**. Pre-implementation
+- Implementation: **MERGED IN PR #19 / RELEASED AS 2026.9.1.14** and live-tested
+  by the owner (card picker, editor, states). Pre-implementation
   documentation checkpoint: `7d38bf8`. Implemented in the accepted order: the
   action without YOLO, the YOLO continuation, frontend delivery, then the card.
 - One recorded refinement of the checkpoint: the manifest lists `frontend` and
@@ -313,7 +314,8 @@ Status date: 2026-10-03
 
 - Architecture: **ACCEPTED BY OWNER BEFORE IMPLEMENTATION on 2026-10-03**; see
   [ARCHITECTURE.md](ARCHITECTURE.md#cleanup-and-refresh-resilience-20269115).
-- Implementation: **NOT STARTED** at the documentation checkpoint.
+- Implementation: **IMPLEMENTED / DRAFT PR FOR OWNER REVIEW**. Documentation
+  checkpoint: `8c024d0`.
 - Scope: remove the One-click Update script blueprint and Mushroom example,
   show "no current data from Proxmox" in the Easy Update card, and make one
   slow or failing Proxmox read during Restore no longer take every entity of

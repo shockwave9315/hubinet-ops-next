@@ -54,8 +54,8 @@ current state and [ARCHITECTURE.md](ARCHITECTURE.md) for accepted design.
 - An update requires explicit operator action.
 - The integration never initiates package cleanup by itself. Cleanup requires
   explicit operator action or the operator's opt-in post-Update Autoremove
-  (YOLO) choice saved in the Easy Update card, passed to the Easy Update action,
-  or set in the optional Easy UX script.
+  (YOLO) choice saved in the Easy Update card or passed to the Easy Update
+  action.
 - A non-empty cleanup plan must be shown to the operator and re-verified before
   cleanup mutation.
 - The operator must be able to see and review the plan before an update.
@@ -108,23 +108,20 @@ evidence; the Health result itself is not a gate. Rendering a card never
 mutates anything, and a successful Update leaves the pending count unknown until
 the next Scan.
 
-The YAML composition below remains supported as an advanced alternative.
-Easy Update UX composes Home Assistant entities and actions. The integration
-ships and provisions its own blueprint templates; the user creates and enables
-their automation and script instances. One automatic Scan automation uses the
-thin Scan All action for every currently supported package LXC across loaded
-entries, with no per-LXC selection. It keeps summary evidence useful;
-an explicit Update click confirms the exact current plan token and presses the
-existing Update button. Viewing individual package names is optional UX: the
-count, security count, operation result, and Health summarize the decision,
-while Review continues to expose the full exact plan on demand.
+The integration ships and provisions one Scan automation blueprint; the user
+creates its automation once. It uses the thin Scan All action for every
+currently supported package LXC across loaded entries, with no per-LXC
+selection, and keeps summary evidence useful. Viewing individual package names
+is optional UX: the count, security count, operation result, and Health
+summarize the decision, while Review continues to expose the full exact plan on
+demand.
 
-The user may choose Easy (scheduled Scan, one-click Update, no Autoremove), YOLO
-(the same with opt-in Autoremove after successful Update and fresh candidates),
-or Manual/Advanced (Scan -> Review -> Approve -> Update / Autoremove / Health).
-These are optional presentation/orchestration profiles, not backend modes.
-All profiles use the same unchanged backend and its exact-plan checks. A changed
-plan requires new Scan evidence and another explicit click; the script never
+The user may choose Easy (scheduled Scan, one tap on the card, no Autoremove),
+YOLO (the same with opt-in Autoremove after successful Update and fresh
+candidates), or Manual/Advanced (Scan -> Review -> Approve -> Update /
+Autoremove / Health on the device page). These are presentation choices, not
+backend modes. All use the same unchanged backend and its exact-plan checks. A
+changed plan requires new Scan evidence and another explicit tap; nothing
 silently scans and approves a replacement plan.
 
 ## Practical trust and safety model
