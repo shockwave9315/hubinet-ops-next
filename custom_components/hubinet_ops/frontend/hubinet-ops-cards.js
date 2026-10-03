@@ -283,8 +283,8 @@ if (!window.customCards.some((card) => card.type === CARD_TYPE)) {
   });
 }
 
-// The LXC card lives in its own module, loaded with this release's query.
+// The LXC and VM cards live in their own module, loaded with this release's query.
 await import(
-  new URL(`./hubinet-ops-lxc-card.js${new URL(import.meta.url).search}`, import.meta.url)
+  new URL(`./hubinet-ops-guest-cards.js${new URL(import.meta.url).search}`, import.meta.url)
     .href
 );

@@ -133,7 +133,7 @@ automatic unless you build such an automation yourself.
 
 The **Hubinet-Ops LXC** card loads together with the Easy Update card. Add it
 the same way (**Edit -> Add card**, search **Hubinet**), pick one LXC, and
-optionally enable YOLO or the compact layout. It shows for that one LXC:
+optionally enable YOLO. It shows for that one LXC:
 
 - status and uptime, CPU and RAM with 24-hour sparklines, disk and network;
 - the Easy Update row (same tap behavior as the Easy Update card);
@@ -149,6 +149,29 @@ Scan, and Update run on the first tap. Restore and Delete stay disabled until a
 snapshot is selected. When the latest Proxmox refresh failed, the card shows
 the orange no-data state and disables every action. Hold the card, or tap its
 header, to open the LXC device page (administrators) or the status details.
+
+**Tap a CPU, RAM, disk, or network tile** (or press Enter on it) to open Home
+Assistant's own details dialog for that sensor with its history. This only
+opens the dialog; it never starts anything.
+
+### VM card
+
+The **Hubinet-Ops VM** card does the same for one QEMU virtual machine: status
+and uptime, CPU and RAM with 24-hour sparklines, disk and network (when those
+sensors are enabled), snapshots (Create, Restore, Delete), and power: **Start**,
+**Shut down** (ACPI, gracefully), **Stop** (hard power off), and **Restart**;
+under **More**, **Reset** (hard restart) and **Hibernate**. Shut down, Stop,
+Restart, Reset, Hibernate, Restore, and Delete need a second tap; Start and
+Create run on the first tap. Package updates exist only for LXC, so the VM card
+has no package section. Pause and Resume are not offered yet.
+
+### Mini cards
+
+**Hubinet-Ops LXC mini** and **Hubinet-Ops VM mini** show less: status, CPU and
+RAM (tap for history), and one action. LXC mini offers the package action
+(Update, Scan, or Details, as on the Easy Update card); VM mini offers Start when
+the VM is stopped, or Shut down (second tap) when it runs. An LXC card saved
+earlier with the compact layout now shows as LXC mini.
 
 ### Automatic package scan
 

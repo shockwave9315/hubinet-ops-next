@@ -370,7 +370,13 @@ Scan All remains.
 - Architecture: **ACCEPTED BY OWNER BEFORE IMPLEMENTATION on 2026-10-03** (from
   the approved mockup); see
   [ARCHITECTURE.md](ARCHITECTURE.md#vm-card-mini-cards-and-stat-history-20269117).
-- Implementation: **NOT STARTED** at the documentation checkpoint.
+- Implementation: **IMPLEMENTED IN THIS PR**. Documentation checkpoint:
+  `b276811`. `frontend/guest-card-logic.js` (renamed from `lxc-card-logic.js`)
+  holds LXC and VM role tables; `frontend/hubinet-ops-guest-cards.js` (renamed
+  from `hubinet-ops-lxc-card.js`) registers the four card types on one element.
+  Node logic and element tests cover VM power and confirmation, More, mini
+  cards, history taps, picker registration, and saved `compact: true` cards; a
+  Chromium smoke test drove all four cards.
 - Scope: the VM card and the LXC/VM mini cards on one shared implementation,
   and tapping a stat tile to open the native history; frontend only. Pause,
   Resume, and `qmpstatus` are deferred.

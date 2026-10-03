@@ -1,4 +1,5 @@
-// Pure presentation logic for the Hubinet-Ops LXC card.
+// Pure presentation logic for the Hubinet-Ops guest cards (LXC and VM, full and
+// mini).
 //
 // It reads existing Home Assistant registry entries and entity states only and
 // never decides anything the backend owns. Entities are found by device_id,
@@ -6,7 +7,12 @@
 // found by its native `restart` device class on the same device.
 
 export const DOMAIN = "hubinet_ops";
-export const LXC_CARD_TYPE = "hubinet-ops-lxc-card";
+
+// Guest kind -> device model in the registry and the card types it provides.
+export const KINDS = {
+  lxc: { model: "Container", full: "hubinet-ops-lxc-card", mini: "hubinet-ops-lxc-mini-card" },
+  vm: { model: "VM", full: "hubinet-ops-vm-card", mini: "hubinet-ops-vm-mini-card" },
+};
 
 export const LXC_ROLES = {
   status: ["sensor", "container_status"],
@@ -27,8 +33,41 @@ export const LXC_ROLES = {
   snapshot: ["select", "snapshot_to_restore"],
 };
 
+export const VM_ROLES = {
+  status: ["sensor", "vm_status"],
+  cpu: ["sensor", "vm_cpu"],
+  memPct: ["sensor", "vm_memory_percentage"],
+  memMax: ["sensor", "vm_max_memory"],
+  mem: ["sensor", "vm_memory"],
+  uptime: ["sensor", "vm_uptime"],
+  disk: ["sensor", "vm_disk"],
+  diskMax: ["sensor", "vm_max_disk"],
+  netIn: ["sensor", "vm_netin"],
+  netOut: ["sensor", "vm_netout"],
+  start: ["button", "start"],
+  stop: ["button", "stop"],
+  shutdown: ["button", "shutdown"],
+  reset: ["button", "reset"],
+  hibernate: ["button", "hibernate"],
+  create: ["button", "snapshot_create"],
+  restore: ["button", "snapshot_restore"],
+  delete: ["button", "snapshot_delete"],
+  snapshot: ["select", "snapshot_to_restore"],
+};
+
+const ROLES = { lxc: LXC_ROLES, vm: VM_ROLES };
+const kindOf = (kind) => (kind === "vm" ? "vm" : "lxc");
+
 // Actions that need a second tap within CONFIRM_MS before they run.
-export const CONFIRM = new Set(["stop", "restart", "restore", "delete"]);
+export const CONFIRM = new Set([
+  "shutdown",
+  "stop",
+  "restart",
+  "reset",
+  "hibernate",
+  "restore",
+  "delete",
+]);
 export const CONFIRM_MS = 4000;
 
 const STRINGS = {
@@ -36,9 +75,15 @@ const STRINGS = {
     choose: "Choose a Hubinet-Ops LXC",
     not_found: "Hubinet-Ops LXC not found",
     ambiguous: "Hubinet-Ops LXC entities are ambiguous",
+    choose_vm: "Choose a Hubinet-Ops VM",
+    not_found_vm: "Hubinet-Ops VM not found",
+    ambiguous_vm: "Hubinet-Ops VM entities are ambiguous",
     running: "Running",
     stopped: "Stopped",
     suspended: "Suspended",
+    running_vm: "Running",
+    stopped_vm: "Stopped",
+    suspended_vm: "Suspended",
     no_data: "No data",
     uptime: "uptime {value}",
     cpu: "CPU",
@@ -60,22 +105,38 @@ const STRINGS = {
     start: "Start",
     stop: "Stop",
     restart: "Restart",
+    shutdown: "Shut down",
+    reset: "Reset",
+    hibernate: "Hibernate",
+    more: "More",
+    less: "Less",
+    legend_shutdown: "ACPI, gracefully",
+    legend_stop: "hard power off",
+    legend_reset: "hard restart",
+    history: "{label}: {value}, show history",
+    snapshot_count: "{count} snapshots",
     confirm: "Sure? Tap again",
     days: "{d} d {h} h",
     hours: "{h} h",
     minutes: "{m} min",
     label_device_id: "LXC",
+    label_device_id_vm: "VM",
     label_autoremove: "YOLO: remove unused packages after a successful update",
     label_name: "Name (optional)",
-    label_compact: "Compact",
   },
   pl: {
     choose: "Wybierz LXC Hubinet-Ops",
     not_found: "Nie znaleziono LXC Hubinet-Ops",
     ambiguous: "Niejednoznaczne encje LXC Hubinet-Ops",
+    choose_vm: "Wybierz VM Hubinet-Ops",
+    not_found_vm: "Nie znaleziono VM Hubinet-Ops",
+    ambiguous_vm: "Niejednoznaczne encje VM Hubinet-Ops",
     running: "Uruchomiony",
     stopped: "Zatrzymany",
     suspended: "Wstrzymany",
+    running_vm: "Uruchomiona",
+    stopped_vm: "Zatrzymana",
+    suspended_vm: "Wstrzymana",
     no_data: "Brak danych",
     uptime: "działa {value}",
     cpu: "CPU",
@@ -97,21 +158,31 @@ const STRINGS = {
     start: "Start",
     stop: "Stop",
     restart: "Restart",
+    shutdown: "Zamknij",
+    reset: "Reset",
+    hibernate: "Hibernacja",
+    more: "Więcej",
+    less: "Mniej",
+    legend_shutdown: "ACPI, łagodnie",
+    legend_stop: "twarde odcięcie",
+    legend_reset: "twardy restart",
+    history: "{label}: {value}, pokaż historię",
+    snapshot_count: "Migawki: {count}",
     confirm: "Na pewno? Dotknij ponownie",
     days: "{d} d {h} h",
     hours: "{h} h",
     minutes: "{m} min",
     label_device_id: "LXC",
+    label_device_id_vm: "VM",
     label_autoremove: "YOLO: usuń nieużywane pakiety po udanej aktualizacji",
     label_name: "Nazwa (opcjonalnie)",
-    label_compact: "Kompaktowa",
   },
 };
 
-export const lxcStrings = (lang) =>
+export const guestStrings = (lang) =>
   STRINGS[String(lang || "en").toLowerCase().startsWith("pl") ? "pl" : "en"];
 
-const fill = (template, values) =>
+export const fill = (template, values) =>
   template.replace(/\{(\w+)\}/g, (_m, key) =>
     values[key] === undefined ? "" : String(values[key])
   );
@@ -119,9 +190,10 @@ const fill = (template, values) =>
 const domainOf = (entityId) => entityId.split(".", 1)[0];
 
 // Resolve every role for one device; more than one match fails closed.
-export const resolveLxc = (entities, states, deviceId) => {
+export const resolveGuest = (entities, states, deviceId, kind = "lxc") => {
+  const roles = ROLES[kindOf(kind)];
   const found = { restart: [] };
-  for (const role of Object.keys(LXC_ROLES)) {
+  for (const role of Object.keys(roles)) {
     found[role] = [];
   }
   for (const entry of Object.values(entities || {})) {
@@ -129,7 +201,7 @@ export const resolveLxc = (entities, states, deviceId) => {
       continue;
     }
     const domain = domainOf(entry.entity_id);
-    for (const [role, [roleDomain, key]] of Object.entries(LXC_ROLES)) {
+    for (const [role, [roleDomain, key]] of Object.entries(roles)) {
       if (entry.translation_key === key && domain === roleDomain) {
         found[role].push(entry.entity_id);
       }
@@ -158,8 +230,8 @@ export const resolveLxc = (entities, states, deviceId) => {
   return { entities: resolved };
 };
 
-export const firstLxcDevice = (entities) => {
-  const [domain, key] = LXC_ROLES.status;
+export const firstGuestDevice = (entities, kind = "lxc") => {
+  const [domain, key] = ROLES[kindOf(kind)].status;
   const match = Object.values(entities || {}).find(
     (entry) =>
       entry &&
@@ -201,7 +273,7 @@ export const formatDuration = (state, lang) => {
   const unit = state.attributes && state.attributes.unit_of_measurement;
   const factor = { s: 1, min: 60, h: 3600, d: 86400 }[unit] ?? 1;
   const seconds = value * factor;
-  const s = lxcStrings(lang);
+  const s = guestStrings(lang);
   const days = Math.floor(seconds / 86400);
   const hours = Math.floor((seconds % 86400) / 3600);
   if (days > 0) {
@@ -216,24 +288,27 @@ export const formatDuration = (state, lang) => {
 // Buttons read "unknown" until first pressed; only "unavailable" blocks them.
 const available = (state) => Boolean(state) && state.state !== "unavailable";
 
-// Build the LXC card view from existing facts. `packageView` is the Easy Update
-// view for the same device (or null when the LXC has no package entities).
-export const deriveLxcView = ({
+// Build a guest card view from existing facts. `packageView` is the Easy Update
+// view for the same LXC (null for a VM or an LXC without package entities).
+export const deriveGuestView = ({
   states,
   entities,
   devices,
   config,
   lang,
   packageView,
+  kind = "lxc",
 }) => {
-  const s = lxcStrings(lang);
+  const s = guestStrings(lang);
+  const vm = kindOf(kind) === "vm";
+  const say = (key) => (vm && s[`${key}_vm`]) || s[key];
   const deviceId = config && config.device_id;
   if (!deviceId) {
-    return { error: s.choose };
+    return { error: say("choose") };
   }
-  const lookup = resolveLxc(entities, states, deviceId);
+  const lookup = resolveGuest(entities, states, deviceId, kind);
   if (lookup.error) {
-    return { error: s[lookup.error] };
+    return { error: say(lookup.error) };
   }
   const ids = lookup.entities;
   const st = (role) => (ids[role] && (states || {})[ids[role]]) || null;
@@ -246,11 +321,11 @@ export const deriveLxcView = ({
   const statusValue = st("status") ? st("status").state : "unavailable";
   const status =
     statusValue === "running"
-      ? { tone: "green", label: s.running }
+      ? { tone: "green", label: say("running") }
       : statusValue === "stopped"
-        ? { tone: "grey", label: s.stopped }
+        ? { tone: "grey", label: say("stopped") }
         : statusValue === "suspended"
-          ? { tone: "grey", label: s.suspended }
+          ? { tone: "grey", label: say("suspended") }
           : { tone: "orange", label: s.no_data };
   const running = statusValue === "running";
   const noData = status.tone === "orange";
@@ -262,6 +337,7 @@ export const deriveLxcView = ({
     label: s.cpu,
     value: running && cpu !== null ? `${decimals(cpu, lang)}%` : "—",
     history: ids.cpu,
+    entity: ids.cpu,
     tone: "blue",
     max: 100,
   });
@@ -276,6 +352,7 @@ export const deriveLxcView = ({
       running && memMax ? (mem ? fill(s.of, { used: mem, total: memMax }) : memMax) : "",
     pct: running ? memPct : null,
     history: ids.memPct,
+    entity: ids.memPct,
     tone: "purple",
     max: 100,
   });
@@ -291,6 +368,7 @@ export const deriveLxcView = ({
         total: withUnit(st("diskMax"), lang),
       }),
       pct: (disk / diskMax) * 100,
+      entity: ids.disk,
       tone: "orange",
     });
   }
@@ -300,8 +378,10 @@ export const deriveLxcView = ({
     stats.push({
       key: "net",
       label: s.net,
-      value: `↓${netIn || "—"} ↑${netOut || "—"}`,
+      value: `↓${netIn || "—"}`,
+      detail: `↑${netOut || "—"}`,
       history: ids.netIn,
+      entity: ids.netIn,
       tone: "green",
     });
   }
@@ -321,7 +401,12 @@ export const deriveLxcView = ({
   const selected =
     typeof chosen === "string" && options.includes(chosen) ? chosen : null;
 
+  const whenRunning = (role) => ({
+    ...button(role),
+    available: button(role).available && running,
+  });
   return {
+    kind: vm ? "vm" : "lxc",
     name,
     status,
     running,
@@ -342,8 +427,15 @@ export const deriveLxcView = ({
       restore: { ...button("restore"), available: button("restore").available && Boolean(selected) },
       delete: { ...button("delete"), available: button("delete").available && Boolean(selected) },
       start: { ...button("start"), available: button("start").available && !running },
-      stop: { ...button("stop"), available: button("stop").available && running },
-      restart: { ...button("restart"), available: button("restart").available && running },
+      stop: whenRunning("stop"),
+      restart: whenRunning("restart"),
+      ...(vm
+        ? {
+            shutdown: whenRunning("shutdown"),
+            reset: whenRunning("reset"),
+            hibernate: whenRunning("hibernate"),
+          }
+        : {}),
     },
   };
 };
@@ -364,8 +456,8 @@ export const historyPoints = (rows, points = 48) => {
   return Array.from({ length: points }, (_v, i) => values[Math.round(i * step)]);
 };
 
-// The exact operation a confirmation tap stands for: Stop and Restart target
-// this LXC's button, Restore and Delete the snapshot selected right now. A
+// The exact operation a confirmation tap stands for: a power action targets this
+// guest's button, Restore and Delete the snapshot selected right now. A
 // second tap confirms only when this is unchanged; null means not armable.
 export const confirmTarget = (action, view, deviceId) => {
   const info = view && view.actions && view.actions[action];
