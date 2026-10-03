@@ -274,12 +274,19 @@ Status date: 2026-10-03
   `http` as `after_dependencies` instead of hard dependencies. Both are
   stage-0 default integrations; a hard dependency would only force the
   frontend package into every test without changing runtime behavior.
-- Validation in this environment: **40 new Python tests and 13 card logic
-  tests passed**; full `scripts/test.sh`: **855 passed and 45 failed, the same
-  45 failures as the untouched `3bc525c` baseline in this container** (Restore,
-  Snapshot Delete, and three other background-task timing assertions in
-  unchanged code; see the pull request). Ruff, translation/release parity,
-  ShellCheck, and a headless-Chromium card smoke test passed.
+- Maintainer local validation on CT112: baseline `main` `3bc525c` ran 860
+  tests with 858 passed and 2 Restore failures; PR #19 at `f1fb856` ran **900
+  Python tests, 900 passed**, plus **13/13 Node card tests**, and the full
+  `scripts/test.sh` passed. The two baseline Restore failures did not reproduce
+  on the PR and are classified as existing Restore timing flakiness, not a
+  Variant C regression.
+- Cloud-container validation (secondary): the same 40 new Python and 13 card
+  tests passed; 45 existing background-task timing assertions in unchanged
+  Restore/Snapshot Delete code failed identically on untouched `3bc525c` there.
+  Ruff, translation/release parity, ShellCheck, and a headless-Chromium card
+  smoke test passed.
+- Live Home Assistant validation of the card (HACS install, card picker, states,
+  Easy Update with and without YOLO): **NOT YET PERFORMED**.
 - Accepted scope: the `hubinet_ops.easy_update` action with an exact `device_id`
   target, synchronous confirm-and-start over existing `PackageManager` entry
   points, an optional bounded YOLO Autoremove continuation with the unchanged
