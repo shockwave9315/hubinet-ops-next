@@ -208,4 +208,42 @@ test("one confirmation never covers another action", async () => {
   assert.equal(armed("restart"), true);
 });
 
+test("Enter and Space on the header open details; other keys do nothing", async () => {
+  const { card } = setup();
+  const opened = [];
+  card.dispatchEvent = (ev) => opened.push(ev.detail.entityId);
+  card._hass.user = { is_admin: false };
+  const head = { dataset: { action: "details" }, disabled: false };
+  head.closest = () => head;
+  const press = async (key) => {
+    let prevented = false;
+    for (const fn of listeners.get(card.shadowRoot).keydown) {
+      await fn({ key, target: head, preventDefault: () => (prevented = true) });
+    }
+    return prevented;
+  };
+  assert.equal(await press("Enter"), true);
+  assert.equal(await press(" "), true, "Space must not scroll the page");
+  assert.equal(await press("a"), false);
+  assert.deepEqual(opened, ["sensor.status", "sensor.status"]);
+});
+
+test("RAM shows its meter and its 24 h sparkline together", async () => {
+  const card = new Card();
+  card.setConfig({ device_id: DEVICE });
+  const hass = makeHass("A");
+  hass.entities = {
+    ...ENTITIES,
+    "sensor.mem": entry("sensor.mem", "container_memory_percentage"),
+  };
+  hass.states["sensor.mem"] = { state: "13", attributes: { unit_of_measurement: "%" } };
+  hass.callService = async () => {};
+  hass.callWS = async () => ({ "sensor.mem": [{ s: "10" }, { s: "20" }, { s: "13" }] });
+  card.hass = hass;
+  await new Promise((resolve) => setImmediate(resolve));
+  const ram = card.shadowRoot.innerHTML.split("<small>RAM</small>")[1].split('<div class="stat')[0];
+  assert.match(ram, /class="meter"/);
+  assert.match(ram, /<svg /);
+});
+
 mock.reset();

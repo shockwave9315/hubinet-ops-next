@@ -279,6 +279,15 @@ class HubinetOpsLxcCard extends HTMLElement {
       this.attachShadow({ mode: "open" });
       this.shadowRoot.addEventListener("click", (ev) => this._click(ev));
       this.shadowRoot.addEventListener("change", (ev) => this._change(ev));
+      this.shadowRoot.addEventListener("keydown", (ev) => this._key(ev));
+      this.shadowRoot.addEventListener("focusout", (ev) => {
+        if (ev.target && ev.target.dataset && ev.target.dataset.role === "snapshot") {
+          // The snapshot list may rebuild again once it is no longer in use.
+          this._snapshotChosen = false;
+          this._signature = undefined;
+          this._render();
+        }
+      });
       this.shadowRoot.addEventListener("pointerdown", (ev) => this._holdStart(ev));
       for (const type of ["pointerup", "pointerleave", "pointercancel"]) {
         this.shadowRoot.addEventListener(type, () => clearTimeout(this._holdTimer));
@@ -297,10 +306,52 @@ class HubinetOpsLxcCard extends HTMLElement {
     if (signature === this._signature) {
       return;
     }
+    // Rebuilding replaces every element: never under a snapshot list that is
+    // being used (it would close), and give focus back to the same control.
+    const active = this.shadowRoot.activeElement;
+    const focused = active && active.dataset ? active.dataset : null;
+    if (focused && focused.role === "snapshot" && !this._snapshotChosen) {
+      return;
+    }
     this._signature = signature;
     this.shadowRoot.innerHTML = `<style>${STYLE}</style><ha-card>${
       view.error ? `<div class="error">${esc(view.error)}</div>` : this._config.compact ? this._compact(view) : this._full(view)
     }</ha-card>`;
+    // A control disabled while an action runs gets focus back when it ends,
+    // unless focus has meanwhile moved elsewhere on the page.
+    const page = typeof document !== "undefined" ? document.activeElement : null;
+    const unclaimed = !page || page === document.body || page === this;
+    const selector = focused
+      ? focused.action
+        ? `[data-action="${focused.action}"]`
+        : focused.role
+          ? `[data-role="${focused.role}"]`
+          : null
+      : unclaimed
+        ? this._focusLater
+        : null;
+    const again = selector && this.shadowRoot.querySelector(selector);
+    if (again && !again.disabled) {
+      again.focus();
+      this._focusLater = undefined;
+    } else {
+      // Kept only across one running action, never for later updates.
+      this._focusLater = this._busy ? selector || undefined : undefined;
+    }
+  }
+
+  // Enter and Space on the header (role=button) act like a tap; native
+  // buttons already turn them into clicks.
+  _key(ev) {
+    if (ev.key !== "Enter" && ev.key !== " ") {
+      return;
+    }
+    const target = ev.target.closest && ev.target.closest('[role="button"][data-action]');
+    if (!target) {
+      return;
+    }
+    ev.preventDefault();
+    this._click({ target });
   }
 
   _button(action, info, label, extra = "") {
@@ -324,7 +375,7 @@ class HubinetOpsLxcCard extends HTMLElement {
             : "";
         return `<div class="stat${view.running ? "" : " dim"}"><small>${esc(stat.label)}</small>
           <b>${esc(stat.value)}</b>${stat.detail ? `<em>${esc(stat.detail)}</em>` : ""}
-          ${meter || spark(history, tone, stat.max)}</div>`;
+          ${meter}${spark(history, tone, stat.max)}</div>`;
       })
       .join("");
     const pkg = view.package;
@@ -423,6 +474,7 @@ class HubinetOpsLxcCard extends HTMLElement {
       return;
     }
     this._disarm();
+    this._snapshotChosen = true;
     await this._call("select", "select_option", {
       entity_id: this._view.snapshots.entity_id,
       option: select.value,
