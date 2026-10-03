@@ -706,6 +706,24 @@
     },
     "timeout_connect": {
       "message": "A timeout occurred while trying to connect to the Proxmox VE instance."
+    },
+    "easy_update_unknown_device": {
+      "message": "The selected device no longer exists."
+    },
+    "easy_update_not_package_lxc": {
+      "message": "The selected device is not a package-capable Hubinet-Ops LXC in a loaded entry."
+    },
+    "easy_update_not_running": {
+      "message": "The LXC is not running."
+    },
+    "easy_update_no_current_scan": {
+      "message": "There is no current successful package scan. Run Scan first."
+    },
+    "easy_update_nothing_to_update": {
+      "message": "The current scan has no pending package updates."
+    },
+    "easy_update_scan_changed": {
+      "message": "A different package scan is now current. Check the new result and click again."
     }
   },
   "issues": {
@@ -741,6 +759,20 @@
     "scan_all_packages": {
       "name": "Scan all package LXCs",
       "description": "Requests a package scan for all currently supported LXC containers across loaded Hubinet-Ops entries. Stopped or busy targets are skipped. Never updates or removes packages."
+    },
+    "easy_update": {
+      "name": "Easy Update one LXC",
+      "description": "Confirms the exact current successful package scan of one Hubinet-Ops LXC and starts the existing protected package update. Never scans or approves a replacement plan.",
+      "fields": {
+        "device_id": {
+          "name": "LXC",
+          "description": "The Hubinet-Ops LXC container device to update."
+        },
+        "expected_scan_attempt": {
+          "name": "Expected scan",
+          "description": "Optional last_attempt of the scan the user saw; the update is refused if a different scan is current."
+        }
+      }
     }
   }
 }

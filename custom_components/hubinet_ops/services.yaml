@@ -21,3 +21,17 @@ confirm_package_review:
       example: "AbCdEf0123456789-_AbCdEf0123456789"
       selector:
         text:
+
+easy_update:
+  fields:
+    device_id:
+      required: true
+      selector:
+        device:
+          filter:
+            - integration: hubinet_ops
+              model: Container
+    expected_scan_attempt:
+      required: false
+      selector:
+        text:

@@ -706,6 +706,24 @@
     },
     "timeout_connect": {
       "message": "Upłynął limit czasu podczas próby połączenia z instancją Proxmox VE."
+    },
+    "easy_update_unknown_device": {
+      "message": "Wybrane urządzenie już nie istnieje."
+    },
+    "easy_update_not_package_lxc": {
+      "message": "Wybrane urządzenie nie jest obsługiwanym LXC Hubinet-Ops z załadowanej integracji."
+    },
+    "easy_update_not_running": {
+      "message": "LXC nie działa."
+    },
+    "easy_update_no_current_scan": {
+      "message": "Brak aktualnego udanego skanu pakietów. Najpierw wykonaj skan."
+    },
+    "easy_update_nothing_to_update": {
+      "message": "Bieżący skan nie zawiera aktualizacji pakietów."
+    },
+    "easy_update_scan_changed": {
+      "message": "Bieżący jest teraz inny skan pakietów. Sprawdź nowy wynik i kliknij ponownie."
     }
   },
   "issues": {
@@ -741,6 +759,20 @@
     "scan_all_packages": {
       "name": "Skanuj aktualizacje we wszystkich LXC",
       "description": "Sprawdza dostępne aktualizacje we wszystkich obsługiwanych kontenerach LXC załadowanych integracji Hubinet-Ops. Pomija zatrzymane lub zajęte kontenery. Niczego nie aktualizuje ani nie usuwa."
+    },
+    "easy_update": {
+      "name": "Easy Update jednego LXC",
+      "description": "Potwierdza dokładnie bieżący udany skan pakietów jednego LXC Hubinet-Ops i uruchamia istniejącą chronioną aktualizację. Nigdy nie skanuje ani nie zatwierdza innego planu.",
+      "fields": {
+        "device_id": {
+          "name": "LXC",
+          "description": "Urządzenie kontenera LXC Hubinet-Ops do aktualizacji."
+        },
+        "expected_scan_attempt": {
+          "name": "Oczekiwany skan",
+          "description": "Opcjonalny last_attempt skanu widzianego przez użytkownika; aktualizacja zostanie odrzucona, jeśli bieżący jest inny skan."
+        }
+      }
     }
   }
 }
