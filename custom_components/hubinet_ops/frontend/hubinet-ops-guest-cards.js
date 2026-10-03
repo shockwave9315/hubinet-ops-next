@@ -1,12 +1,14 @@
-// Hubinet-Ops LXC card: one container's status, resources, packages,
-// snapshots and power controls. Presentation and invocation of existing
-// entities and actions only; Stop, Restart, Restore and Delete need a second
-// tap on the same target within a few seconds, and nothing acts on render.
+// Hubinet-Ops guest cards: one LXC or VM with status, resources, snapshots and
+// power controls (LXC also packages), as a full or a mini card. Presentation
+// and invocation of existing entities and actions only; power actions other
+// than Start, and Restore and Delete, need a second tap on the same target
+// within a few seconds, and nothing acts on render. Tapping a stat tile opens
+// Home Assistant's own more-info (history) for that sensor.
 
 const version = new URL(import.meta.url).search;
 const load = (file) => import(new URL(`./${file}${version}`, import.meta.url).href);
 const easy = await load("easy-update-logic.js");
-const lxc = await load("lxc-card-logic.js");
+const guest = await load("guest-card-logic.js");
 
 const HOLD_MS = 500;
 const HISTORY_MS = 24 * 3600 * 1000;
@@ -33,7 +35,11 @@ const ICONS = {
   update: "mdi:package-up",
   scan: "mdi:magnify",
   details: "mdi:information-outline",
+  shutdown: "mdi:power",
+  reset: "mdi:flash",
+  hibernate: "mdi:power-sleep",
 };
+const GUEST_ICONS = { lxc: "mdi:cube-outline", vm: "mdi:monitor" };
 const ACTION_TONES = {
   create: "blue",
   restore: "orange",
@@ -44,6 +50,9 @@ const ACTION_TONES = {
   update: "amber",
   scan: "blue",
   details: "grey",
+  shutdown: "orange",
+  reset: "red",
+  hibernate: "purple",
 };
 
 const esc = (value) =>
@@ -69,7 +78,11 @@ const STYLE = `
   .chip i { width: 7px; height: 7px; border-radius: 50%; background: var(--tone); }
   .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(110px, 1fr)); gap: 8px; }
   .stat { background: var(--secondary-background-color, rgba(127,127,127,.1));
-    border-radius: 10px; padding: 8px 10px; display: grid; gap: 2px; min-width: 0; }
+    border-radius: 10px; padding: 8px 10px; display: grid; gap: 2px; min-width: 0;
+    align-content: start; justify-content: stretch; align-items: stretch;
+    text-align: start; font-weight: 400; color: var(--primary-text-color); }
+  button.stat:hover { background: color-mix(in srgb, var(--primary-text-color) 8%,
+    var(--secondary-background-color, rgba(127,127,127,.1))); }
   .stat small { color: var(--secondary-text-color); font-size: 11px;
     text-transform: uppercase; letter-spacing: .05em; }
   .stat b { font-size: 15px; font-weight: 600; color: var(--primary-text-color);
@@ -83,7 +96,13 @@ const STYLE = `
   .section { border-top: 1px solid var(--divider-color, rgba(127,127,127,.25));
     padding-top: 12px; display: grid; gap: 10px; }
   .section h3 { margin: 0; font-size: 12px; font-weight: 600; color: var(--secondary-text-color);
-    text-transform: uppercase; letter-spacing: .06em; }
+    text-transform: uppercase; letter-spacing: .06em; display: flex;
+    justify-content: space-between; align-items: center; gap: 8px; }
+  button.more { padding: 2px 6px; font-size: 12px; text-transform: none; letter-spacing: 0;
+    background: none; color: var(--primary-color); }
+  .legend { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 11.5px;
+    color: var(--secondary-text-color); }
+  .legend b { color: var(--primary-text-color); font-weight: 600; }
   .pkg { display: flex; gap: 12px; align-items: center; min-width: 0; }
   .pkg .t { min-width: 0; flex: 1; }
   .pkg .p { font-weight: 700; color: var(--primary-text-color); }
@@ -93,24 +112,30 @@ const STYLE = `
     border: 1px solid var(--divider-color, rgba(127,127,127,.35));
     background: var(--secondary-background-color, transparent); color: var(--primary-text-color); }
   .power { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+  .power4 { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; }
+  @container (max-width: 420px) { .power4 { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+  ha-card { container-type: inline-size; }
   button { font: inherit; font-size: 13px; font-weight: 600; display: inline-flex;
     align-items: center; justify-content: center; gap: 6px; padding: 8px 12px;
     border-radius: 10px; border: 0; cursor: pointer; color: var(--tone);
     background: color-mix(in srgb, var(--tone) 14%, transparent); }
   button:hover { background: color-mix(in srgb, var(--tone) 22%, transparent); }
-  button:focus-visible, select:focus-visible, .head:focus-visible {
+  button:focus-visible, select:focus-visible, .head:focus-visible, .stat:focus-visible {
     outline: 2px solid var(--primary-color); outline-offset: 2px; }
   button[disabled] { opacity: .4; cursor: not-allowed; }
   button.armed { background: var(--tone); color: #fff; }
   button.primary { background: var(--tone); color: #111; }
   ha-icon { --mdc-icon-size: 20px; }
   .error { color: var(--secondary-text-color); }
-  .compact { display: flex; gap: 12px; align-items: center; cursor: pointer; min-width: 0; }
-  .compact .t { min-width: 0; }
-  .compact .n { font-size: 12px; color: var(--secondary-text-color); }
-  .compact .p, .compact .s { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .compact .p { font-weight: 700; color: var(--primary-text-color); }
-  .compact .s { font-size: 12px; color: var(--secondary-text-color); }
+  ha-card.mini { padding: 12px; gap: 10px; }
+  .mini .stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .mini .stat { padding: 6px 9px; }
+  .mini .stat svg { height: 18px; }
+  .mline { display: flex; gap: 10px; align-items: center; min-width: 0; }
+  .mline .t { flex: 1; min-width: 0; }
+  .mline .p, .mline .s { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .mline .p { font-weight: 700; color: var(--primary-text-color); }
+  .mline .s { font-size: 12px; color: var(--secondary-text-color); }
 `;
 
 const spark = (values, tone, max) => {
@@ -132,39 +157,54 @@ const spark = (values, tone, max) => {
     <circle cx="${last[0]}" cy="${last[1]}" r="2.2" fill="${tone}"/></svg>`;
 };
 
-class HubinetOpsLxcCard extends HTMLElement {
+class HubinetOpsGuestCard extends HTMLElement {
+  static kind = "lxc";
+  static mini = false;
+
   static getConfigForm() {
-    const s = lxc.lxcStrings(document.documentElement.lang || navigator.language);
+    const s = guest.guestStrings(document.documentElement.lang || navigator.language);
+    const lxc = this.kind === "lxc";
     return {
       schema: [
         {
           name: "device_id",
           required: true,
           selector: {
-            device: { filter: { integration: lxc.DOMAIN, model: "Container" } },
+            device: {
+              filter: { integration: guest.DOMAIN, model: guest.KINDS[this.kind].model },
+            },
           },
         },
-        { name: "autoremove", selector: { boolean: {} } },
+        ...(lxc ? [{ name: "autoremove", selector: { boolean: {} } }] : []),
         { name: "name", selector: { text: {} } },
-        { name: "compact", selector: { boolean: {} } },
       ],
-      computeLabel: (schema) => s[`label_${schema.name}`],
+      computeLabel: (schema) =>
+        (!lxc && s[`label_${schema.name}_vm`]) || s[`label_${schema.name}`],
     };
   }
 
   static getStubConfig(hass) {
     return {
-      device_id: lxc.firstLxcDevice(hass && hass.entities) || "",
-      autoremove: false,
-      compact: false,
+      device_id: guest.firstGuestDevice(hass && hass.entities, this.kind) || "",
+      ...(this.kind === "lxc" ? { autoremove: false } : {}),
     };
+  }
+
+  get _kind() {
+    return this.constructor.kind;
+  }
+
+  // Mini card type, or a saved LXC card from before with `compact: true`.
+  get _isMini() {
+    return this.constructor.mini || Boolean(this._config && this._config.compact);
   }
 
   setConfig(config) {
     if (!config || typeof config !== "object") {
       throw new Error("Invalid configuration");
     }
-    this._config = { autoremove: false, compact: false, ...config };
+    this._config = { autoremove: false, ...config };
+    this._more = false;
     this._disarm();
     this._history = {};
     this._historyKey = undefined;
@@ -178,13 +218,11 @@ class HubinetOpsLxcCard extends HTMLElement {
   }
 
   getCardSize() {
-    return this._config && this._config.compact ? 1 : 7;
+    return this._isMini ? 3 : 7;
   }
 
   getGridOptions() {
-    return this._config && this._config.compact
-      ? { columns: 6, rows: 1, min_columns: 4 }
-      : { columns: 12, min_columns: 6 };
+    return this._isMini ? { columns: 6, min_columns: 6 } : { columns: 12, min_columns: 6 };
   }
 
   disconnectedCallback() {
@@ -206,17 +244,17 @@ class HubinetOpsLxcCard extends HTMLElement {
       armed &&
         armed.action === action &&
         Date.now() < armed.until &&
-        armed.target === lxc.confirmTarget(action, view, this._config.device_id)
+        armed.target === guest.confirmTarget(action, view, this._config.device_id)
     );
   }
 
   _arm(action, target) {
     clearTimeout(this._armTimer);
-    this._armed = { action, target, until: Date.now() + lxc.CONFIRM_MS };
+    this._armed = { action, target, until: Date.now() + guest.CONFIRM_MS };
     this._armTimer = setTimeout(() => {
       this._disarm();
       this._render();
-    }, lxc.CONFIRM_MS);
+    }, guest.CONFIRM_MS);
   }
 
   _lang() {
@@ -227,7 +265,8 @@ class HubinetOpsLxcCard extends HTMLElement {
   _derive() {
     const hass = this._hass;
     const lang = this._lang();
-    const packageView = easy.resolveEntities(hass.entities, this._config.device_id).entities
+    const packageView =
+      this._kind === "lxc" && easy.resolveEntities(hass.entities, this._config.device_id).entities
       ? easy.deriveView({
           states: hass.states,
           entities: hass.entities,
@@ -237,13 +276,14 @@ class HubinetOpsLxcCard extends HTMLElement {
           lang,
         })
       : null;
-    return lxc.deriveLxcView({
+    return guest.deriveGuestView({
       states: hass.states,
       entities: hass.entities,
       devices: hass.devices,
       config: this._config,
       lang,
       packageView,
+      kind: this._kind,
     });
   }
 
@@ -265,7 +305,7 @@ class HubinetOpsLxcCard extends HTMLElement {
         no_attributes: true,
       });
       for (const id of ids) {
-        this._history[id] = lxc.historyPoints(result && result[id]);
+        this._history[id] = guest.historyPoints(result && result[id]);
       }
       this._signature = undefined;
       this._render();
@@ -308,7 +348,7 @@ class HubinetOpsLxcCard extends HTMLElement {
     if (!view.error) {
       this._loadHistory(view);
     }
-    const signature = JSON.stringify([view, this._armed, this._busy, this._history]);
+    const signature = JSON.stringify([view, this._armed, this._busy, this._history, this._more]);
     if (signature === this._signature) {
       return;
     }
@@ -321,8 +361,9 @@ class HubinetOpsLxcCard extends HTMLElement {
       return;
     }
     this._signature = signature;
-    this.shadowRoot.innerHTML = `<style>${STYLE}</style><ha-card>${
-      view.error ? `<div class="error">${esc(view.error)}</div>` : this._config.compact ? this._compact(view) : this._full(view)
+    const mini = this._isMini;
+    this.shadowRoot.innerHTML = `<style>${STYLE}</style><ha-card class="${mini ? "mini" : ""}">${
+      view.error ? `<div class="error">${esc(view.error)}</div>` : mini ? this._mini(view) : this._full(view)
     }</ha-card>`;
     // Taps act on what the user sees, never on a newer view not yet shown.
     this._shown = view;
@@ -381,7 +422,7 @@ class HubinetOpsLxcCard extends HTMLElement {
   }
 
   _button(action, info, label, extra = "", key = action) {
-    const s = lxc.lxcStrings(this._lang());
+    const s = guest.guestStrings(this._lang());
     const armed = this._isArmed(action);
     const tone = TONES[ACTION_TONES[action]];
     return `<button data-action="${action}" data-key="${key}" style="--tone:${tone}" class="${armed ? "armed" : ""} ${extra}"
@@ -389,9 +430,11 @@ class HubinetOpsLxcCard extends HTMLElement {
       <ha-icon icon="${ICONS[action]}"></ha-icon>${esc(armed ? s.confirm : label)}</button>`;
   }
 
-  _full(view) {
-    const s = lxc.lxcStrings(this._lang());
-    const stats = view.stats
+  // Stat tiles; a tile with a sensor opens its native history when tapped.
+  _stats(view, keys) {
+    const s = guest.guestStrings(this._lang());
+    return view.stats
+      .filter((stat) => !keys || keys.includes(stat.key))
       .map((stat) => {
         const tone = TONES[stat.tone];
         const history = stat.history ? this._history[stat.history] : null;
@@ -399,22 +442,83 @@ class HubinetOpsLxcCard extends HTMLElement {
           stat.pct !== undefined && stat.pct !== null
             ? `<div class="meter" style="--tone:${tone}"><span style="width:${Math.max(0, Math.min(100, stat.pct))}%"></span></div>`
             : "";
-        return `<div class="stat${view.running ? "" : " dim"}"><small>${esc(stat.label)}</small>
+        const body = `<small>${esc(stat.label)}</small>
           <b>${esc(stat.value)}</b>${stat.detail ? `<em>${esc(stat.detail)}</em>` : ""}
-          ${meter}${spark(history, tone, stat.max)}</div>`;
+          ${meter}${spark(history, tone, stat.max)}`;
+        const cls = `stat${view.running ? "" : " dim"}`;
+        return stat.entity
+          ? `<button class="${cls}" data-action="history" data-stat="${stat.key}" data-key="stat-${stat.key}"
+              aria-label="${esc(guest.fill(s.history, { label: stat.label, value: stat.value }))}">${body}</button>`
+          : `<div class="${cls}">${body}</div>`;
       })
       .join("");
+  }
+
+  _head(view) {
+    return `<div class="head" tabindex="0" role="button" data-action="details">
+        <div class="shape" style="--tone:${TONES[view.status.tone]}"><ha-icon icon="${GUEST_ICONS[view.kind]}"></ha-icon></div>
+        <div class="titles"><div class="name">${esc(view.name)}</div><div class="sub">${esc(view.uptime)}</div></div>
+        <span class="chip" style="--tone:${TONES[view.status.tone]}"><i></i>${esc(view.status.label)}</span>
+      </div>`;
+  }
+
+  _pkgButton(view) {
+    const s = guest.guestStrings(this._lang());
+    const pkgAction = view.package && view.package.action.kind;
+    return pkgAction === "easy_update"
+      ? this._button("update", { available: true }, s.update, "primary")
+      : pkgAction === "scan"
+        ? this._button("scan", { available: true }, s.scan)
+        : pkgAction === "details"
+          ? // Navigation only, through the same path as the header.
+            this._button("details", { available: true }, s.details, "", "package-details")
+          : "";
+  }
+
+  _power(view) {
+    const s = guest.guestStrings(this._lang());
+    const a = view.actions;
+    if (view.kind !== "vm") {
+      return `<div class="section"><h3>${esc(s.power)}</h3><div class="power">
+        ${this._button("start", a.start, s.start)}${this._button("stop", a.stop, s.stop)}${this._button("restart", a.restart, s.restart)}
+      </div></div>`;
+    }
+    const more = this._more;
+    return `<div class="section"><h3>${esc(s.power)}<button class="more" data-action="more"
+        aria-expanded="${more}" style="--tone:var(--primary-color)">${esc(more ? `${s.less} ▴` : `${s.more} ▾`)}</button></h3>
+      <div class="power4">${this._button("start", a.start, s.start)}${this._button("shutdown", a.shutdown, s.shutdown)}${this._button("stop", a.stop, s.stop)}${this._button("restart", a.restart, s.restart)}</div>
+      ${more ? `<div class="power">${this._button("reset", a.reset, s.reset)}${this._button("hibernate", a.hibernate, s.hibernate)}</div>` : ""}
+      <div class="legend"><span><b>${esc(s.shutdown)}</b> ${esc(s.legend_shutdown)}</span><span><b>${esc(s.stop)}</b> ${esc(s.legend_stop)}</span>${more ? `<span><b>${esc(s.reset)}</b> ${esc(s.legend_reset)}</span>` : ""}</div>
+    </div>`;
+  }
+
+  _mini(view) {
+    const s = guest.guestStrings(this._lang());
     const pkg = view.package;
-    const pkgAction = pkg && pkg.action.kind;
-    const pkgButton =
-      pkgAction === "easy_update"
-        ? this._button("update", { available: true }, s.update, "primary")
-        : pkgAction === "scan"
-          ? this._button("scan", { available: true }, s.scan)
-          : pkgAction === "details"
-            ? // Navigation only, through the same path as the header.
-              this._button("details", { available: true }, s.details, "", "package-details")
-            : "";
+    const snap = view.snapshots;
+    let line;
+    let action = "";
+    if (view.kind === "vm") {
+      line = { p: view.status.label, s: snap ? guest.fill(s.snapshot_count, { count: snap.options.length }) : "" };
+      action = view.running
+        ? this._button("shutdown", view.actions.shutdown, s.shutdown)
+        : this._button("start", view.actions.start, s.start);
+    } else if (pkg) {
+      line = { p: pkg.primary, s: pkg.secondary };
+      action = this._pkgButton(view);
+    } else {
+      line = { p: view.status.label, s: view.uptime };
+    }
+    return `${this._head(view)}
+      <div class="stats">${this._stats(view, ["cpu", "ram"])}</div>
+      <div class="mline"><div class="t"><div class="p">${esc(line.p)}</div>${line.s ? `<div class="s">${esc(line.s)}</div>` : ""}</div>${action}</div>`;
+  }
+
+  _full(view) {
+    const s = guest.guestStrings(this._lang());
+    const stats = this._stats(view);
+    const pkg = view.package;
+    const pkgButton = this._pkgButton(view);
     const snap = view.snapshots;
     const options = snap
       ? snap.options.length
@@ -428,11 +532,7 @@ class HubinetOpsLxcCard extends HTMLElement {
         : `<option>${esc(s.no_snapshots)}</option>`
       : "";
     return `
-      <div class="head" tabindex="0" role="button" data-action="details">
-        <div class="shape" style="--tone:${TONES[view.status.tone]}"><ha-icon icon="mdi:cube-outline"></ha-icon></div>
-        <div class="titles"><div class="name">${esc(view.name)}</div><div class="sub">${esc(view.uptime)}</div></div>
-        <span class="chip" style="--tone:${TONES[view.status.tone]}"><i></i>${esc(view.status.label)}</span>
-      </div>
+      ${this._head(view)}
       <div class="stats">${stats}</div>
       ${
         pkg
@@ -449,24 +549,11 @@ class HubinetOpsLxcCard extends HTMLElement {
           <div class="row">${this._button("create", view.actions.create, s.create)}${this._button("restore", view.actions.restore, s.restore)}${this._button("delete", view.actions.delete, s.delete)}</div></div>`
           : ""
       }
-      <div class="section"><h3>${esc(s.power)}</h3><div class="power">
-        ${this._button("start", view.actions.start, s.start)}${this._button("stop", view.actions.stop, s.stop)}${this._button("restart", view.actions.restart, s.restart)}
-      </div></div>`;
-  }
-
-  _compact(view) {
-    const cpu = view.stats.find((stat) => stat.key === "cpu");
-    const ram = view.stats.find((stat) => stat.key === "ram");
-    const pkg = view.package;
-    return `<div class="compact" data-action="details" tabindex="0" role="button">
-      <div class="shape" style="--tone:${TONES[pkg ? pkg.tone : view.status.tone] || TONES.grey}"><ha-icon icon="mdi:cube-outline"></ha-icon></div>
-      <div class="t"><div class="n">${esc(view.name)}</div>
-        <div class="p">${esc(`${view.status.label} · CPU ${cpu.value} · RAM ${ram.value}`)}</div>
-        <div class="s">${esc(pkg ? [pkg.primary, pkg.secondary].filter(Boolean).join(" · ") : view.uptime)}</div></div></div>`;
+      ${this._power(view)}`;
   }
 
   _holdStart(ev) {
-    if (!ev.target.closest(".head, .compact")) {
+    if (!ev.target.closest(".head")) {
       return;
     }
     this._held = false;
@@ -485,16 +572,20 @@ class HubinetOpsLxcCard extends HTMLElement {
       window.dispatchEvent(new CustomEvent("location-changed", { detail: { replace: false } }));
       return;
     }
-    const lookup = lxc.resolveLxc(hass.entities, hass.states, deviceId);
+    const lookup = guest.resolveGuest(hass.entities, hass.states, deviceId, this._kind);
     if (lookup.entities) {
-      this.dispatchEvent(
-        new CustomEvent("hass-more-info", {
-          detail: { entityId: lookup.entities.status },
-          bubbles: true,
-          composed: true,
-        })
-      );
+      this._moreInfo(lookup.entities.status);
     }
+  }
+
+  _moreInfo(entityId) {
+    this.dispatchEvent(
+      new CustomEvent("hass-more-info", {
+        detail: { entityId },
+        bubbles: true,
+        composed: true,
+      })
+    );
   }
 
   async _change(ev) {
@@ -530,8 +621,21 @@ class HubinetOpsLxcCard extends HTMLElement {
     if (!view) {
       return;
     }
-    if (lxc.CONFIRM.has(action)) {
-      const target = lxc.confirmTarget(action, view, this._config.device_id);
+    if (action === "history") {
+      // Navigation only: Home Assistant's own more-info shows the history.
+      const stat = view.stats.find((item) => item.key === target.dataset.stat);
+      if (stat && stat.entity) {
+        this._moreInfo(stat.entity);
+      }
+      return;
+    }
+    if (action === "more") {
+      this._more = !this._more;
+      this._render();
+      return;
+    }
+    if (guest.CONFIRM.has(action)) {
+      const target = guest.confirmTarget(action, view, this._config.device_id);
       if (!target) {
         this._disarm();
         this._render();
@@ -545,7 +649,7 @@ class HubinetOpsLxcCard extends HTMLElement {
     }
     this._disarm();
     if (action === "update") {
-      await this._call(lxc.DOMAIN, "easy_update", view.package.action.data);
+      await this._call(guest.DOMAIN, "easy_update", view.package.action.data);
     } else if (action === "scan") {
       await this._call("button", "press", { entity_id: view.package.action.entity_id });
     } else {
@@ -568,18 +672,58 @@ class HubinetOpsLxcCard extends HTMLElement {
   }
 }
 
-if (!customElements.get(lxc.LXC_CARD_TYPE)) {
-  customElements.define(lxc.LXC_CARD_TYPE, HubinetOpsLxcCard);
-}
-
-window.customCards = window.customCards || [];
-if (!window.customCards.some((card) => card.type === lxc.LXC_CARD_TYPE)) {
-  window.customCards.push({
-    type: lxc.LXC_CARD_TYPE,
+const CARDS = [
+  {
+    kind: "lxc",
+    mini: false,
     name: "Hubinet-Ops LXC",
     description:
       "Hubinet-Ops: LXC status, resources, packages, snapshots and power / karta kontenera LXC (Hubinet)",
-    preview: true,
-    documentationURL: "https://github.com/shockwave9315/hubinet-ops-next#lxc-card",
-  });
+    doc: "lxc-card",
+  },
+  {
+    kind: "lxc",
+    mini: true,
+    name: "Hubinet-Ops LXC mini",
+    description: "Hubinet-Ops: LXC at a glance, CPU/RAM and packages / mała karta LXC (Hubinet)",
+    doc: "mini-cards",
+  },
+  {
+    kind: "vm",
+    mini: false,
+    name: "Hubinet-Ops VM",
+    description:
+      "Hubinet-Ops: QEMU VM status, resources, snapshots and full power / karta maszyny VM (Hubinet)",
+    doc: "vm-card",
+  },
+  {
+    kind: "vm",
+    mini: true,
+    name: "Hubinet-Ops VM mini",
+    description: "Hubinet-Ops: VM at a glance, CPU/RAM, Start/Shut down / mała karta VM (Hubinet)",
+    doc: "mini-cards",
+  },
+];
+
+window.customCards = window.customCards || [];
+for (const card of CARDS) {
+  const type = guest.KINDS[card.kind][card.mini ? "mini" : "full"];
+  if (!customElements.get(type)) {
+    customElements.define(
+      type,
+      class extends HubinetOpsGuestCard {
+        static kind = card.kind;
+        static mini = card.mini;
+      }
+    );
+  }
+  if (!window.customCards.some((entry) => entry.type === type)) {
+    window.customCards.push({
+      type,
+      name: card.name,
+      description: card.description,
+      preview: true,
+      documentationURL: `https://github.com/shockwave9315/hubinet-ops-next#${card.doc}`,
+    });
+  }
 }

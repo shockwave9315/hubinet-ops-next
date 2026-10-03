@@ -5,12 +5,12 @@ import { test } from "node:test";
 import {
   CONFIRM,
   confirmTarget,
-  deriveLxcView,
-  firstLxcDevice,
+  deriveGuestView,
+  firstGuestDevice,
   formatDuration,
   historyPoints,
-  resolveLxc,
-} from "../../custom_components/hubinet_ops/frontend/lxc-card-logic.js";
+  resolveGuest,
+} from "../../custom_components/hubinet_ops/frontend/guest-card-logic.js";
 
 const DEVICE = "device-ct106";
 
@@ -67,7 +67,7 @@ const baseStates = () => ({
 });
 
 const view = (states = baseStates(), config = { device_id: DEVICE }) =>
-  deriveLxcView({
+  deriveGuestView({
     states,
     entities: ENTITIES,
     devices: DEVICES,
@@ -77,7 +77,7 @@ const view = (states = baseStates(), config = { device_id: DEVICE }) =>
   });
 
 test("roles resolve by device, platform and translation key", () => {
-  const { entities } = resolveLxc(ENTITIES, baseStates(), DEVICE);
+  const { entities } = resolveGuest(ENTITIES, baseStates(), DEVICE);
   assert.equal(entities.status, "sensor.a");
   assert.equal(entities.cpu, "sensor.b");
   assert.equal(entities.restart, "button.j");
@@ -88,7 +88,7 @@ test("roles resolve by device, platform and translation key", () => {
 test("restart needs the restart device class", () => {
   const states = baseStates();
   states["button.j"].attributes = {};
-  assert.equal(resolveLxc(ENTITIES, states, DEVICE).entities.restart, null);
+  assert.equal(resolveGuest(ENTITIES, states, DEVICE).entities.restart, null);
 });
 
 test("a duplicate role fails closed", () => {
@@ -96,19 +96,19 @@ test("a duplicate role fails closed", () => {
     ...ENTITIES,
     "sensor.dup": entry("sensor.dup", "container_status"),
   };
-  assert.deepEqual(resolveLxc(entities, baseStates(), DEVICE), {
+  assert.deepEqual(resolveGuest(entities, baseStates(), DEVICE), {
     error: "ambiguous",
   });
 });
 
 test("a device without a status sensor is not an LXC", () => {
-  assert.deepEqual(resolveLxc(ENTITIES, {}, "missing"), { error: "not_found" });
+  assert.deepEqual(resolveGuest(ENTITIES, {}, "missing"), { error: "not_found" });
   assert.equal(view(baseStates(), {}).error, "Wybierz LXC Hubinet-Ops");
 });
 
 test("the first LXC device is offered as the stub", () => {
-  assert.equal(firstLxcDevice(ENTITIES), DEVICE);
-  assert.equal(firstLxcDevice({}), null);
+  assert.equal(firstGuestDevice(ENTITIES), DEVICE);
+  assert.equal(firstGuestDevice({}), null);
 });
 
 test("a running LXC shows stats and power actions", () => {
@@ -210,7 +210,18 @@ test("an unavailable button is disabled", () => {
 });
 
 test("destructive actions need a second tap, Start and Create do not", () => {
-  assert.deepEqual([...CONFIRM].sort(), ["delete", "restart", "restore", "stop"]);
+  assert.deepEqual([...CONFIRM].sort(), [
+    "delete",
+    "hibernate",
+    "reset",
+    "restart",
+    "restore",
+    "shutdown",
+    "stop",
+  ]);
+  for (const action of ["start", "create"]) {
+    assert.equal(CONFIRM.has(action), false);
+  }
 });
 
 test("durations format in days, hours or minutes", () => {
@@ -235,4 +246,134 @@ test("history keeps finite numbers and downsamples", () => {
   assert.equal(points[9], 99);
   assert.deepEqual(points, [...points].sort((x, y) => x - y));
   assert.equal(new Set(points).size, 10);
+});
+
+// VM: the same rules over the QEMU entities of one VM device.
+const VM = "device-vm100";
+const vmEntry = (entity_id, translation_key) => ({
+  entity_id,
+  translation_key,
+  device_id: VM,
+  platform: "hubinet_ops",
+});
+const VM_ENTITIES = {
+  "sensor.v1": vmEntry("sensor.v1", "vm_status"),
+  "sensor.v2": vmEntry("sensor.v2", "vm_cpu"),
+  "sensor.v3": vmEntry("sensor.v3", "vm_memory_percentage"),
+  "sensor.v4": vmEntry("sensor.v4", "vm_uptime"),
+  "button.v5": vmEntry("button.v5", "start"),
+  "button.v6": vmEntry("button.v6", "stop"),
+  "button.v7": vmEntry("button.v7", "shutdown"),
+  "button.v8": vmEntry("button.v8", "reset"),
+  "button.v9": vmEntry("button.v9", "hibernate"),
+  "button.v10": vmEntry("button.v10", undefined),
+  "button.v11": vmEntry("button.v11", "snapshot_create"),
+  "select.v12": vmEntry("select.v12", "snapshot_to_restore"),
+  // An LXC status sensor on another device is never a VM.
+  "sensor.ct": entry("sensor.ct", "container_status"),
+};
+const vmStates = (status = "running") => ({
+  "sensor.v1": { state: status, attributes: {} },
+  "sensor.v2": { state: "12", attributes: { unit_of_measurement: "%" } },
+  "sensor.v3": { state: "47", attributes: { unit_of_measurement: "%" } },
+  "sensor.v4": { state: "530000", attributes: { unit_of_measurement: "s" } },
+  "button.v5": { state: "unknown", attributes: {} },
+  "button.v6": { state: "unknown", attributes: {} },
+  "button.v7": { state: "unknown", attributes: {} },
+  "button.v8": { state: "unknown", attributes: {} },
+  "button.v9": { state: "unknown", attributes: {} },
+  "button.v10": { state: "unknown", attributes: { device_class: "restart" } },
+  "button.v11": { state: "unknown", attributes: {} },
+  "select.v12": { state: "unknown", attributes: { options: ["a", "b"], selected_snapshot: null } },
+});
+const vmView = (status = "running") =>
+  deriveGuestView({
+    states: vmStates(status),
+    entities: VM_ENTITIES,
+    devices: { [VM]: { name: "windows-11", name_by_user: "VM100" } },
+    config: { device_id: VM },
+    lang: "pl",
+    packageView: null,
+    kind: "vm",
+  });
+
+test("VM roles resolve by VM translation keys only", () => {
+  const { entities } = resolveGuest(VM_ENTITIES, vmStates(), VM, "vm");
+  assert.equal(entities.status, "sensor.v1");
+  assert.equal(entities.shutdown, "button.v7");
+  assert.equal(entities.restart, "button.v10");
+  // A container is not a VM, and a VM is not a container.
+  assert.deepEqual(resolveGuest(ENTITIES, baseStates(), DEVICE, "vm"), { error: "not_found" });
+  assert.deepEqual(resolveGuest(VM_ENTITIES, vmStates(), VM, "lxc"), { error: "not_found" });
+  assert.equal(firstGuestDevice(VM_ENTITIES, "vm"), VM);
+  assert.equal(firstGuestDevice(VM_ENTITIES, "lxc"), DEVICE);
+});
+
+test("a running VM offers Shut down, Stop, Restart, Reset, Hibernate", () => {
+  const v = vmView();
+  assert.equal(v.kind, "vm");
+  assert.equal(v.status.label, "Uruchomiona");
+  assert.equal(v.package, null);
+  const on = Object.entries(v.actions)
+    .filter(([, info]) => info.available)
+    .map(([key]) => key)
+    .sort();
+  assert.deepEqual(on, ["create", "hibernate", "reset", "restart", "shutdown", "stop"]);
+  assert.deepEqual(
+    v.stats.map((stat) => [stat.key, stat.entity]),
+    [
+      ["cpu", "sensor.v2"],
+      ["ram", "sensor.v3"],
+    ]
+  );
+});
+
+test("a stopped VM can only be started; missing data disables all", () => {
+  const stopped = vmView("stopped");
+  assert.equal(stopped.status.label, "Zatrzymana");
+  assert.equal(stopped.actions.start.available, true);
+  for (const key of ["shutdown", "stop", "restart", "reset", "hibernate"]) {
+    assert.equal(stopped.actions[key].available, false, key);
+  }
+  const none = vmView("unavailable");
+  for (const info of Object.values(none.actions)) {
+    assert.equal(info.available, false);
+  }
+});
+
+test("VM power actions confirm on their own button", () => {
+  const v = vmView();
+  for (const action of ["shutdown", "reset", "hibernate"]) {
+    assert.equal(
+      confirmTarget(action, v, VM),
+      JSON.stringify([VM, v.actions[action].entity_id])
+    );
+  }
+  assert.equal(confirmTarget("start", v, VM), null);
+});
+
+test("LXC views carry no VM-only actions", () => {
+  const v = view();
+  assert.equal(v.kind, "lxc");
+  for (const key of ["shutdown", "reset", "hibernate"]) {
+    assert.equal(v.actions[key], undefined);
+  }
+});
+
+test("a network tile with only the upload sensor is bound to that sensor", () => {
+  const entities = { ...ENTITIES, "sensor.out": entry("sensor.out", "container_netout") };
+  const states = baseStates();
+  states["sensor.out"] = { state: "12", attributes: { unit_of_measurement: "kB/s" } };
+  const v = deriveGuestView({
+    states,
+    entities,
+    devices: DEVICES,
+    config: { device_id: DEVICE },
+    lang: "pl",
+    packageView: null,
+  });
+  const net = v.stats.find((stat) => stat.key === "net");
+  assert.equal(net.value, "↓—");
+  assert.equal(net.entity, "sensor.out");
+  assert.equal(net.history, "sensor.out");
 });

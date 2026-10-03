@@ -44,7 +44,7 @@ globalThis.removeEventListener = (type, fn) => windowListeners[type]?.delete(fn)
 const release = () => [...(windowListeners.pointerup || [])].forEach((fn) => fn());
 globalThis.document = { documentElement: { lang: "pl" } };
 
-await import("../../custom_components/hubinet_ops/frontend/hubinet-ops-lxc-card.js");
+await import("../../custom_components/hubinet_ops/frontend/hubinet-ops-guest-cards.js");
 const Card = registry["hubinet-ops-lxc-card"];
 
 const DEVICE = "device-ct106";
@@ -364,5 +364,219 @@ for (const [name, mutate] of Object.entries(DETAILS_STATES)) {
     }
   });
 }
+
+// --- Four card types, stat history, VM power and mini cards ---------------
+
+// Mount a card of `type` with `hass`; taps go through the card's listeners.
+const mount = (type, hass, config) => {
+  const calls = [];
+  const opened = [];
+  const card = new registry[type]();
+  card.setConfig(config);
+  card.dispatchEvent = (ev) => opened.push(ev.detail.entityId);
+  hass.callService = async (domain, service, data) => {
+    calls.push([domain, service, data]);
+  };
+  hass.callWS = async () => ({});
+  card.hass = hass;
+  const html = () => card.shadowRoot.innerHTML;
+  const press = async (selector) => {
+    const tag = html().match(new RegExp(`<button[^>]*${selector}[^>]*>`, "s"));
+    assert.ok(tag, `rendered: ${selector}`);
+    const dataset = Object.fromEntries(
+      [...tag[0].matchAll(/data-(\w+)="([^"]*)"/g)].map((m) => [m[1], m[2]])
+    );
+    const target = {
+      dataset,
+      tagName: "BUTTON",
+      disabled: /\sdisabled[\s>]/.test(tag[0].replace(/\s+/g, " ")),
+      closest: (sel) => (sel === "[data-action]" ? target : null),
+    };
+    for (const fn of listeners.get(card.shadowRoot).click) {
+      await fn({ target });
+    }
+  };
+  const armedAction = () => (html().match(/data-action="(\w+)"[^>]*class="armed/) || [])[1];
+  return { card, calls, opened, html, press, armedAction };
+};
+
+const VM = "device-vm100";
+const vmEntry = (entity_id, translation_key) => ({
+  entity_id,
+  translation_key,
+  device_id: VM,
+  platform: "hubinet_ops",
+});
+const vmHass = (status = "running") => ({
+  entities: {
+    "sensor.vs": vmEntry("sensor.vs", "vm_status"),
+    "sensor.vc": vmEntry("sensor.vc", "vm_cpu"),
+    "sensor.vm": vmEntry("sensor.vm", "vm_memory_percentage"),
+    "button.vstart": vmEntry("button.vstart", "start"),
+    "button.vstop": vmEntry("button.vstop", "stop"),
+    "button.vshutdown": vmEntry("button.vshutdown", "shutdown"),
+    "button.vreset": vmEntry("button.vreset", "reset"),
+    "button.vhibernate": vmEntry("button.vhibernate", "hibernate"),
+    "button.vrestart": vmEntry("button.vrestart", undefined),
+    "select.vsnap": vmEntry("select.vsnap", "snapshot_to_restore"),
+  },
+  devices: { [VM]: { name: "windows-11" } },
+  locale: { language: "pl" },
+  user: { is_admin: true },
+  states: {
+    "sensor.vs": { state: status, attributes: {} },
+    "sensor.vc": { state: "12", attributes: { unit_of_measurement: "%" } },
+    "sensor.vm": { state: "47", attributes: { unit_of_measurement: "%" } },
+    "button.vstart": { state: "unknown", attributes: {} },
+    "button.vstop": { state: "unknown", attributes: {} },
+    "button.vshutdown": { state: "unknown", attributes: {} },
+    "button.vreset": { state: "unknown", attributes: {} },
+    "button.vhibernate": { state: "unknown", attributes: {} },
+    "button.vrestart": { state: "unknown", attributes: { device_class: "restart" } },
+    "select.vsnap": { state: "unknown", attributes: { options: ["a", "b"], selected_snapshot: null } },
+  },
+});
+
+test("four guest cards register, each in the card picker", () => {
+  const types = [
+    "hubinet-ops-lxc-card",
+    "hubinet-ops-lxc-mini-card",
+    "hubinet-ops-vm-card",
+    "hubinet-ops-vm-mini-card",
+  ];
+  for (const type of types) {
+    assert.ok(registry[type], type);
+  }
+  assert.deepEqual(
+    window.customCards.filter((c) => types.includes(c.type)).map((c) => c.name),
+    ["Hubinet-Ops LXC", "Hubinet-Ops LXC mini", "Hubinet-Ops VM", "Hubinet-Ops VM mini"]
+  );
+  const vmForm = registry["hubinet-ops-vm-card"].getConfigForm();
+  assert.equal(vmForm.schema[0].selector.device.filter.model, "VM");
+  assert.deepEqual(vmForm.schema.map((f) => f.name), ["device_id", "name"]);
+  const lxcForm = registry["hubinet-ops-lxc-mini-card"].getConfigForm();
+  assert.equal(lxcForm.schema[0].selector.device.filter.model, "Container");
+  assert.deepEqual(lxcForm.schema.map((f) => f.name), ["device_id", "autoremove", "name"]);
+  assert.deepEqual(registry["hubinet-ops-vm-mini-card"].getStubConfig(vmHass()), {
+    device_id: VM,
+  });
+});
+
+for (const type of ["hubinet-ops-vm-card", "hubinet-ops-vm-mini-card"]) {
+  test(`${type}: tapping CPU or RAM opens the native history only`, async () => {
+    const { calls, opened, press, armedAction } = mount(type, vmHass(), { device_id: VM });
+    await press('data-stat="cpu"');
+    await press('data-stat="ram"');
+    assert.deepEqual(opened, ["sensor.vc", "sensor.vm"]);
+    assert.deepEqual(calls, []);
+    assert.equal(armedAction(), undefined);
+  });
+}
+
+test("LXC card stat tiles open the native history too", async () => {
+  const hass = makeHass("A");
+  hass.entities = { ...ENTITIES, "sensor.cpu": entry("sensor.cpu", "container_cpu") };
+  hass.states["sensor.cpu"] = { state: "1.8", attributes: { unit_of_measurement: "%" } };
+  const { calls, opened, press } = mount("hubinet-ops-lxc-card", hass, { device_id: DEVICE });
+  await press('data-stat="cpu"');
+  assert.deepEqual(opened, ["sensor.cpu"]);
+  assert.deepEqual(calls, []);
+});
+
+test("VM card: Start runs at once, Shut down and Stop need a second tap", async () => {
+  let m = mount("hubinet-ops-vm-card", vmHass("stopped"), { device_id: VM });
+  await m.press('data-action="start"');
+  assert.deepEqual(m.calls, [["button", "press", { entity_id: "button.vstart" }]]);
+  m = mount("hubinet-ops-vm-card", vmHass(), { device_id: VM });
+  for (const [action, entity] of [
+    ["shutdown", "button.vshutdown"],
+    ["stop", "button.vstop"],
+    ["restart", "button.vrestart"],
+  ]) {
+    await m.press(`data-action="${action}"`);
+    assert.equal(m.armedAction(), action);
+    assert.equal(m.calls.length, 0);
+    await m.press(`data-action="${action}"`);
+    assert.deepEqual(m.calls.pop(), ["button", "press", { entity_id: entity }]);
+  }
+});
+
+test("VM card: Reset and Hibernate live under More and confirm", async () => {
+  const m = mount("hubinet-ops-vm-card", vmHass(), { device_id: VM });
+  assert.doesNotMatch(m.html(), /data-action="reset"/);
+  await m.press('data-action="more"');
+  assert.match(m.html(), /aria-expanded="true"/);
+  for (const [action, entity] of [
+    ["reset", "button.vreset"],
+    ["hibernate", "button.vhibernate"],
+  ]) {
+    await m.press(`data-action="${action}"`);
+    assert.equal(m.calls.length, 0);
+    await m.press(`data-action="${action}"`);
+    assert.deepEqual(m.calls.pop(), ["button", "press", { entity_id: entity }]);
+  }
+  assert.doesNotMatch(m.html(), /Pakiety|data-action="update"/);
+});
+
+test("VM mini: Shut down (confirmed) when running, Start when stopped", async () => {
+  let m = mount("hubinet-ops-vm-mini-card", vmHass(), { device_id: VM });
+  assert.doesNotMatch(m.html(), /data-role="snapshot"|data-action="stop"/);
+  await m.press('data-action="shutdown"');
+  assert.equal(m.calls.length, 0);
+  await m.press('data-action="shutdown"');
+  assert.deepEqual(m.calls, [["button", "press", { entity_id: "button.vshutdown" }]]);
+  m = mount("hubinet-ops-vm-mini-card", vmHass("stopped"), { device_id: VM });
+  assert.doesNotMatch(m.html(), /data-action="shutdown"/);
+  await m.press('data-action="start"');
+  assert.deepEqual(m.calls, [["button", "press", { entity_id: "button.vstart" }]]);
+});
+
+const lxcPackageHass = () => {
+  const hass = makeHass("A");
+  hass.entities = {
+    ...ENTITIES,
+    "sensor.pending": entry("sensor.pending", "pending_packages"),
+    "sensor.update": entry("sensor.update", "package_update_status"),
+    "button.update": entry("button.update", "package_update"),
+  };
+  Object.assign(hass.states, {
+    "sensor.pending": {
+      state: "7",
+      attributes: { scan_status: "success", last_attempt: new Date(2026, 9, 3, 4).toISOString() },
+    },
+    "sensor.update": { state: "never", attributes: {} },
+    "button.update": { state: "unknown", attributes: { device_class: "update" } },
+  });
+  return hass;
+};
+
+test("LXC mini: status, CPU/RAM and the package action only", async () => {
+  const m = mount("hubinet-ops-lxc-mini-card", lxcPackageHass(), { device_id: DEVICE });
+  assert.match(m.html(), /7 aktualizacji/);
+  assert.doesNotMatch(m.html(), /data-role="snapshot"|data-action="stop"/);
+  await m.press('data-action="update"');
+  assert.equal(m.calls[0][1], "easy_update");
+});
+
+test("a saved LXC card with compact: true renders as LXC mini", () => {
+  const legacy = mount("hubinet-ops-lxc-card", lxcPackageHass(), {
+    device_id: DEVICE,
+    compact: true,
+  });
+  const mini = mount("hubinet-ops-lxc-mini-card", lxcPackageHass(), { device_id: DEVICE });
+  assert.equal(legacy.html(), mini.html());
+  assert.deepEqual(legacy.card.getGridOptions(), { columns: 6, min_columns: 6 });
+});
+
+test("a network tile with only the upload sensor opens its history", async () => {
+  const hass = vmHass();
+  hass.entities["sensor.vout"] = vmEntry("sensor.vout", "vm_netout");
+  hass.states["sensor.vout"] = { state: "12", attributes: { unit_of_measurement: "kB/s" } };
+  const m = mount("hubinet-ops-vm-card", hass, { device_id: VM });
+  assert.match(m.html(), /<button class="stat[^"]*" data-action="history" data-stat="net"/);
+  await m.press('data-stat="net"');
+  assert.deepEqual(m.opened, ["sensor.vout"]);
+  assert.deepEqual(m.calls, []);
+});
 
 mock.reset();

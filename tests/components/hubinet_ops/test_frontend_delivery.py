@@ -10,6 +10,7 @@ from custom_components.hubinet_ops.button import (
     CONTAINER_BUTTONS,
     PACKAGE_SCAN_BUTTON,
     PACKAGE_UPDATE_BUTTON,
+    VM_BUTTONS,
 )
 from custom_components.hubinet_ops.const import INTEGRATION_VERSION
 from custom_components.hubinet_ops.frontend import (
@@ -25,6 +26,7 @@ from custom_components.hubinet_ops.sensor import (
     PACKAGE_SCAN_SENSOR,
     PACKAGE_UPDATE_SENSOR,
     UNUSED_PACKAGES_SENSOR,
+    VM_SENSORS,
 )
 from custom_components.hubinet_ops.snapshot_restore import (
     SNAPSHOT_DELETE_BUTTON,
@@ -145,38 +147,69 @@ def test_card_roles_match_integration_translation_keys() -> None:
     assert "supported_features" not in card
 
 
-def test_lxc_card_ships_with_the_easy_update_card() -> None:
-    """The LXC card loads from the same delivered module with its release query."""
+def test_guest_cards_ship_with_the_easy_update_card() -> None:
+    """The guest cards load from the delivered module with its release query."""
     card = (FRONTEND_DIRECTORY / CARD_MODULE).read_text(encoding="utf-8")
-    lxc_card = (FRONTEND_DIRECTORY / "hubinet-ops-lxc-card.js").read_text(
+    guest_cards = (FRONTEND_DIRECTORY / "hubinet-ops-guest-cards.js").read_text(
         encoding="utf-8"
     )
-    lxc_logic = (FRONTEND_DIRECTORY / "lxc-card-logic.js").read_text(encoding="utf-8")
-    assert "./hubinet-ops-lxc-card.js${new URL(import.meta.url).search}" in card
-    assert 'LXC_CARD_TYPE = "hubinet-ops-lxc-card"' in lxc_logic
-    assert 'name: "Hubinet-Ops LXC"' in lxc_card
-    assert "static getConfigForm()" in lxc_card
-    for source in (lxc_card, lxc_logic):
+    guest_logic = (FRONTEND_DIRECTORY / "guest-card-logic.js").read_text(
+        encoding="utf-8"
+    )
+    assert "./hubinet-ops-guest-cards.js${new URL(import.meta.url).search}" in card
+    for card_type in (
+        "hubinet-ops-lxc-card",
+        "hubinet-ops-lxc-mini-card",
+        "hubinet-ops-vm-card",
+        "hubinet-ops-vm-mini-card",
+    ):
+        assert f'"{card_type}"' in guest_logic
+    for name in ("LXC", "LXC mini", "VM", "VM mini"):
+        assert f'name: "Hubinet-Ops {name}"' in guest_cards
+    assert "static getConfigForm()" in guest_cards
+    for source in (guest_cards, guest_logic):
         assert "http://" not in source
         assert 'from "' not in source
         assert "unpkg" not in source
         assert "cdn" not in source
 
 
-def test_lxc_card_roles_match_integration_translation_keys() -> None:
-    """Every LXC card role names a key the container entities really define."""
-    logic = (FRONTEND_DIRECTORY / "lxc-card-logic.js").read_text(encoding="utf-8")
-    roles = re.findall(r'^  \w+: \["(\w+)", "(\w+)"\],$', logic, re.MULTILINE)
-    assert len(roles) == 16
-    defined = {
-        *(("sensor", d.translation_key) for d in CONTAINER_SENSORS),
-        *(("button", d.translation_key) for d in CONTAINER_BUTTONS),
+def _role_table(logic: str, name: str) -> set[tuple[str, str]]:
+    block = logic.split(f"export const {name} = {{", 1)[1].split("\n};", 1)[0]
+    return set(re.findall(r'^  \w+: \["(\w+)", "(\w+)"\],$', block, re.MULTILINE))
+
+
+def test_guest_card_roles_match_integration_translation_keys() -> None:
+    """Every LXC and VM card role names a key those entities really define."""
+    logic = (FRONTEND_DIRECTORY / "guest-card-logic.js").read_text(encoding="utf-8")
+    snapshots = {
         ("button", SNAPSHOT_RESTORE_BUTTON.translation_key),
         ("button", SNAPSHOT_DELETE_BUTTON.translation_key),
         ("select", SNAPSHOT_SELECT.translation_key),
     }
-    assert set(roles) <= defined
-    # Restart has no translation key; the card matches its device class.
-    restart = next(d for d in CONTAINER_BUTTONS if d.key == "restart")
-    assert restart.translation_key is None
-    assert restart.device_class == "restart"
+    lxc = _role_table(logic, "LXC_ROLES")
+    vm = _role_table(logic, "VM_ROLES")
+    assert len(lxc) == 16
+    assert len(vm) == 19
+    assert lxc <= {
+        *(("sensor", d.translation_key) for d in CONTAINER_SENSORS),
+        *(("button", d.translation_key) for d in CONTAINER_BUTTONS),
+        *snapshots,
+    }
+    assert vm <= {
+        *(("sensor", d.translation_key) for d in VM_SENSORS),
+        *(("button", d.translation_key) for d in VM_BUTTONS),
+        *snapshots,
+    }
+    # Restart has no translation key; the cards match its device class.
+    for buttons in (CONTAINER_BUTTONS, VM_BUTTONS):
+        restart = next(d for d in buttons if d.key == "restart")
+        assert restart.translation_key is None
+        assert restart.device_class == "restart"
+    # The editor filters devices by the models the integration registers.
+    entity_source = (FRONTEND_DIRECTORY.parent / "entity.py").read_text(
+        encoding="utf-8"
+    )
+    for model in ("Container", "VM"):
+        assert f'model="{model}"' in entity_source
+        assert f'model: "{model}"' in logic
