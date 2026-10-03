@@ -27,6 +27,7 @@ from .const import (
     PACKAGE_SCAN_PRIVATE_KEY,
 )
 from .coordinator import ProxmoxConfigEntry, ProxmoxCoordinator, node_device_info
+from .frontend import async_register_frontend
 from .packages.presentation import (
     clear_helper_issue,
     dismiss_cleanup_candidates,
@@ -108,8 +109,9 @@ def _read_legacy_transport_data(
 
 
 async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
-    """Expose Scan All and provision the optional managed blueprints."""
+    """Expose actions, deliver the card, and provision managed blueprints."""
     async_register_services(hass)
+    await async_register_frontend(hass)
     await async_provision_blueprints(hass)
     return True
 

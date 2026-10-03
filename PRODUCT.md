@@ -54,7 +54,8 @@ current state and [ARCHITECTURE.md](ARCHITECTURE.md) for accepted design.
 - An update requires explicit operator action.
 - The integration never initiates package cleanup by itself. Cleanup requires
   explicit operator action or the operator's opt-in post-Update Autoremove
-  choice in the optional Easy UX script.
+  (YOLO) choice saved in the Easy Update card, passed to the Easy Update action,
+  or set in the optional Easy UX script.
 - A non-empty cleanup plan must be shown to the operator and re-verified before
   cleanup mutation.
 - The operator must be able to see and review the plan before an update.
@@ -92,6 +93,22 @@ not sufficient justification.
 
 ## Optional Easy Update UX
 
+The primary Easy path is the integration-shipped **Hubinet-Ops Easy Update**
+dashboard card (owner decision for 2026.9.1.14, which supersedes the earlier "no
+custom frontend/card" product stance for this card only). The user adds it
+through Dashboard -> Add card, searches "Hubinet", chooses one LXC, optionally
+enables YOLO Autoremove, and saves. No entity mapping, YAML, or entity IDs are
+needed, and new LXCs become selectable without recreating anything. The card
+only shows existing backend facts (updates available, system current, running,
+problem, no current scan) and its tap is the explicit authorization: it calls
+the thin `hubinet_ops.easy_update` action, which confirms the exact current plan
+token and starts the existing Update. With YOLO on, Autoremove follows only the
+same successful Update, after Health stops running, with fresh positive cleanup
+evidence; the Health result itself is not a gate. Rendering a card never
+mutates anything, and a successful Update leaves the pending count unknown until
+the next Scan.
+
+The YAML composition below remains supported as an advanced alternative.
 Easy Update UX composes Home Assistant entities and actions. The integration
 ships and provisions its own blueprint templates; the user creates and enables
 their automation and script instances. One automatic Scan automation uses the

@@ -26,6 +26,13 @@ fi
   "${repo_root}/custom_components/hubinet_ops" \
   "${repo_root}/deploy/hubinet-package-scan-helper.py"
 
+# Dependency-free dashboard card logic tests (Node's built-in test runner).
+if command -v node >/dev/null 2>&1; then
+  node --test "${repo_root}"/tests/frontend/*.test.mjs
+else
+  echo "WARNING: node not found; dashboard card logic tests were NOT run" >&2
+fi
+
 cd "${core_dir}"
 PYTHONDONTWRITEBYTECODE=1 \
   PYTHONPATH="${repo_root}${PYTHONPATH:+:${PYTHONPATH}}" \

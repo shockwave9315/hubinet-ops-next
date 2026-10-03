@@ -82,21 +82,55 @@ current package evidence and review; Scan is needed after it runs again.
 
 ## Easy Update UX
 
-The optional blueprints require Home Assistant `2026.9.1` or newer and the
-Hubinet-Ops package entities. All inputs in an Update script must belong to
-**the same LXC**. The selectors list Hubinet-Ops entities; choose the specified
-Update/Autoremove buttons and package sensors by their labels. Automatic Scan
-requires no entity or LXC selection.
-
 | Profile | Scheduled Scan | Update | Autoremove after Update |
 | --- | --- | --- | --- |
-| EASY | On | One explicit script click | Off (default) |
-| YOLO | On | One explicit script click | On, with successful Update and fresh positive candidates |
+| EASY | On | One tap on the Easy Update card | Off (default) |
+| YOLO | On | One tap on the Easy Update card | On, after the same successful Update, Health finished, and fresh positive candidates |
 | MANUAL / ADVANCED | Optional | Scan -> Review -> Approve -> Update | Explicit Autoremove button |
 
 There is no backend mode. All profiles use the existing backend. Manual
-controls and Health remain available. Inspecting individual package names is
-optional; hold the example card to open Review's full exact plan.
+controls and Health remain available. The One-click Update script blueprint
+below remains supported as an advanced alternative to the card.
+
+### Easy Update card
+
+The **Hubinet-Ops Easy Update** card ships with the integration. No dashboard
+resource URL, Mushroom, YAML, or entity mapping is needed.
+
+1. Install or update Hubinet-Ops through HACS and restart Home Assistant, then
+   **refresh the browser** (or the companion app) once so the new card loads.
+2. Create the automatic Scan automation once (see below).
+3. Open a dashboard, choose **Edit -> Add card**, and search for **Hubinet**.
+4. Choose **Hubinet-Ops Easy Update**, pick **one LXC**, optionally enable
+   **YOLO** (remove unused packages after a successful update), and save.
+
+The card stores only the LXC device, so renaming entities does not break it.
+A newly created LXC becomes selectable automatically after Hubinet-Ops
+discovers it; add a card for it if you want it on the dashboard. Nothing has
+to be recreated, and the integration never edits dashboards.
+
+| Card | Meaning | Tap |
+| --- | --- | --- |
+| Amber "7 aktualizacji" | Current scan found updates (security count, scan time) | Easy Update |
+| Green "System aktualny" | Current scan found none; shows last scan | Scan again |
+| Orange "Wymagany restart" | Health reports reboot required | Scan again |
+| Blue | Update, Autoremove, Scan, or Health is running | Nothing (no duplicates) |
+| Red | Latest Update/Autoremove failed, or Health failed | Open details |
+| Grey | No current scan, failed scan, or LXC not running | Scan (if running) |
+
+Hold the card to open the LXC device page with every manual control
+(administrators; other users get the package sensor details). A tap is
+your explicit authorization: it calls `hubinet_ops.easy_update`, which confirms
+exactly the scan the card showed and starts the existing protected Update. If
+another scan became current meanwhile, it is refused; check and tap again. A
+successful Update leaves the count unknown (grey) until the next Scan. Closing
+the browser never stops a started Update, and YOLO Autoremove runs in Home
+Assistant, not in the browser. The Health result does not block YOLO; Health
+only has to finish first.
+
+Automations may call `hubinet_ops.easy_update` with `device_id`, optional
+`autoremove`, and optional `expected_scan_attempt`; updates are still never
+automatic unless you build such an automation yourself.
 
 ### Use the installed blueprints
 
@@ -108,7 +142,7 @@ optional; hold the example card to open Review's full exact plan.
    **Hubinet-Ops — automatyczny skan aktualizacji**. Configure only the daily
    time, whether to scan after HA starts, and the startup delay. Defaults are
    04:00 in HA's timezone, startup Scan enabled, and 60 seconds.
-4. Create **one script per chosen dashboard LXC** from
+4. Optional, advanced: create **one script per chosen dashboard LXC** from
    **Hubinet-Ops — aktualizacja LXC jednym kliknięciem**. Map that same LXC's
    pending-package sensor, package-update sensor, Update button, unused-packages
    sensor, and Autoremove button. Give it a recognizable name, for example
@@ -162,9 +196,10 @@ update can still exhaust it. Timeout or stopping the script stops only YAML
 orchestration; the backend operation continues, and no Autoremove is started.
 Scripts are `single` mode: another tap while one is running is ignored.
 
-### Mushroom card
+### Mushroom card (superseded)
 
-Install [Mushroom](https://github.com/piitaya/lovelace-mushroom), then copy
+The native Easy Update card above replaces this example. It remains only for
+existing setups. Install [Mushroom](https://github.com/piitaya/lovelace-mushroom), then copy
 [mushroom_easy_update.yaml](examples/dashboard/mushroom_easy_update.yaml) into
 a dashboard's manual card editor. It uses Mushroom's
 [current Template card](https://github.com/piitaya/lovelace-mushroom/blob/main/docs/cards/template.md)
