@@ -8,6 +8,36 @@ provenance in [UPSTREAM.md](UPSTREAM.md).
 
 ## Accepted architecture today
 
+### Automatic Scan option and LXC card (2026.9.1.15)
+
+On 2026-10-03, before implementation, the owner accepted two additions.
+
+**Automatic Scan as an integration option.** Each config entry (Proxmox host)
+gets an options flow with "automatic Scan" on/off (default off) and one daily
+time. When on, the entry registers one Home Assistant `async_track_time_change`
+callback at that local time; it is removed on entry unload, and changing the
+options reloads the entry. The callback requests the same per-entry Scan that
+Scan All performs, through the existing `PackageManager.async_start_scan` with
+its validation, concurrency, and stopped/busy isolation. This is the only
+accepted scheduler: a native HA time trigger with no queue, persistence, retry,
+catch-up after downtime, or state beyond the entry options. It explicitly
+supersedes the earlier "no Python scheduling" statements for this daily Scan
+only; Update and Autoremove are never scheduled. With the option in place the
+Scan automation blueprint and its provisioning are removed.
+
+**Hubinet-Ops LXC card.** A second card, `custom:hubinet-ops-lxc-card`, ships in
+the same module and is configured by one LXC Container device, an optional name,
+and `compact`. It presents existing facts only: container status and uptime,
+CPU and RAM with 24-hour sparklines read from Home Assistant history, disk and
+network when those optional sensors are enabled, the Easy Update package state,
+Health and unused packages, the native snapshot selector, and power controls. It
+invokes existing entities and actions only: Easy Update, Scan, snapshot Create,
+selecting a snapshot then pressing the existing Restore or Delete button, and
+Start, Stop, Restart. Stop, Restart, Restore, and Delete require a second tap
+within four seconds; nothing acts on render. Entities are resolved by
+`device_id`, platform, and translation key (Restart by its `restart` device
+class), never by names. Shutdown for LXC is out of scope.
+
 ### Cleanup and refresh resilience (2026.9.1.15)
 
 On 2026-10-03, before implementation, the owner decided the following. Nothing

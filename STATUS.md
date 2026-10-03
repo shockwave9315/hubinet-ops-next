@@ -321,6 +321,15 @@ Status date: 2026-10-03
   slow or failing Proxmox read during Restore no longer take every entity of
   the host offline. Package backend, helper, and protocol are unchanged.
 
+## 2026.9.1.15 automatic Scan option and LXC card
+
+- Architecture: **ACCEPTED BY OWNER BEFORE IMPLEMENTATION on 2026-10-03**; see
+  [ARCHITECTURE.md](ARCHITECTURE.md#automatic-scan-option-and-lxc-card-20269115).
+- Implementation: **NOT STARTED** at the documentation checkpoint.
+- Scope: per-host daily automatic Scan in the integration options (replacing the
+  Scan blueprint), and the Hubinet-Ops LXC card from the approved mockup with
+  second-tap confirmation for Stop, Restart, Restore, and Delete.
+
 ## Next
 
 Owner review of the 2026.9.1.14 draft pull request and live validation of the
