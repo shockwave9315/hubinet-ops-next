@@ -220,11 +220,13 @@ test("red: failed Autoremove and failed Health use backend facts", () => {
     };
   });
   assert.equal(cleanup.primary, "Usuwanie pakietów nie powiodło się");
+  assert.deepEqual(cleanup.action, { kind: "details" });
   const health = render((s) => {
     s["sensor.renamed_d"].state = "failed";
   });
   assert.equal(health.tone, "red");
   assert.equal(health.primary, "Problem z systemem (Health)");
+  assert.deepEqual(health.action, { kind: "details" });
 });
 
 test("grey: no current scan after a successful update offers Scan", () => {

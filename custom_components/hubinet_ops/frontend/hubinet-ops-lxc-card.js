@@ -32,6 +32,7 @@ const ICONS = {
   restart: "mdi:restart",
   update: "mdi:package-up",
   scan: "mdi:magnify",
+  details: "mdi:information-outline",
 };
 const ACTION_TONES = {
   create: "blue",
@@ -42,6 +43,7 @@ const ACTION_TONES = {
   restart: "orange",
   update: "amber",
   scan: "blue",
+  details: "grey",
 };
 
 const esc = (value) =>
@@ -329,11 +331,13 @@ class HubinetOpsLxcCard extends HTMLElement {
     const page = typeof document !== "undefined" ? document.activeElement : null;
     const unclaimed = !page || page === document.body || page === this;
     const selector = focused
-      ? focused.action
-        ? `[data-action="${focused.action}"]`
-        : focused.role
-          ? `[data-role="${focused.role}"]`
-          : null
+      ? focused.key
+        ? `[data-key="${focused.key}"]`
+        : focused.action
+          ? `[data-action="${focused.action}"]`
+          : focused.role
+            ? `[data-role="${focused.role}"]`
+            : null
       : unclaimed
         ? this._focusLater
         : null;
@@ -376,11 +380,11 @@ class HubinetOpsLxcCard extends HTMLElement {
     this._click({ target });
   }
 
-  _button(action, info, label, extra = "") {
+  _button(action, info, label, extra = "", key = action) {
     const s = lxc.lxcStrings(this._lang());
     const armed = this._isArmed(action);
     const tone = TONES[ACTION_TONES[action]];
-    return `<button data-action="${action}" style="--tone:${tone}" class="${armed ? "armed" : ""} ${extra}"
+    return `<button data-action="${action}" data-key="${key}" style="--tone:${tone}" class="${armed ? "armed" : ""} ${extra}"
       ${info && info.available && !this._busy ? "" : "disabled"}>
       <ha-icon icon="${ICONS[action]}"></ha-icon>${esc(armed ? s.confirm : label)}</button>`;
   }
@@ -407,7 +411,10 @@ class HubinetOpsLxcCard extends HTMLElement {
         ? this._button("update", { available: true }, s.update, "primary")
         : pkgAction === "scan"
           ? this._button("scan", { available: true }, s.scan)
-          : "";
+          : pkgAction === "details"
+            ? // Navigation only, through the same path as the header.
+              this._button("details", { available: true }, s.details, "", "package-details")
+            : "";
     const snap = view.snapshots;
     const options = snap
       ? snap.options.length
@@ -511,7 +518,8 @@ class HubinetOpsLxcCard extends HTMLElement {
     }
     const action = target.dataset.action;
     if (action === "details") {
-      if (this._held) {
+      // A hold already opened details from the header; a button never holds.
+      if (this._held && target.tagName !== "BUTTON") {
         this._held = false;
       } else {
         this._details();

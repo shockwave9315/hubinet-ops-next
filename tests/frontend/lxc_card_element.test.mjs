@@ -298,4 +298,71 @@ test("a tap acts on the shown scan, not on a newer one not yet shown", async () 
   assert.notEqual(card.shadowRoot.innerHTML, shown);
 });
 
+// Every package state whose shared view action is "details" (see
+// easy_update_logic.test.mjs) renders one Details button that only navigates.
+const DETAILS_STATES = {
+  "failed Update": (st) => {
+    st["sensor.update"] = { state: "failed", attributes: { update_status: "failed" } };
+  },
+  "failed Autoremove": (st) => {
+    st["sensor.unused"] = { state: "0", attributes: { autoremove_status: "failed" } };
+  },
+  "failed Health": (st) => {
+    st["sensor.health"] = { state: "failed", attributes: { check_status: "completed" } };
+  },
+  "updates without the package Update button": (_st, entities) => {
+    delete entities["button.update"];
+  },
+};
+
+for (const [name, mutate] of Object.entries(DETAILS_STATES)) {
+  test(`package row offers Details for ${name}, and it only navigates`, async () => {
+    const entities = {
+      ...ENTITIES,
+      "sensor.pending": entry("sensor.pending", "pending_packages"),
+      "sensor.update": entry("sensor.update", "package_update_status"),
+      "sensor.unused": entry("sensor.unused", "unused_packages"),
+      "sensor.health": entry("sensor.health", "package_health"),
+      "button.update": entry("button.update", "package_update"),
+      "button.scan": entry("button.scan", "package_scan"),
+    };
+    const hass = makeHass("A");
+    Object.assign(hass.states, {
+      "sensor.pending": {
+        state: "7",
+        attributes: { scan_status: "success", last_attempt: new Date(2026, 9, 3, 4).toISOString() },
+      },
+      "sensor.update": { state: "never", attributes: {} },
+      "sensor.unused": { state: "0", attributes: { autoremove_status: "never" } },
+      "sensor.health": { state: "unknown", attributes: { check_status: "never" } },
+      "button.update": { state: "unknown", attributes: { device_class: "update" } },
+      "button.scan": { state: "unknown", attributes: {} },
+    });
+    mutate(hass.states, entities);
+    hass.entities = entities;
+    const { card, calls, connect, armed } = setup();
+    let opened = 0;
+    card._details = () => {
+      opened += 1;
+    };
+    connect(hass);
+    const pkg = card.shadowRoot.innerHTML.split('<div class="pkg">')[1].split('<div class="section">')[0];
+    const tag = pkg.match(/<button data-action="details"[^>]*>/s);
+    assert.ok(tag, "Details button in the package row");
+    assert.doesNotMatch(tag[0], /\sdisabled[\s>]/);
+    assert.match(pkg, /Szczegóły/);
+    assert.doesNotMatch(pkg, /data-action="(update|scan)"/);
+    const target = { dataset: { action: "details" }, disabled: false, tagName: "BUTTON" };
+    target.closest = () => target;
+    for (const fn of listeners.get(card.shadowRoot).click) {
+      await fn({ target });
+    }
+    assert.equal(opened, 1, "the existing details path runs");
+    assert.deepEqual(calls, [], "no easy_update, button.press or select_option");
+    for (const action of ["stop", "restart", "restore", "delete"]) {
+      assert.equal(armed(action), false);
+    }
+  });
+}
+
 mock.reset();
