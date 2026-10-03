@@ -37,6 +37,11 @@ globalThis.customElements = {
   },
 };
 globalThis.window = globalThis;
+// Window-level pointer listeners (the card tracks a press until release).
+const windowListeners = {};
+globalThis.addEventListener = (type, fn) => (windowListeners[type] ||= new Set()).add(fn);
+globalThis.removeEventListener = (type, fn) => windowListeners[type]?.delete(fn);
+const release = () => [...(windowListeners.pointerup || [])].forEach((fn) => fn());
 globalThis.document = { documentElement: { lang: "pl" } };
 
 await import("../../custom_components/hubinet_ops/frontend/hubinet-ops-lxc-card.js");
@@ -244,6 +249,53 @@ test("RAM shows its meter and its 24 h sparkline together", async () => {
   const ram = card.shadowRoot.innerHTML.split("<small>RAM</small>")[1].split('<div class="stat')[0];
   assert.match(ram, /class="meter"/);
   assert.match(ram, /<svg /);
+});
+
+test("a tap acts on the shown scan, not on a newer one not yet shown", async () => {
+  const at = (hh) => new Date(2026, 9, 3, hh, 0).toISOString();
+  const pkg = (id, key) => entry(id, key);
+  const entities = {
+    ...ENTITIES,
+    "sensor.pending": pkg("sensor.pending", "pending_packages"),
+    "sensor.update": pkg("sensor.update", "package_update_status"),
+    "button.update": pkg("button.update", "package_update"),
+  };
+  const hassAt = (hh) => {
+    const hass = makeHass("A");
+    hass.entities = entities;
+    hass.states["sensor.pending"] = {
+      state: "7",
+      attributes: { scan_status: "success", last_attempt: at(hh) },
+    };
+    hass.states["sensor.update"] = { state: "never", attributes: {} };
+    hass.states["button.update"] = { state: "unknown", attributes: {} };
+    return hass;
+  };
+  const { card, calls, connect } = setup();
+  connect(hassAt(4));
+  const shown = card.shadowRoot.innerHTML;
+  // A pointer goes down on Update; a newer scan arrives before the click.
+  const target = { dataset: { action: "update" }, disabled: false };
+  target.closest = (selector) => (selector === "[data-action]" ? target : null);
+  for (const fn of listeners.get(card.shadowRoot).pointerdown) {
+    fn({ target });
+  }
+  connect(hassAt(6));
+  assert.equal(card.shadowRoot.innerHTML, shown, "no rebuild under a press");
+  for (const fn of listeners.get(card.shadowRoot).click) {
+    await fn({ target });
+  }
+  release();
+  assert.deepEqual(calls, [
+    [
+      "hubinet_ops",
+      "easy_update",
+      { device_id: DEVICE, autoremove: false, expected_scan_attempt: at(4) },
+    ],
+  ]);
+  // After the release the card shows the newer scan.
+  await new Promise((resolve) => setTimeout(resolve, 5));
+  assert.notEqual(card.shadowRoot.innerHTML, shown);
 });
 
 mock.reset();

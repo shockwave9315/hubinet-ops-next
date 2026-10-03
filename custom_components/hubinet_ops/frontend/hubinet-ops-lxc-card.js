@@ -188,6 +188,7 @@ class HubinetOpsLxcCard extends HTMLElement {
   disconnectedCallback() {
     // A confirmation never survives the card leaving the page.
     this._disarm();
+    this._pressing = false;
     this._signature = undefined;
   }
 
@@ -282,13 +283,16 @@ class HubinetOpsLxcCard extends HTMLElement {
       this.shadowRoot.addEventListener("keydown", (ev) => this._key(ev));
       this.shadowRoot.addEventListener("focusout", (ev) => {
         if (ev.target && ev.target.dataset && ev.target.dataset.role === "snapshot") {
-          // The snapshot list may rebuild again once it is no longer in use.
+          // The snapshot list may rebuild again once it is no longer in use;
+          // only after focus has settled, and only if the view changed.
           this._snapshotChosen = false;
-          this._signature = undefined;
-          this._render();
+          setTimeout(() => this._render(), 0);
         }
       });
-      this.shadowRoot.addEventListener("pointerdown", (ev) => this._holdStart(ev));
+      this.shadowRoot.addEventListener("pointerdown", (ev) => {
+        this._press();
+        this._holdStart(ev);
+      });
       for (const type of ["pointerup", "pointerleave", "pointercancel"]) {
         this.shadowRoot.addEventListener(type, () => clearTimeout(this._holdTimer));
       }
@@ -306,17 +310,20 @@ class HubinetOpsLxcCard extends HTMLElement {
     if (signature === this._signature) {
       return;
     }
-    // Rebuilding replaces every element: never under a snapshot list that is
-    // being used (it would close), and give focus back to the same control.
+    // Rebuilding replaces every element: never while a pointer is pressed on
+    // the card (the click would be lost) or under a snapshot list in use (it
+    // would close), and give focus back to the same control.
     const active = this.shadowRoot.activeElement;
     const focused = active && active.dataset ? active.dataset : null;
-    if (focused && focused.role === "snapshot" && !this._snapshotChosen) {
+    if (this._pressing || (focused && focused.role === "snapshot" && !this._snapshotChosen)) {
       return;
     }
     this._signature = signature;
     this.shadowRoot.innerHTML = `<style>${STYLE}</style><ha-card>${
       view.error ? `<div class="error">${esc(view.error)}</div>` : this._config.compact ? this._compact(view) : this._full(view)
     }</ha-card>`;
+    // Taps act on what the user sees, never on a newer view not yet shown.
+    this._shown = view;
     // A control disabled while an action runs gets focus back when it ends,
     // unless focus has meanwhile moved elsewhere on the page.
     const page = typeof document !== "undefined" ? document.activeElement : null;
@@ -338,6 +345,21 @@ class HubinetOpsLxcCard extends HTMLElement {
       // Kept only across one running action, never for later updates.
       this._focusLater = this._busy ? selector || undefined : undefined;
     }
+  }
+
+  // While a pointer is pressed on the card the DOM is not rebuilt, so the
+  // press still produces its click. The release may happen anywhere.
+  _press() {
+    this._pressing = true;
+    const release = () => {
+      window.removeEventListener("pointerup", release, true);
+      window.removeEventListener("pointercancel", release, true);
+      this._pressing = false;
+      // Runs after the click this press produces, never under it.
+      setTimeout(() => this._render(), 0);
+    };
+    window.addEventListener("pointerup", release, true);
+    window.addEventListener("pointercancel", release, true);
   }
 
   // Enter and Space on the header (role=button) act like a tap; native
@@ -470,13 +492,14 @@ class HubinetOpsLxcCard extends HTMLElement {
 
   async _change(ev) {
     const select = ev.target.closest("select[data-role=snapshot]");
-    if (!select || !select.value || !this._view.snapshots) {
+    const shown = this._shown;
+    if (!select || !select.value || !shown || !shown.snapshots) {
       return;
     }
     this._disarm();
     this._snapshotChosen = true;
     await this._call("select", "select_option", {
-      entity_id: this._view.snapshots.entity_id,
+      entity_id: shown.snapshots.entity_id,
       option: select.value,
     });
   }
@@ -495,7 +518,10 @@ class HubinetOpsLxcCard extends HTMLElement {
       }
       return;
     }
-    const view = this._view;
+    const view = this._shown;
+    if (!view) {
+      return;
+    }
     if (lxc.CONFIRM.has(action)) {
       const target = lxc.confirmTarget(action, view, this._config.device_id);
       if (!target) {
