@@ -100,6 +100,9 @@ def async_start_easy_update(
     coordinator, node, vmid = target.coordinator, target.node, target.vmid
     manager = coordinator.package_manager
 
+    # Like native entities and Scan All, never act on stale Proxmox data.
+    if not coordinator.last_update_success:
+        raise _invalid("easy_update_not_running")
     container = coordinator.data[node].containers.get(vmid)
     if container is None or container.get("status") != VM_CONTAINER_RUNNING:
         raise _invalid("easy_update_not_running")
@@ -170,6 +173,8 @@ def async_start_post_update_autoremove(
 
     def decide() -> bool | None:
         """Return None to keep waiting, False to stop, True to start."""
+        if not coordinator.last_update_success:
+            return False
         current = manager.update_record(node, vmid)
         if current.last_attempt != attempt:
             return False

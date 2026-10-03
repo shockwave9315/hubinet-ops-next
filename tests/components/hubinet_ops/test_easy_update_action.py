@@ -8,7 +8,7 @@ from datetime import UTC, datetime
 from unittest.mock import MagicMock, patch
 
 import pytest
-from tests.common import MockConfigEntry  # noqa: TID251
+from tests.common import MockConfigEntry, MockUser  # noqa: TID251
 
 from custom_components.hubinet_ops.const import DOMAIN
 from custom_components.hubinet_ops.packages.models import (
@@ -21,8 +21,12 @@ from custom_components.hubinet_ops.packages.models import (
     PackageUpdateOutcome,
     PackageUpdateStatus,
 )
-from homeassistant.core import HomeAssistant
-from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
+from homeassistant.core import Context, HomeAssistant
+from homeassistant.exceptions import (
+    HomeAssistantError,
+    ServiceValidationError,
+    Unauthorized,
+)
 from homeassistant.helpers import device_registry as dr, entity_registry as er
 
 from . import setup_integration
@@ -384,6 +388,113 @@ async def test_autoremove_choice_controls_only_the_continuation(
         assert update.last_attempt == manager.update_record("pve1", 200).last_attempt
     else:
         follow.assert_not_called()
+    await entered.wait()
+    release.set()
+    await hass.async_block_till_done(wait_background_tasks=True)
+
+
+async def test_stale_coordinator_data_is_rejected_without_side_effects(
+    hass: HomeAssistant,
+    mock_config_entry: MockConfigEntry,
+    package_transport_material: None,
+) -> None:
+    """A failed latest Proxmox refresh never starts Easy Update."""
+    await setup_integration(hass, mock_config_entry)
+    _seed_scan(mock_config_entry)
+    coordinator = mock_config_entry.runtime_data
+    coordinator.last_update_success = False
+    await _expect_invalid(
+        hass, _device_id(hass, "1234_container_200"), "easy_update_not_running"
+    )
+    manager = coordinator.package_manager
+    record = manager.record("pve1", 200)
+    assert record.status is PackageScanStatus.SUCCESS
+    assert record.token == TOKEN
+    assert record.reviewed is False
+    assert manager.update_record("pve1", 200).status is PackageUpdateStatus.NEVER
+
+
+UPDATE_BUTTON = "button.ct_nginx_update_packages"
+
+
+async def _expect_unauthorized(hass: HomeAssistant, user_id: str, **data) -> None:
+    with pytest.raises(Unauthorized):
+        await hass.services.async_call(
+            DOMAIN,
+            "easy_update",
+            {"device_id": _device_id(hass, "1234_container_200"), **data},
+            blocking=True,
+            context=Context(user_id=user_id),
+        )
+
+
+async def test_user_without_control_is_unauthorized_before_review(
+    hass: HomeAssistant,
+    mock_config_entry: MockConfigEntry,
+    package_transport_material: None,
+    hass_read_only_user: MockUser,
+) -> None:
+    """A restricted user needs CONTROL on the Update button; nothing changes."""
+    await setup_integration(hass, mock_config_entry)
+    _seed_scan(mock_config_entry)
+    await _expect_unauthorized(hass, hass_read_only_user.id)
+    manager = mock_config_entry.runtime_data.package_manager
+    assert manager.record("pve1", 200).reviewed is False
+    assert manager.record("pve1", 200).token == TOKEN
+    assert manager.update_record("pve1", 200).status is PackageUpdateStatus.NEVER
+
+
+async def test_autoremove_also_requires_control_on_autoremove(
+    hass: HomeAssistant,
+    mock_config_entry: MockConfigEntry,
+    package_transport_material: None,
+    blocked_plan,
+) -> None:
+    """CONTROL on Update alone allows Update, but not Update plus Autoremove."""
+    entered, release = blocked_plan
+    await setup_integration(hass, mock_config_entry)
+    _seed_scan(mock_config_entry)
+    user = MockUser().add_to_hass(hass)
+    user.mock_policy({"entities": {"entity_ids": {UPDATE_BUTTON: True}}})
+    manager = mock_config_entry.runtime_data.package_manager
+
+    await _expect_unauthorized(hass, user.id, autoremove=True)
+    assert manager.record("pve1", 200).reviewed is False
+    assert manager.update_record("pve1", 200).status is PackageUpdateStatus.NEVER
+
+    await hass.services.async_call(
+        DOMAIN,
+        "easy_update",
+        {"device_id": _device_id(hass, "1234_container_200")},
+        blocking=True,
+        context=Context(user_id=user.id),
+    )
+    assert manager.update_record("pve1", 200).status is PackageUpdateStatus.RUNNING
+    await entered.wait()
+    release.set()
+    await hass.async_block_till_done(wait_background_tasks=True)
+
+
+async def test_admin_user_is_unchanged(
+    hass: HomeAssistant,
+    mock_config_entry: MockConfigEntry,
+    package_transport_material: None,
+    hass_admin_user: MockUser,
+    blocked_plan,
+) -> None:
+    """Administrators need no per-entity policy, as before."""
+    entered, release = blocked_plan
+    await setup_integration(hass, mock_config_entry)
+    _seed_scan(mock_config_entry)
+    await hass.services.async_call(
+        DOMAIN,
+        "easy_update",
+        {"device_id": _device_id(hass, "1234_container_200"), "autoremove": True},
+        blocking=True,
+        context=Context(user_id=hass_admin_user.id),
+    )
+    manager = mock_config_entry.runtime_data.package_manager
+    assert manager.update_record("pve1", 200).status is PackageUpdateStatus.RUNNING
     await entered.wait()
     release.set()
     await hass.async_block_till_done(wait_background_tasks=True)

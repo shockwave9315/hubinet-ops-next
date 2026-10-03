@@ -50,6 +50,7 @@ class FakeCoordinator:
         self.package_manager = None
         self.data = {"pve1": SimpleNamespace(containers={200: {"status": "running"}})}
         self.permissions = {"/": {"VM.Snapshot": 1}}
+        self.last_update_success = True
 
     def async_add_listener(self, update_callback):
         """Register a no-argument listener like DataUpdateCoordinator."""
@@ -280,4 +281,22 @@ async def test_unload_cancels_the_continuation(
         assert coordinator.listeners == []
         transport.health_release.set()
         await hass.async_block_till_done()
+    assert transport.autoremove_calls == 0
+
+
+async def test_stale_coordinator_data_ends_the_follower(
+    hass: HomeAssistant, mock_config_entry: MockConfigEntry
+) -> None:
+    """A failed Proxmox refresh stops YOLO, like unavailable blueprint entities."""
+    transport = _held_health()
+    with _patched():
+        manager, coordinator = await _updated(hass, mock_config_entry, transport)
+        await transport.health_entered.wait()
+        assert manager.update_record("pve1", 200).status is PackageUpdateStatus.SUCCESS
+        coordinator.last_update_success = False
+        coordinator.notify()
+        await asyncio.sleep(0)
+        assert coordinator.listeners == []
+        transport.health_release.set()
+        await _finish(hass)
     assert transport.autoremove_calls == 0

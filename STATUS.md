@@ -285,6 +285,17 @@ Status date: 2026-10-03
   Restore/Snapshot Delete code failed identically on untouched `3bc525c` there.
   Ruff, translation/release parity, ShellCheck, and a headless-Chromium card
   smoke test passed.
+- Final-review fix-set: **two confirmed findings closed**. (B, P2) Easy Update
+  start and the YOLO follower now stop when the latest coordinator refresh
+  failed (`last_update_success` false), like native entities, the blueprint, and
+  Scan All; start is refused with `easy_update_not_running` before any review.
+  (A, P3) For a non-admin user the action requires `POLICY_CONTROL` on the
+  target's existing Update button, plus the Autoremove button when
+  `autoremove` is true, resolved by stable unique ID, before any review or
+  Update; system context and administrators are unchanged. Five regression
+  tests added (905 Python tests total). Cloud-container run after the fix:
+  860 passed, the same 45 container-only baseline failures; 13/13 Node card
+  tests; Ruff and `git diff --check` passed.
 - Live Home Assistant validation of the card (HACS install, card picker, states,
   Easy Update with and without YOLO): **NOT YET PERFORMED**.
 - Accepted scope: the `hubinet_ops.easy_update` action with an exact `device_id`
