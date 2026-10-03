@@ -108,3 +108,12 @@ read failures now report the failed request and
 Proxmox error (`api_read_failed`) instead of upstream's `no_nodes_found`. The
 change exists because a live LXC Restore made Proxmox answer slowly or with an
 error and upstream then marked every entity of the host unavailable.
+
+Release 2026.9.1.16 (owner decision) changes one more line of the
+upstream-derived coordinator's setup: a `requests` `ConnectionError` during the
+setup probe raises `UpdateFailed` (`cannot_connect`), as the refresh already
+does, instead of upstream's permanent `ConfigEntryError`. Home Assistant then
+keeps the entry in `SETUP_RETRY` and retries setup itself; upstream left the
+entry failed until a manual reload after one dropped connection. `SSLError`
+(still `ConfigEntryError`), `ConnectTimeout`, authentication, permission, and
+node 4xx handling are unchanged.

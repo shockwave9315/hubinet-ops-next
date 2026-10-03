@@ -237,8 +237,13 @@ async def test_invalid_stored_package_trust_does_not_block_native_setup(
         ),
         (
             requests.exceptions.ConnectionError("Connection refused"),
-            ConfigEntryState.SETUP_ERROR,
+            ConfigEntryState.SETUP_RETRY,
             "access.permissions.get",
+        ),
+        (
+            requests.exceptions.ConnectionError("Connection refused"),
+            ConfigEntryState.SETUP_RETRY,
+            "nodes.get",
         ),
         (
             ProxmoxPermissionsError("Failed to retrieve permissions"),
@@ -259,7 +264,8 @@ async def test_invalid_stored_package_trust_does_not_block_native_setup(
         "resource_exception_permissions_500",
         "resource_exception_nodes_403",
         "resource_exception_nodes_500",
-        "connection_error",
+        "connection_error_permissions",
+        "connection_error_nodes",
         "permissions_error",
         "nodes_not_found",
     ],
@@ -700,3 +706,25 @@ async def test_stale_devices_removed(
     assert device_registry.async_get_device_by_identifier(
         (DOMAIN, f"{entry_id}_vm_101"), entry_id
     )
+
+
+async def test_setup_connection_error_recovers_on_retry(
+    hass: HomeAssistant,
+    mock_proxmox_client: MagicMock,
+    mock_config_entry: MockConfigEntry,
+    freezer: FrozenDateTimeFactory,
+) -> None:
+    """One dropped connection at setup retries instead of failing the entry."""
+    permissions = mock_proxmox_client.access.permissions.get
+    working = permissions.return_value
+    permissions.side_effect = requests.exceptions.ConnectionError("pveproxy restart")
+
+    await setup_integration(hass, mock_config_entry)
+    assert mock_config_entry.state is ConfigEntryState.SETUP_RETRY
+
+    permissions.side_effect = None
+    permissions.return_value = working
+    freezer.tick(6)
+    async_fire_time_changed(hass)
+    await hass.async_block_till_done(wait_background_tasks=True)
+    assert mock_config_entry.state is ConfigEntryState.LOADED

@@ -350,7 +350,10 @@ Scan All remains.
 
 - Architecture: **ACCEPTED BY OWNER BEFORE IMPLEMENTATION on 2026-10-03**; see
   [ARCHITECTURE.md](ARCHITECTURE.md#setup-connection-resilience-20269116).
-- Implementation: **NOT STARTED** at the documentation checkpoint.
+- Implementation: **IMPLEMENTED IN THIS PR**. Documentation checkpoint:
+  `011d735`. `coordinator.py` maps a setup-time `ConnectionError` to
+  `UpdateFailed`; tests cover the permissions and nodes probes (`SETUP_RETRY`)
+  and recovery to `LOADED` on Home Assistant's retry.
 - Scope: a setup-time `requests` `ConnectionError` retries setup
   (`SETUP_RETRY`) instead of failing the entry permanently. Owner-approved
   divergence from upstream, recorded in UPSTREAM.md.
