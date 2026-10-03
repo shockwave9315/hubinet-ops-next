@@ -8,6 +8,39 @@ provenance in [UPSTREAM.md](UPSTREAM.md).
 
 ## Accepted architecture today
 
+### Cleanup and refresh resilience (2026.9.1.15)
+
+On 2026-10-03, before implementation, the owner decided the following. Nothing
+has been released to other users, so backward compatibility for the removed
+artifacts is not required.
+
+- **One-click Update script blueprint removed.** The Easy Update card is the
+  only Easy path. The blueprint source, its provisioning, the Mushroom example,
+  and their documentation are removed. Provisioning deletes only its own
+  previously managed copy at
+  `blueprints/script/hubinet_ops/hubinet_ops_one_click_update.yaml` and resets
+  the script blueprint cache; no other file is searched or touched. The Scan
+  automation blueprint stays until the planned integration-owned automatic Scan
+  replaces it.
+- **Card shows missing data honestly.** The Easy Update card distinguishes a
+  stopped LXC (native container status `stopped`/`suspended`) from missing
+  current Proxmox data (entities unavailable because the latest refresh failed)
+  and shows the latter as "no current data from Proxmox", never as "LXC is not
+  running".
+- **Refresh resilience (owner-approved divergence from upstream `proxmoxve`).**
+  A live Restore made one refresh take 22 s and an earlier one fail with an
+  HTTP error, which upstream reports as `no_nodes_found` and which makes every
+  entity of the host unavailable until the next poll. The coordinator therefore
+  retries one failed read once after a short delay when the failure is a
+  server-side error (HTTP 5xx) or a read timeout; never for 4xx. When the node's
+  storage or backup read still fails, that node keeps its previous storage and
+  backup values for this refresh instead of failing the whole host; those are
+  informational and dropping them would delete storage devices. When the node
+  list, VM list, or LXC list still fails, the refresh fails as before, because
+  presenting old guest lists as current would violate current-truth rules; the
+  error now names the failed request and the Proxmox status instead of "no
+  active nodes". No cache, queue, background retry, or new state is added.
+
 ### Easy Update card and action (Variant C, 2026.9.1.14)
 
 On 2026-10-03, before implementation, the owner explicitly accepted Variant C:

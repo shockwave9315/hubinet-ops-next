@@ -309,6 +309,16 @@ Status date: 2026-10-03
   Scan All are unchanged. The One-click Update blueprint stays as an advanced
   alternative.
 
+## 2026.9.1.15 cleanup and refresh resilience
+
+- Architecture: **ACCEPTED BY OWNER BEFORE IMPLEMENTATION on 2026-10-03**; see
+  [ARCHITECTURE.md](ARCHITECTURE.md#cleanup-and-refresh-resilience-20269115).
+- Implementation: **NOT STARTED** at the documentation checkpoint.
+- Scope: remove the One-click Update script blueprint and Mushroom example,
+  show "no current data from Proxmox" in the Easy Update card, and make one
+  slow or failing Proxmox read during Restore no longer take every entity of
+  the host offline. Package backend, helper, and protocol are unchanged.
+
 ## Next
 
 Owner review of the 2026.9.1.14 draft pull request and live validation of the
