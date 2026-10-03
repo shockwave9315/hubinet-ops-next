@@ -768,6 +768,10 @@
           "name": "LXC",
           "description": "The Hubinet-Ops LXC container device to update."
         },
+        "autoremove": {
+          "name": "YOLO Autoremove",
+          "description": "After this Update succeeds and Health is no longer running, remove fresh unused-package candidates with the existing safe Autoremove. The Health result is not a gate."
+        },
         "expected_scan_attempt": {
           "name": "Expected scan",
           "description": "Optional last_attempt of the scan the user saw; the update is refused if a different scan is current."

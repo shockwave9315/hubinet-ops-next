@@ -31,6 +31,11 @@ easy_update:
           filter:
             - integration: hubinet_ops
               model: Container
+    autoremove:
+      required: false
+      default: false
+      selector:
+        boolean:
     expected_scan_attempt:
       required: false
       selector:

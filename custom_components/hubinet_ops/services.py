@@ -9,17 +9,19 @@ from homeassistant.core import HomeAssistant, ServiceCall, callback
 from homeassistant.helpers import config_validation as cv
 
 from .const import DOMAIN, VM_CONTAINER_RUNNING
-from .easy_update import async_start_easy_update
+from .easy_update import async_start_easy_update, async_start_post_update_autoremove
 from .packages.models import PackageScanError
 
 _LOGGER = logging.getLogger(__name__)
 SERVICE_SCAN_ALL_PACKAGES = "scan_all_packages"
 SERVICE_EASY_UPDATE = "easy_update"
 ATTR_DEVICE_ID = "device_id"
+ATTR_AUTOREMOVE = "autoremove"
 ATTR_EXPECTED_SCAN_ATTEMPT = "expected_scan_attempt"
 EASY_UPDATE_SCHEMA = vol.Schema(
     {
         vol.Required(ATTR_DEVICE_ID): cv.string,
+        vol.Optional(ATTR_AUTOREMOVE, default=False): cv.boolean,
         vol.Optional(ATTR_EXPECTED_SCAN_ATTEMPT): cv.string,
     }
 )
@@ -63,11 +65,13 @@ def async_register_services(hass: HomeAssistant) -> None:
 
     @callback
     def easy_update(call: ServiceCall) -> None:
-        async_start_easy_update(
+        target, update = async_start_easy_update(
             hass,
             call.data[ATTR_DEVICE_ID],
             expected_scan_attempt=call.data.get(ATTR_EXPECTED_SCAN_ATTEMPT),
         )
+        if call.data[ATTR_AUTOREMOVE]:
+            async_start_post_update_autoremove(hass, target, update)
 
     hass.services.async_register(
         DOMAIN, SERVICE_EASY_UPDATE, easy_update, schema=EASY_UPDATE_SCHEMA

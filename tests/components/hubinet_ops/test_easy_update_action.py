@@ -97,7 +97,9 @@ async def test_device_resolves_to_exact_lxc_and_starts_existing_update(
     await setup_integration(hass, mock_config_entry)
     _seed_scan(mock_config_entry)
     manager = mock_config_entry.runtime_data.package_manager
-    with patch.object(manager, "confirm_review", wraps=manager.confirm_review) as confirm:
+    with patch.object(
+        manager, "confirm_review", wraps=manager.confirm_review
+    ) as confirm:
         await _easy_update(
             hass,
             _device_id(hass, "1234_container_200"),
@@ -238,7 +240,10 @@ async def test_empty_scan_is_rejected(
     await _expect_invalid(
         hass, _device_id(hass, "1234_container_200"), "easy_update_nothing_to_update"
     )
-    assert mock_config_entry.runtime_data.package_manager.record("pve1", 200).reviewed is False
+    assert (
+        mock_config_entry.runtime_data.package_manager.record("pve1", 200).reviewed
+        is False
+    )
 
 
 async def test_changed_scan_never_authorizes_the_new_plan(
@@ -347,6 +352,38 @@ async def test_device_identity_survives_entity_rename(
     await _easy_update(hass, device_id)
     manager = mock_config_entry.runtime_data.package_manager
     assert manager.update_record("pve1", 200).status is PackageUpdateStatus.RUNNING
+    await entered.wait()
+    release.set()
+    await hass.async_block_till_done(wait_background_tasks=True)
+
+
+@pytest.mark.parametrize("autoremove", [False, True])
+async def test_autoremove_choice_controls_only_the_continuation(
+    hass: HomeAssistant,
+    mock_config_entry: MockConfigEntry,
+    package_transport_material: None,
+    blocked_plan,
+    autoremove: bool,
+) -> None:
+    """YOLO off starts no continuation; YOLO on binds to this exact attempt."""
+    entered, release = blocked_plan
+    await setup_integration(hass, mock_config_entry)
+    _seed_scan(mock_config_entry)
+    with patch(
+        "custom_components.hubinet_ops.services.async_start_post_update_autoremove"
+    ) as follow:
+        await _easy_update(
+            hass, _device_id(hass, "1234_container_200"), autoremove=autoremove
+        )
+    manager = mock_config_entry.runtime_data.package_manager
+    if autoremove:
+        follow.assert_called_once()
+        _hass, target, update = follow.call_args.args
+        assert (target.node, target.vmid) == ("pve1", 200)
+        assert target.entry is mock_config_entry
+        assert update.last_attempt == manager.update_record("pve1", 200).last_attempt
+    else:
+        follow.assert_not_called()
     await entered.wait()
     release.set()
     await hass.async_block_till_done(wait_background_tasks=True)

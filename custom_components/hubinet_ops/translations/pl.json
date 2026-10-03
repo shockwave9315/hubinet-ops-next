@@ -768,6 +768,10 @@
           "name": "LXC",
           "description": "Urządzenie kontenera LXC Hubinet-Ops do aktualizacji."
         },
+        "autoremove": {
+          "name": "YOLO Autoremove",
+          "description": "Po udanej aktualizacji i zakończeniu Health usuwa świeżo wykryte nieużywane pakiety istniejącym bezpiecznym Autoremove. Wynik Health nie blokuje tego kroku."
+        },
         "expected_scan_attempt": {
           "name": "Oczekiwany skan",
           "description": "Opcjonalny last_attempt skanu widzianego przez użytkownika; aktualizacja zostanie odrzucona, jeśli bieżący jest inny skan."

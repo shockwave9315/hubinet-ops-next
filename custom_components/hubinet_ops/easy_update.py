@@ -6,7 +6,9 @@ token and starts the existing Update in one synchronous event-loop callback. It
 adds no package state: ``PackageManager`` stays authoritative for every check.
 """
 
+import asyncio
 from dataclasses import dataclass
+import logging
 
 from homeassistant.config_entries import ConfigEntryState
 from homeassistant.core import HomeAssistant, callback
@@ -23,6 +25,10 @@ from .packages.models import (
     PackageUpdateRecord,
     PackageUpdateStatus,
 )
+
+_LOGGER = logging.getLogger(__name__)
+# Shared observation bound, as in the One-click Update blueprint's YOLO branch.
+AUTOREMOVE_OBSERVATION_SECONDS = 3600
 
 
 @dataclass(frozen=True, slots=True)
@@ -72,7 +78,9 @@ def async_resolve_target(hass: HomeAssistant, device_id: str) -> EasyUpdateTarge
         for vmid in node_data.containers:
             # The same identifier the upstream-derived container entities use.
             if (DOMAIN, f"{entry.entry_id}_container_{vmid}") in device.identifiers:
-                return EasyUpdateTarget(entry, coordinator, node_data.node["node"], vmid)
+                return EasyUpdateTarget(
+                    entry, coordinator, node_data.node["node"], vmid
+                )
     raise _invalid("easy_update_not_package_lxc")
 
 
@@ -141,3 +149,97 @@ def async_start_easy_update(
     except PackageUpdateError as err:
         raise _rejected(str(err)) from err
     return target, manager.update_record(node, vmid)
+
+
+@callback
+def async_start_post_update_autoremove(
+    hass: HomeAssistant, target: EasyUpdateTarget, update: PackageUpdateRecord
+) -> None:
+    """Optionally follow one accepted Update with the existing Autoremove.
+
+    This is the blueprint's YOLO ``wait_template`` in Python: one bounded,
+    ephemeral, entry-tracked wait bound to the exact Update attempt. Health
+    only has to stop running; its result is not a gate. Every other check
+    stays in ``async_start_autoremove``.
+    """
+    coordinator, node, vmid = target.coordinator, target.node, target.vmid
+    manager = coordinator.package_manager
+    attempt = update.last_attempt
+    if attempt is None:
+        return
+
+    def decide() -> bool | None:
+        """Return None to keep waiting, False to stop, True to start."""
+        current = manager.update_record(node, vmid)
+        if current.last_attempt != attempt:
+            return False
+        if current.status is PackageUpdateStatus.RUNNING:
+            return None
+        if current.status is not PackageUpdateStatus.SUCCESS:
+            return False
+        evidence = manager.cleanup_evidence(node, vmid)
+        if (
+            evidence is None
+            or not evidence.candidates
+            or evidence.observed_at < attempt
+            or manager.restore_reserved(node, vmid)
+        ):
+            return False
+        if (
+            manager.health_record(node, vmid).check_status is HealthCheckStatus.RUNNING
+            or manager.record(node, vmid).status is PackageScanStatus.RUNNING
+            or manager.cleanup_record(node, vmid).status is PackageUpdateStatus.RUNNING
+        ):
+            return None
+        node_data = (coordinator.data or {}).get(node)
+        container = node_data.containers.get(vmid) if node_data is not None else None
+        return (
+            container is not None
+            and container.get("status") == VM_CONTAINER_RUNNING
+            and is_granted(
+                coordinator.permissions,
+                p_type="vms",
+                p_id=vmid,
+                permission=ProxmoxPermission.SNAPSHOT,
+            )
+        )
+
+    async def follow() -> None:
+        wake = asyncio.Event()
+        remove_listener = coordinator.async_add_listener(wake.set)
+        try:
+            async with asyncio.timeout(AUTOREMOVE_OBSERVATION_SECONDS):
+                while True:
+                    wake.clear()
+                    decision = decide()
+                    if decision is not None:
+                        break
+                    await wake.wait()
+        except TimeoutError:
+            _LOGGER.info(
+                "Easy Update did not start Autoremove for %s/%s: observation "
+                "time ended",
+                node,
+                vmid,
+            )
+            return
+        finally:
+            remove_listener()
+        if not decision:
+            _LOGGER.debug("Easy Update skipped Autoremove for %s/%s", node, vmid)
+            return
+        try:
+            manager.async_start_autoremove(
+                node, vmid, target_is_running=True, snapshot_permission=True
+            )
+        except PackageUpdateError as err:
+            _LOGGER.info(
+                "Easy Update Autoremove for %s/%s was not started: %s",
+                node,
+                vmid,
+                err,
+            )
+
+    target.entry.async_create_background_task(
+        hass, follow(), f"easy update autoremove {node}/{vmid}"
+    )
