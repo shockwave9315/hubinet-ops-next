@@ -12,10 +12,10 @@ Status date: 2026-10-03
   subsystem, guided fresh-install enrollment, native snapshot Restore, and
   native snapshot Create observation and explicit native Delete documented in
   [ARCHITECTURE.md](ARCHITECTURE.md).
-- Integration on `main`: `2026.9.1.13`, helper v5, protocol v1.
+- Integration after merge: `2026.9.1.14`, helper v5, protocol v1.
 - Latest tagged release: `2026.9.1.13` (merged PR #18, main commit
   `3bc525cad3d107fc77436b76fd876ba36172da9f`).
-- Next target: `2026.9.1.14` Easy Update card and action (see below).
+- Starting merged baseline for 2026.9.1.14: main `3bc525c`.
 - Git history is authoritative for the eventual feature merge SHA.
 
 ## Merged
@@ -267,7 +267,19 @@ Status date: 2026-10-03
   see [ARCHITECTURE.md](ARCHITECTURE.md#easy-update-card-and-action-variant-c-20269114).
   The decision explicitly supersedes the earlier "no custom frontend / no custom
   card / no custom target resolver" statements for this card and action only.
-- Implementation: **NOT STARTED** at the documentation checkpoint.
+- Implementation: **IMPLEMENTED / DRAFT PR FOR OWNER REVIEW**. Pre-implementation
+  documentation checkpoint: `7d38bf8`. Implemented in the accepted order: the
+  action without YOLO, the YOLO continuation, frontend delivery, then the card.
+- One recorded refinement of the checkpoint: the manifest lists `frontend` and
+  `http` as `after_dependencies` instead of hard dependencies. Both are
+  stage-0 default integrations; a hard dependency would only force the
+  frontend package into every test without changing runtime behavior.
+- Validation in this environment: **40 new Python tests and 13 card logic
+  tests passed**; full `scripts/test.sh`: **855 passed and 45 failed, the same
+  45 failures as the untouched `3bc525c` baseline in this container** (Restore,
+  Snapshot Delete, and three other background-task timing assertions in
+  unchanged code; see the pull request). Ruff, translation/release parity,
+  ShellCheck, and a headless-Chromium card smoke test passed.
 - Accepted scope: the `hubinet_ops.easy_update` action with an exact `device_id`
   target, synchronous confirm-and-start over existing `PackageManager` entry
   points, an optional bounded YOLO Autoremove continuation with the unchanged
@@ -281,9 +293,9 @@ Status date: 2026-10-03
 
 ## Next
 
-Implement 2026.9.1.14 in the accepted order: `easy_update` without YOLO, the
-YOLO continuation, frontend delivery, the card, then full validation and a draft
-pull request for owner review.
+Owner review of the 2026.9.1.14 draft pull request and live validation of the
+card on a real Home Assistant installation. No merge, tag, or release is
+performed by this task.
 
 ## Explicitly not started
 

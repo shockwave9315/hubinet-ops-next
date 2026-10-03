@@ -105,6 +105,10 @@ with backend rejection; a reused VMID can restore the same `device_id` and the
 card then shows the new LXC with fresh state; a start rejected after
 confirmation leaves the same exact plan reviewed, as with the blueprint.
 
+The pre-implementation documentation checkpoint is commit `7d38bf8`. The
+implementation lives in the fork-owned `easy_update.py`, `services.py`,
+`frontend.py`, and `frontend/`.
+
 ### Easy UX delivery and Scan All (2026.9.1.13)
 
 The owner explicitly accepted this narrow correction before implementation.
