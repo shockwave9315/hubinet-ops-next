@@ -12,10 +12,12 @@ Status date: 2026-10-03
   subsystem, guided fresh-install enrollment, native snapshot Restore, and
   native snapshot Create observation and explicit native Delete documented in
   [ARCHITECTURE.md](ARCHITECTURE.md).
-- Integration after merge: `2026.9.1.16`, helper v5, protocol v1.
+- Integration after merge: `2026.9.1.17`, helper v5, protocol v1.
 - Latest tagged release: `2026.9.1.15` (merged PR #20, main commit
   `b865968`); the owner reported the post-merge live tests passed.
 - Starting merged baseline for 2026.9.1.16: main `b865968`.
+- `2026.9.1.16` merged in PR #21 (main `0409d76`), not yet tagged.
+- Starting merged baseline for 2026.9.1.17: main `0409d76`.
 - Git history is authoritative for the eventual feature merge SHA.
 
 ## Merged
@@ -350,7 +352,7 @@ Scan All remains.
 
 - Architecture: **ACCEPTED BY OWNER BEFORE IMPLEMENTATION on 2026-10-03**; see
   [ARCHITECTURE.md](ARCHITECTURE.md#setup-connection-resilience-20269116).
-- Implementation: **IMPLEMENTED IN THIS PR**. Documentation checkpoint:
+- Implementation: **MERGED IN PR #21**. Documentation checkpoint:
   `011d735`. `coordinator.py` maps a setup-time `ConnectionError`, and a
   `SSLError` caused by `ssl.SSLEOFError` (TLS handshake cut off), to
   `UpdateFailed`; certificate verification and other TLS errors stay
@@ -363,10 +365,22 @@ Scan All remains.
   `/access/ticket` 5xx reported as `AuthenticationError` is a known residual
   upstream risk, not changed.
 
+## 2026.9.1.17 VM card, mini cards, and stat history
+
+- Architecture: **ACCEPTED BY OWNER BEFORE IMPLEMENTATION on 2026-10-03** (from
+  the approved mockup); see
+  [ARCHITECTURE.md](ARCHITECTURE.md#vm-card-mini-cards-and-stat-history-20269117).
+- Implementation: **NOT STARTED** at the documentation checkpoint.
+- Scope: the VM card and the LXC/VM mini cards on one shared implementation,
+  and tapping a stat tile to open the native history; frontend only. Pause,
+  Resume, and `qmpstatus` are deferred.
+
 ## Next
 
-Tag and release of `2026.9.1.16` after merge.
+Tag `2026.9.1.16` (main `0409d76`); after this PR merges, tag and release
+`2026.9.1.17` and validate the new cards live.
 
 ## Explicitly not started
 
-- Tag and release of `2026.9.1.16`.
+- Tags and releases of `2026.9.1.16` and `2026.9.1.17`.
+- Pause and Resume in the VM card, and reading `qmpstatus`.

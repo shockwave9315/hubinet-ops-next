@@ -8,6 +8,43 @@ provenance in [UPSTREAM.md](UPSTREAM.md).
 
 ## Accepted architecture today
 
+### VM card, mini cards, and stat history (2026.9.1.17)
+
+On 2026-10-03, before implementation, the owner accepted the mockup for these
+frontend additions. They present and invoke existing entities only; there is no
+backend, entity, or action change.
+
+**Four guest cards from one implementation.** The card picker offers
+`custom:hubinet-ops-lxc-card`, `custom:hubinet-ops-lxc-mini-card`,
+`custom:hubinet-ops-vm-card`, and `custom:hubinet-ops-vm-mini-card` (plus the
+unchanged Easy Update card). They share one element and one logic module with a
+role table per guest kind; every card resolves entities by the configured
+`device_id`, platform, and translation key (Restart by its `restart` device
+class), never by names. The editor filters devices by integration and model
+(`Container` or `VM`).
+
+**VM card.** Status and uptime; CPU and RAM with 24-hour sparklines, disk and
+network when those optional sensors are enabled; the native snapshot selector
+with Create, Restore, and Delete; power with Start, Shut down (ACPI), Stop
+(hard), and Restart, and under "More" Reset and Hibernate. There is no package
+section: package updates exist only for LXC. Pause and Resume, and reading
+`qmpstatus` to show a paused VM, are deferred to a later stage, because Proxmox
+reports a paused VM as `running`.
+
+**Confirmation.** Shut down, Stop, Restart, Reset, Hibernate, Restore, and
+Delete need a second tap on the same target within four seconds, with the
+existing confirmation semantics; Start and Create run on the first tap.
+
+**Mini cards.** Status, CPU and RAM, and one action: on LXC mini the package
+row's action (Update, Scan, or Details, from the shared Easy Update view); on VM
+mini Start when stopped or Shut down (confirmed) when running. The previous
+`compact` option of the LXC card leaves the editor; saved cards with
+`compact: true` render as the LXC mini card.
+
+**Stat history.** Tapping a CPU, RAM, disk, or network tile, or pressing Enter
+or Space on it, opens Home Assistant's native more-info dialog for that sensor,
+which shows its history. It is navigation only and never calls a service.
+
 ### Setup connection resilience (2026.9.1.16)
 
 On 2026-10-03 the owner decided this divergence from upstream `proxmoxve`.
