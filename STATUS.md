@@ -305,7 +305,7 @@ Scan All remains.
 - Live Home Assistant validation: the owner live-tested the released card
   (card picker, editor, states); that live run also surfaced the Restore
   refresh failure fixed in 2026.9.1.15. A live Easy Update with and without
-  YOLO is **not recorded here** (owner to confirm).
+  YOLO was **not performed**; it moves to the 2026.9.1.15 live validation.
 - Accepted scope: the `hubinet_ops.easy_update` action with an exact `device_id`
   target, synchronous confirm-and-start over existing `PackageManager` entry
   points, an optional bounded YOLO Autoremove continuation with the unchanged
@@ -347,8 +347,9 @@ Scan All remains.
 
 ## Next
 
-Tag and release of `2026.9.1.15`, then live validation of the automatic Scan
-option and the LXC card on a real Home Assistant installation.
+Tag and release of `2026.9.1.15`, then live validation on a real Home
+Assistant installation of the automatic Scan option, the LXC card, and a live
+Easy Update with and without YOLO.
 
 ## Explicitly not started
 
