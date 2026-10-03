@@ -4,6 +4,19 @@
 // facts and calls existing actions. A user click is the only authorization;
 // rendering never mutates anything.
 
+// Home Assistant imports this module in parallel with its own app bundle, which
+// may install a scoped custom-element registry polyfill. That polyfill replaces
+// window.customElements, and elements defined before it are invisible to Home
+// Assistant ("Custom element doesn't exist", endless spinner in the card
+// picker). So nothing is declared or defined until the app has defined its own
+// <home-assistant> element; the polyfill is installed by then. The guest cards
+// module is imported below, after this point. A fallback keeps the cards usable
+// on a page that never defines <home-assistant>.
+await Promise.race([
+  customElements.whenDefined("home-assistant"),
+  new Promise((resolve) => setTimeout(resolve, 10000)),
+]);
+
 // Load the logic module with this module's own release query so a cached
 // copy from an older release is never combined with a newer card.
 const logic = await import(
