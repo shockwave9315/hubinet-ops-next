@@ -8,6 +8,25 @@ provenance in [UPSTREAM.md](UPSTREAM.md).
 
 ## Accepted architecture today
 
+### Setup connection resilience (2026.9.1.16)
+
+On 2026-10-03 the owner decided this divergence from upstream `proxmoxve`.
+Upstream maps a `requests` `ConnectionError` during entry setup (the
+`access/permissions` and `nodes` probe in `_init_proxmox`) to
+`ConfigEntryError`, a permanent setup error: one dropped connection, for
+example during a `pveproxy` restart or a short network outage, leaves the
+entry failed until a manual reload. Saving the automatic Scan options reloads
+the entry, which makes that easy to hit.
+
+A setup-time `ConnectionError` is therefore mapped to `UpdateFailed` with the
+existing `cannot_connect` translation, exactly as the refresh already does, so
+Home Assistant keeps the entry in `SETUP_RETRY` and retries setup itself. The
+subclasses handled before it keep their behavior: `SSLError` stays a permanent
+`ConfigEntryError` (a certificate problem needs the user) and `ConnectTimeout`
+already retries. Authentication, permission, and node 4xx outcomes are
+unchanged. No retry loop, delay, cache, or state is added; Home Assistant's
+own setup retry is the only retry.
+
 ### Automatic Scan option and LXC card (2026.9.1.15)
 
 On 2026-10-03, before implementation, the owner accepted two additions.
