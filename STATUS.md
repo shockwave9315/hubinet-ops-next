@@ -214,6 +214,9 @@ Status date: 2026-10-03
 
 ## 2026.9.1.12 Easy Update UX
 
+Historical record: the blueprints and Mushroom example below were removed in
+2026.9.1.15.
+
 - Architecture: **ACCEPTED BY MAINTAINER BEFORE IMPLEMENTATION**; optional
   HA YAML composition over existing entities and entity actions only.
 - Implementation: **MERGED IN PR #17 / RELEASED AS 2026.9.1.12**. Documentation checkpoint:
@@ -233,6 +236,9 @@ Status date: 2026-10-03
 - Release target: `2026.9.1.12`.
 
 ## 2026.9.1.13 Easy UX delivery + Scan All
+
+Historical record: blueprint provisioning below was removed in 2026.9.1.15;
+Scan All remains.
 
 - Architecture: **ACCEPTED BY OWNER BEFORE IMPLEMENTATION**, as explicitly
   directed for this task; see [ARCHITECTURE.md](ARCHITECTURE.md).
@@ -296,8 +302,10 @@ Status date: 2026-10-03
   tests added (905 Python tests total). Cloud-container run after the fix:
   860 passed, the same 45 container-only baseline failures; 13/13 Node card
   tests; Ruff and `git diff --check` passed.
-- Live Home Assistant validation of the card (HACS install, card picker, states,
-  Easy Update with and without YOLO): **NOT YET PERFORMED**.
+- Live Home Assistant validation: the owner live-tested the released card
+  (card picker, editor, states); that live run also surfaced the Restore
+  refresh failure fixed in 2026.9.1.15. A live Easy Update with and without
+  YOLO is **not recorded here** (owner to confirm).
 - Accepted scope: the `hubinet_ops.easy_update` action with an exact `device_id`
   target, synchronous confirm-and-start over existing `PackageManager` entry
   points, an optional bounded YOLO Autoremove continuation with the unchanged
@@ -306,15 +314,14 @@ Status date: 2026-10-03
   delivery without a manual dashboard resource, and the Hubinet-Ops Easy Update
   card configured by one LXC device.
 - Package backend delta: **NONE**; `packages/*`, helper v5, protocol v1, and
-  Scan All are unchanged. The One-click Update blueprint stays as an advanced
-  alternative.
+  Scan All are unchanged. The One-click Update blueprint stayed as an advanced
+  alternative (removed in 2026.9.1.15).
 
 ## 2026.9.1.15 cleanup and refresh resilience
 
 - Architecture: **ACCEPTED BY OWNER BEFORE IMPLEMENTATION on 2026-10-03**; see
   [ARCHITECTURE.md](ARCHITECTURE.md#cleanup-and-refresh-resilience-20269115).
-- Implementation: **IMPLEMENTED / DRAFT PR FOR OWNER REVIEW**. Documentation
-  checkpoint: `8c024d0`.
+- Implementation: **MERGED IN PR #20**. Documentation checkpoint: `8c024d0`.
 - Scope: remove the One-click Update script blueprint and Mushroom example,
   show "no current data from Proxmox" in the Easy Update card, and make one
   slow or failing Proxmox read during Restore no longer take every entity of
@@ -324,7 +331,7 @@ Status date: 2026-10-03
 
 - Architecture: **ACCEPTED BY OWNER BEFORE IMPLEMENTATION on 2026-10-03**; see
   [ARCHITECTURE.md](ARCHITECTURE.md#automatic-scan-option-and-lxc-card-20269115).
-- Implementation: **IMPLEMENTED, NOT LIVE-VALIDATED** in draft PR #20: the
+- Implementation: **MERGED IN PR #20, NOT YET LIVE-VALIDATED**: the
   options flow and daily trigger (`auto_scan.py`), and the LXC card
   (`frontend/hubinet-ops-lxc-card.js`, `frontend/lxc-card-logic.js`) with Node
   logic tests and a browser smoke test of second-tap arming.
@@ -340,11 +347,9 @@ Status date: 2026-10-03
 
 ## Next
 
-Owner review of the 2026.9.1.15 draft pull request #20 and live validation of
-the automatic Scan option and the LXC card on a real Home Assistant
-installation. No merge, tag, or release is
-performed by this task.
+Tag and release of `2026.9.1.15`, then live validation of the automatic Scan
+option and the LXC card on a real Home Assistant installation.
 
 ## Explicitly not started
 
-- Merge, tag, and release of `2026.9.1.14`.
+- Tag and release of `2026.9.1.15`.
