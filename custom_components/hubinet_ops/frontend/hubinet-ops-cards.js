@@ -10,12 +10,10 @@
 // Assistant ("Custom element doesn't exist", endless spinner in the card
 // picker). So nothing is declared or defined until the app has defined its own
 // <home-assistant> element; the polyfill is installed by then. The guest cards
-// module is imported below, after this point. A fallback keeps the cards usable
-// on a page that never defines <home-assistant>.
-await Promise.race([
-  customElements.whenDefined("home-assistant"),
-  new Promise((resolve) => setTimeout(resolve, 10000)),
-]);
+// module is imported below, after this point. The polyfill also defines a native
+// stand-in, so this wait resolves even if the registry is replaced meanwhile.
+// Do not bypass readiness with a timeout: a slow app would lose the cards again.
+await customElements.whenDefined("home-assistant");
 
 // Load the logic module with this module's own release query so a cached
 // copy from an older release is never combined with a newer card.
