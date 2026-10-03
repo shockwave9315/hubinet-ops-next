@@ -374,14 +374,16 @@ export const deriveGuestView = ({
   }
   const netIn = withUnit(st("netIn"), lang);
   const netOut = withUnit(st("netOut"), lang);
+  // Either sensor may be enabled alone; the tile opens the one it shows.
+  const netSensor = ids.netIn || ids.netOut;
   if (netIn || netOut) {
     stats.push({
       key: "net",
       label: s.net,
       value: `↓${netIn || "—"}`,
       detail: `↑${netOut || "—"}`,
-      history: ids.netIn,
-      entity: ids.netIn,
+      history: netSensor,
+      entity: netSensor,
       tone: "green",
     });
   }

@@ -568,4 +568,15 @@ test("a saved LXC card with compact: true renders as LXC mini", () => {
   assert.deepEqual(legacy.card.getGridOptions(), { columns: 6, min_columns: 6 });
 });
 
+test("a network tile with only the upload sensor opens its history", async () => {
+  const hass = vmHass();
+  hass.entities["sensor.vout"] = vmEntry("sensor.vout", "vm_netout");
+  hass.states["sensor.vout"] = { state: "12", attributes: { unit_of_measurement: "kB/s" } };
+  const m = mount("hubinet-ops-vm-card", hass, { device_id: VM });
+  assert.match(m.html(), /<button class="stat[^"]*" data-action="history" data-stat="net"/);
+  await m.press('data-stat="net"');
+  assert.deepEqual(m.opened, ["sensor.vout"]);
+  assert.deepEqual(m.calls, []);
+});
+
 mock.reset();

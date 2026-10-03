@@ -359,3 +359,21 @@ test("LXC views carry no VM-only actions", () => {
     assert.equal(v.actions[key], undefined);
   }
 });
+
+test("a network tile with only the upload sensor is bound to that sensor", () => {
+  const entities = { ...ENTITIES, "sensor.out": entry("sensor.out", "container_netout") };
+  const states = baseStates();
+  states["sensor.out"] = { state: "12", attributes: { unit_of_measurement: "kB/s" } };
+  const v = deriveGuestView({
+    states,
+    entities,
+    devices: DEVICES,
+    config: { device_id: DEVICE },
+    lang: "pl",
+    packageView: null,
+  });
+  const net = v.stats.find((stat) => stat.key === "net");
+  assert.equal(net.value, "↓—");
+  assert.equal(net.entity, "sensor.out");
+  assert.equal(net.history, "sensor.out");
+});
