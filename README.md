@@ -132,6 +132,14 @@ Automations may call `hubinet_ops.easy_update` with `device_id`, optional
 `autoremove`, and optional `expected_scan_attempt`; updates are still never
 automatic unless you build such an automation yourself.
 
+### Automatic package scan
+
+Open **Settings > Devices & services > Hubinet-Ops > Configure** for each
+Proxmox host, turn on **Scan automatically every day**, and choose the time
+(default 06:00, Home Assistant local time). At that time Hubinet-Ops scans every
+supported LXC on that host. Stopped or busy LXCs are skipped until the next day.
+Scan never updates or removes packages; it is off until you turn it on.
+
 ### Automatic Scan blueprint
 
 1. Install or update Hubinet-Ops through HACS, then restart Home Assistant if

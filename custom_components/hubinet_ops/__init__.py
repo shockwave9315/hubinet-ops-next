@@ -10,6 +10,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers import device_registry as dr, entity_registry as er
 from homeassistant.helpers.typing import ConfigType
 
+from .auto_scan import async_setup_auto_scan
 from .blueprint_delivery import async_provision_blueprints
 from .const import (
     AUTH_OTHER,
@@ -134,6 +135,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ProxmoxConfigEntry) -> b
         )
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
+    async_setup_auto_scan(hass, entry)
 
     return True
 

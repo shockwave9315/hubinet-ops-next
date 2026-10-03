@@ -143,7 +143,7 @@ async def test_scan_all_unexpected_target_error_is_isolated(
         await _scan_all(hass)
     assert start.call_count == 3
     assert start.call_args == call("pve1", 300, target_is_running=True)
-    assert "Scan All could not request pve1/200" in caplog.text
+    assert "Scan could not request pve1/200" in caplog.text
 
 
 async def test_scan_all_reuses_manager_scan_semaphore(

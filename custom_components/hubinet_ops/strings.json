@@ -781,5 +781,20 @@
         }
       }
     }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Automatic package scan",
+        "description": "Scan every supported LXC on this Proxmox host for pending package updates once a day. Scanning never updates or removes packages.",
+        "data": {
+          "auto_scan": "Scan automatically every day",
+          "auto_scan_time": "Time"
+        },
+        "data_description": {
+          "auto_scan_time": "Local Home Assistant time. Stopped or busy LXCs are skipped until the next day."
+        }
+      }
+    }
   }
 }

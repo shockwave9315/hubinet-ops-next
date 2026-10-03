@@ -19,6 +19,7 @@ from homeassistant.const import (
     CONF_USERNAME,
     CONF_VERIFY_SSL,
 )
+from homeassistant.core import callback
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.selector import (
@@ -30,6 +31,7 @@ from homeassistant.helpers.selector import (
     TextSelectorType,
 )
 
+from .auto_scan import HubinetOpsOptionsFlow
 from .common import sanitize_config_entry
 from .const import (
     AUTH_METHODS,
@@ -233,6 +235,12 @@ class ProxmoxveConfigFlow(ConfigFlow, domain=DOMAIN):
     VERSION = 4
     _data: dict[str, Any] = {}
     _entry: ConfigEntry
+
+    @staticmethod
+    @callback
+    def async_get_options_flow(config_entry: ConfigEntry) -> HubinetOpsOptionsFlow:
+        """Return the fork-owned automatic Scan options flow."""
+        return HubinetOpsOptionsFlow()
 
     @override
     async def async_step_user(

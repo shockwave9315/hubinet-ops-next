@@ -781,5 +781,20 @@
         }
       }
     }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Automatyczny skan pakietów",
+        "description": "Raz dziennie sprawdza dostępne aktualizacje pakietów we wszystkich obsługiwanych LXC na tym hoście Proxmox. Skan niczego nie aktualizuje ani nie usuwa.",
+        "data": {
+          "auto_scan": "Skanuj automatycznie codziennie",
+          "auto_scan_time": "Godzina"
+        },
+        "data_description": {
+          "auto_scan_time": "Czas lokalny Home Assistanta. Zatrzymane lub zajęte LXC zostaną pominięte do następnego dnia."
+        }
+      }
+    }
   }
 }
