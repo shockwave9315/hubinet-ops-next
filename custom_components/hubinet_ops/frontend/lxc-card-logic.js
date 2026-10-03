@@ -313,8 +313,11 @@ export const deriveLxcView = ({
     select && Array.isArray(select.attributes && select.attributes.options)
       ? select.attributes.options
       : [];
+  // The backend's exact selection identity; the select's state is not used,
+  // because a snapshot may itself be named like a state ("unknown").
+  const chosen = select && select.attributes && select.attributes.selected_snapshot;
   const selected =
-    select && options.includes(select.state) ? select.state : null;
+    typeof chosen === "string" && options.includes(chosen) ? chosen : null;
 
   return {
     name,
@@ -343,7 +346,8 @@ export const deriveLxcView = ({
   };
 };
 
-// Downsample history states to at most `points` finite numbers.
+// Downsample history states to at most `points` finite numbers, in order,
+// always keeping the first and the latest sample.
 export const historyPoints = (rows, points = 48) => {
   const values = (rows || [])
     .map((row) => Number.parseFloat(row && (row.s ?? row.state)))
@@ -351,6 +355,26 @@ export const historyPoints = (rows, points = 48) => {
   if (values.length <= points) {
     return values;
   }
-  const step = values.length / points;
-  return Array.from({ length: points }, (_v, i) => values[Math.floor(i * step)]);
+  if (points < 2) {
+    return values.slice(-points);
+  }
+  const step = (values.length - 1) / (points - 1);
+  return Array.from({ length: points }, (_v, i) => values[Math.round(i * step)]);
+};
+
+// The exact operation a confirmation tap stands for: Stop and Restart target
+// this LXC's button, Restore and Delete the snapshot selected right now. A
+// second tap confirms only when this is unchanged; null means not armable.
+export const confirmTarget = (action, view, deviceId) => {
+  const info = view && view.actions && view.actions[action];
+  if (!CONFIRM.has(action) || !info || !info.entity_id || !deviceId) {
+    return null;
+  }
+  if (action === "restore" || action === "delete") {
+    const selected = view.snapshots && view.snapshots.selected;
+    return selected === null || selected === undefined
+      ? null
+      : JSON.stringify([deviceId, info.entity_id, view.snapshots.entity_id, selected]);
+  }
+  return JSON.stringify([deviceId, info.entity_id]);
 };

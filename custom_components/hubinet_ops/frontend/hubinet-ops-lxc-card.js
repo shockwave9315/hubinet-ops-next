@@ -1,7 +1,7 @@
 // Hubinet-Ops LXC card: one container's status, resources, packages,
 // snapshots and power controls. Presentation and invocation of existing
 // entities and actions only; Stop, Restart, Restore and Delete need a second
-// tap within a few seconds, and nothing acts on render.
+// tap on the same target within a few seconds, and nothing acts on render.
 
 const version = new URL(import.meta.url).search;
 const load = (file) => import(new URL(`./${file}${version}`, import.meta.url).href);
@@ -163,6 +163,7 @@ class HubinetOpsLxcCard extends HTMLElement {
       throw new Error("Invalid configuration");
     }
     this._config = { autoremove: false, compact: false, ...config };
+    this._disarm();
     this._history = {};
     this._historyKey = undefined;
     this._signature = undefined;
@@ -185,7 +186,34 @@ class HubinetOpsLxcCard extends HTMLElement {
   }
 
   disconnectedCallback() {
+    // A confirmation never survives the card leaving the page.
+    this._disarm();
+    this._signature = undefined;
+  }
+
+  _disarm() {
     clearTimeout(this._armTimer);
+    this._armed = undefined;
+  }
+
+  // True only while the armed tap still stands for exactly this operation.
+  _isArmed(action, view = this._view) {
+    const armed = this._armed;
+    return Boolean(
+      armed &&
+        armed.action === action &&
+        Date.now() < armed.until &&
+        armed.target === lxc.confirmTarget(action, view, this._config.device_id)
+    );
+  }
+
+  _arm(action, target) {
+    clearTimeout(this._armTimer);
+    this._armed = { action, target, until: Date.now() + lxc.CONFIRM_MS };
+    this._armTimer = setTimeout(() => {
+      this._disarm();
+      this._render();
+    }, lxc.CONFIRM_MS);
   }
 
   _lang() {
@@ -258,6 +286,10 @@ class HubinetOpsLxcCard extends HTMLElement {
     }
     const view = this._derive();
     this._view = view;
+    // A changed target (another snapshot, another LXC) cancels confirmation.
+    if (this._armed && !this._isArmed(this._armed.action, view)) {
+      this._disarm();
+    }
     if (!view.error) {
       this._loadHistory(view);
     }
@@ -273,7 +305,7 @@ class HubinetOpsLxcCard extends HTMLElement {
 
   _button(action, info, label, extra = "") {
     const s = lxc.lxcStrings(this._lang());
-    const armed = this._armed === action;
+    const armed = this._isArmed(action);
     const tone = TONES[ACTION_TONES[action]];
     return `<button data-action="${action}" style="--tone:${tone}" class="${armed ? "armed" : ""} ${extra}"
       ${info && info.available && !this._busy ? "" : "disabled"}>
@@ -390,6 +422,7 @@ class HubinetOpsLxcCard extends HTMLElement {
     if (!select || !select.value || !this._view.snapshots) {
       return;
     }
+    this._disarm();
     await this._call("select", "select_option", {
       entity_id: this._view.snapshots.entity_id,
       option: select.value,
@@ -410,19 +443,21 @@ class HubinetOpsLxcCard extends HTMLElement {
       }
       return;
     }
-    if (lxc.CONFIRM.has(action) && this._armed !== action) {
-      this._armed = action;
-      clearTimeout(this._armTimer);
-      this._armTimer = setTimeout(() => {
-        this._armed = undefined;
-        this._render();
-      }, lxc.CONFIRM_MS);
-      this._render();
-      return;
-    }
-    clearTimeout(this._armTimer);
-    this._armed = undefined;
     const view = this._view;
+    if (lxc.CONFIRM.has(action)) {
+      const target = lxc.confirmTarget(action, view, this._config.device_id);
+      if (!target) {
+        this._disarm();
+        this._render();
+        return;
+      }
+      if (!this._isArmed(action, view)) {
+        this._arm(action, target);
+        this._render();
+        return;
+      }
+    }
+    this._disarm();
     if (action === "update") {
       await this._call(lxc.DOMAIN, "easy_update", view.package.action.data);
     } else if (action === "scan") {

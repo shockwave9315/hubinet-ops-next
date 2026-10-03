@@ -4,6 +4,7 @@ import { test } from "node:test";
 
 import {
   CONFIRM,
+  confirmTarget,
   deriveLxcView,
   firstLxcDevice,
   formatDuration,
@@ -160,10 +161,46 @@ test("restore and delete need a selected snapshot", () => {
   assert.equal(v.actions.delete.available, false);
   const states = baseStates();
   states["select.n"].state = "manual";
+  states["select.n"].attributes.selected_snapshot = "manual";
   v = view(states);
   assert.equal(v.snapshots.selected, "manual");
   assert.equal(v.actions.restore.available, true);
   assert.equal(v.actions.delete.available, true);
+});
+
+test("Test C: the selection is selected_snapshot, never the select state", () => {
+  const states = baseStates();
+  states["select.n"] = {
+    state: "unknown",
+    attributes: { options: ["unknown", "manual"], selected_snapshot: null },
+  };
+  let v = view(states);
+  assert.equal(v.snapshots.selected, null);
+  assert.equal(v.actions.restore.available, false);
+  assert.equal(v.actions.delete.available, false);
+  states["select.n"].attributes.selected_snapshot = "unknown";
+  v = view(states);
+  assert.equal(v.snapshots.selected, "unknown");
+  assert.equal(v.actions.restore.available, true);
+  assert.equal(v.actions.delete.available, true);
+  // A selection that is no longer offered is no selection.
+  states["select.n"].attributes.selected_snapshot = "gone";
+  assert.equal(view(states).snapshots.selected, null);
+});
+
+test("the confirmation target is the exact operation", () => {
+  const states = baseStates();
+  states["select.n"].attributes.selected_snapshot = "manual";
+  const a = view(states);
+  assert.equal(confirmTarget("stop", a, DEVICE), JSON.stringify([DEVICE, "button.i"]));
+  assert.equal(confirmTarget("start", a, DEVICE), null);
+  const restoreA = confirmTarget("restore", a, DEVICE);
+  states["select.n"].attributes.selected_snapshot = "hubinet-preupd-20260926";
+  const b = view(states);
+  assert.notEqual(confirmTarget("restore", b, DEVICE), restoreA);
+  assert.notEqual(confirmTarget("delete", b, DEVICE), confirmTarget("restore", b, DEVICE));
+  states["select.n"].attributes.selected_snapshot = null;
+  assert.equal(confirmTarget("delete", view(states), DEVICE), null);
 });
 
 test("an unavailable button is disabled", () => {
@@ -195,5 +232,7 @@ test("history keeps finite numbers and downsamples", () => {
   const points = historyPoints(rows, 10);
   assert.equal(points.length, 10);
   assert.equal(points[0], 0);
-  assert.equal(points[9], 90);
+  assert.equal(points[9], 99);
+  assert.deepEqual(points, [...points].sort((x, y) => x - y));
+  assert.equal(new Set(points).size, 10);
 });
