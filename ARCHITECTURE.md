@@ -76,8 +76,11 @@ artifacts is not required.
   unchanged. The Easy Update card picker now lists Container devices that have
   the package Update button, whose native device class is `update`
   (`ButtonDeviceClass.UPDATE`, used by no other Hubinet-Ops entity); Easy
-  Update needs the same snapshot permission as that button. The public actions
-  are `easy_update` and `scan_all_packages`.
+  Update needs the same snapshot permission as that button. The same button is
+  the single Easy Update eligibility criterion in the frontend: the picker,
+  the default device of a new card, and whether a card offers the Easy Update
+  action (without it the card shows the count and opens details). The public
+  actions are `easy_update` and `scan_all_packages`.
 - **LXC card confirmation is bound to its target.** An armed tap records the
   action, its exact target (this LXC's button; for Restore and Delete also the
   backend's `selected_snapshot` identity), and its 4 s deadline. A second tap

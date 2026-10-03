@@ -125,6 +125,8 @@ def test_card_roles_match_integration_translation_keys() -> None:
         ("sensor", UNUSED_PACKAGES_SENSOR.translation_key),
         ("sensor", PACKAGE_HEALTH_SENSOR.translation_key),
         ("button", PACKAGE_SCAN_BUTTON.translation_key),
+        # Eligibility: the same button the picker selects by its update class.
+        ("button", PACKAGE_UPDATE_BUTTON.translation_key),
         (
             "sensor",
             next(

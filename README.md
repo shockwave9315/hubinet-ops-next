@@ -107,6 +107,7 @@ to be recreated, and the integration never edits dashboards.
 | Card | Meaning | Tap |
 | --- | --- | --- |
 | Amber "7 aktualizacji" | Current scan found updates (security count, scan time) | Easy Update |
+| Amber "Aktualizacja niedostępna dla tego LXC" | Updates found, but this LXC has no package Update button (no VM.Snapshot permission) | Open details |
 | Green "System aktualny" | Current scan found none; shows last scan | Scan again |
 | Orange "Wymagany restart" | Health reports reboot required | Scan again |
 | Blue | Update, Autoremove, Scan, or Health is running | Nothing (no duplicates) |

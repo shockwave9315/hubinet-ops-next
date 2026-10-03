@@ -16,6 +16,10 @@ export const ROLES = {
   health: ["sensor", "package_health"],
   status: ["sensor", "container_status"],
   scan: ["button", "package_scan"],
+  // The package Update button exists only where Easy Update can run (it needs
+  // the same VM.Snapshot permission); it is the one eligibility criterion for
+  // the picker (native device class "update"), the stub, and the action.
+  updater: ["button", "package_update"],
 };
 
 const STRINGS = {
@@ -25,6 +29,7 @@ const STRINGS = {
     ambiguous: "Hubinet-Ops LXC entities are ambiguous",
     stopped: "LXC is not running",
     no_data: "No current data from Proxmox",
+    update_unavailable: "Update is not available for this LXC",
     no_data_detail: "The LXC may still be running",
     updating: "Update in progress…",
     autoremoving: "Removing unused packages…",
@@ -73,6 +78,7 @@ const STRINGS = {
     ambiguous: "Niejednoznaczne encje LXC Hubinet-Ops",
     stopped: "LXC nie działa",
     no_data: "Brak aktualnych danych z Proxmox",
+    update_unavailable: "Aktualizacja niedostępna dla tego LXC",
     no_data_detail: "LXC może nadal działać",
     updating: "Aktualizacja w toku…",
     autoremoving: "Usuwanie nieużywanych pakietów…",
@@ -205,9 +211,9 @@ export const resolveEntities = (entities, deviceId) => {
   return { entities: resolved };
 };
 
-// The first package-capable LXC device, for the card picker preview.
+// The first LXC device Easy Update can run on, by the picker's criterion.
 export const firstEligibleDevice = (entities) => {
-  const [domain, key] = ROLES.pending;
+  const [domain, key] = ROLES.updater;
   const match = Object.values(entities || {}).find(
     (entry) =>
       entry &&
@@ -350,6 +356,12 @@ export const deriveView = ({ states, entities, devices, config, now, lang }) => 
     }
     if (Number.isFinite(unused) && unused > 0) {
       parts.push(fill(s.unused, { count: unused }));
+    }
+    if (!ids.updater) {
+      // Without the Update button the backend would refuse Easy Update.
+      return result(
+        view("amber", "mdi:package-up", formatUpdates(count, lang), s.update_unavailable, DETAILS)
+      );
     }
     if (config.autoremove) {
       parts.push(s.autoremove);

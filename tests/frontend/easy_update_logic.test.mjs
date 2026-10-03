@@ -29,6 +29,7 @@ const ENTITIES = {
   "sensor.renamed_d": entry("sensor.renamed_d", "package_health"),
   "sensor.renamed_e": entry("sensor.renamed_e", "container_status"),
   "button.renamed_f": entry("button.renamed_f", "package_scan"),
+  "button.renamed_g": entry("button.renamed_g", "package_update"),
   "sensor.other_lxc": entry("sensor.other_lxc", "pending_packages", "other"),
   "sensor.foreign": {
     entity_id: "sensor.foreign",
@@ -57,6 +58,7 @@ const baseStates = () => ({
   "sensor.renamed_d": { state: "unknown", attributes: { check_status: "never" } },
   "sensor.renamed_e": { state: "running", attributes: {} },
   "button.renamed_f": { state: "unknown", attributes: {} },
+  "button.renamed_g": { state: "unknown", attributes: { device_class: "update" } },
 });
 
 const render = (mutate = () => {}, config = {}, lang = "pl") => {
@@ -80,6 +82,7 @@ test("resolves entities by device, platform and translation key only", () => {
     health: "sensor.renamed_d",
     status: "sensor.renamed_e",
     scan: "button.renamed_f",
+    updater: "button.renamed_g",
   });
   assert.equal(resolveEntities(ENTITIES, "missing").error, "not_found");
   const duplicate = {
@@ -89,10 +92,33 @@ test("resolves entities by device, platform and translation key only", () => {
   assert.equal(resolveEntities(duplicate, DEVICE).error, "ambiguous");
 });
 
-test("stub config picks a package-capable LXC; new devices appear", () => {
+test("stub config uses the picker's criterion: the package Update button", () => {
   assert.equal(firstEligibleDevice({}), null);
-  const added = { "sensor.new": entry("sensor.new", "pending_packages", "new") };
-  assert.equal(firstEligibleDevice(added), "new");
+  // LXC A has packages but no Update button (no VM.Snapshot); B has both.
+  const entities = {
+    "sensor.a": entry("sensor.a", "pending_packages", "lxc-a"),
+    "sensor.b": entry("sensor.b", "pending_packages", "lxc-b"),
+    "button.b": entry("button.b", "package_update", "lxc-b"),
+  };
+  assert.equal(firstEligibleDevice(entities), "lxc-b");
+  const onlyA = { "sensor.a": entities["sensor.a"] };
+  assert.equal(firstEligibleDevice(onlyA), null);
+});
+
+test("without the Update button the card never offers Easy Update", () => {
+  const { "button.renamed_g": _removed, ...entities } = ENTITIES;
+  const result = deriveView({
+    states: baseStates(),
+    entities,
+    devices: DEVICES,
+    config: { device_id: DEVICE, autoremove: true },
+    now: NOW,
+    lang: "pl",
+  });
+  assert.equal(result.tone, "amber");
+  assert.equal(result.primary, "7 aktualizacji");
+  assert.equal(result.secondary, "Aktualizacja niedostępna dla tego LXC");
+  assert.deepEqual(result.action, { kind: "details" });
 });
 
 test("amber: updates available start Easy Update with the displayed scan", () => {
