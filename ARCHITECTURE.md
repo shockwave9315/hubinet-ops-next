@@ -74,8 +74,10 @@ installs it with the integration. `async_setup` serves that directory through
 card module through `frontend.add_extra_js_url` with a `?v=<integration version>`
 query, so no manual dashboard resource is needed in storage or YAML dashboards.
 Lovelace resource storage is not written. Delivery failure is logged and never
-disables native or package functionality. The manifest declares the `http` and
-`frontend` dependencies. A browser refresh is needed after install or update
+disables native or package functionality. The manifest lists `frontend` and
+`http` as `after_dependencies`: both are Home Assistant stage-0 default
+integrations, so they are already loaded, and delivery is skipped when they are
+not. A browser refresh is needed after install or update
 because the frontend imports extra modules at page load.
 
 **Card.** `custom:hubinet-ops-easy-update-card` registers in `window.customCards`

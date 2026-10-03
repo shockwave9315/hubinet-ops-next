@@ -1,6 +1,7 @@
 {
   "domain": "hubinet_ops",
   "name": "Hubinet-Ops",
+  "after_dependencies": ["frontend", "http"],
   "version": "2026.9.1.13",
   "codeowners": ["@Corbeno", "@erwindouna", "@CoMPaTech"],
   "config_flow": true,

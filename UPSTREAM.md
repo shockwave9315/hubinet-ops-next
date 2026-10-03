@@ -86,7 +86,7 @@ Release 2026.9.1.14 (owner-accepted Easy Update card and action) adds one more
 setup hook to the upstream-derived entry module: `async_setup` also delivers the
 fork-owned dashboard card from `custom_components/hubinet_ops/frontend/` through
 `hass.http.async_register_static_paths` and `frontend.add_extra_js_url`. The
-manifest therefore declares the `http` and `frontend` dependencies. The
+manifest lists `frontend` and `http` only as `after_dependencies` for ordering. The
 `hubinet_ops.easy_update` action and its bounded YOLO continuation live in the
 fork-owned `services.py` and `easy_update.py`; they read the device registry,
 existing coordinator/runtime data, and call only existing `PackageManager` entry
