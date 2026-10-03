@@ -12,12 +12,14 @@ Status date: 2026-10-03
   subsystem, guided fresh-install enrollment, native snapshot Restore, and
   native snapshot Create observation and explicit native Delete documented in
   [ARCHITECTURE.md](ARCHITECTURE.md).
-- Integration after merge: `2026.9.1.17`, helper v5, protocol v1.
-- Latest tagged release: `2026.9.1.15` (merged PR #20, main commit
-  `b865968`); the owner reported the post-merge live tests passed.
+- Integration after merge: `2026.9.1.18`, helper v5, protocol v1.
+- Latest tagged release: `2026.9.1.17` (merged PR #22, main `e7c03e6`).
+  `2026.9.1.15` (PR #20, `b865968`): the owner reported the post-merge live
+  tests passed.
 - Starting merged baseline for 2026.9.1.16: main `b865968`.
 - `2026.9.1.16` merged in PR #21 (main `0409d76`), not yet tagged.
 - Starting merged baseline for 2026.9.1.17: main `0409d76`.
+- Starting merged baseline for 2026.9.1.18: main `e7c03e6`.
 - Git history is authoritative for the eventual feature merge SHA.
 
 ## Merged
@@ -370,27 +372,38 @@ Scan All remains.
 - Architecture: **ACCEPTED BY OWNER BEFORE IMPLEMENTATION on 2026-10-03** (from
   the approved mockup); see
   [ARCHITECTURE.md](ARCHITECTURE.md#vm-card-mini-cards-and-stat-history-20269117).
-- Implementation: **IMPLEMENTED IN THIS PR**. Documentation checkpoint:
-  `b276811`. `frontend/guest-card-logic.js` (renamed from `lxc-card-logic.js`)
+- Implementation: **MERGED IN PR #22 / RELEASED AS 2026.9.1.17**. Documentation
+  checkpoint: `b276811`. `frontend/guest-card-logic.js` (renamed from `lxc-card-logic.js`)
   holds LXC and VM role tables; `frontend/hubinet-ops-guest-cards.js` (renamed
   from `hubinet-ops-lxc-card.js`) registers the four card types on one element.
   Node logic and element tests cover VM power and confirmation, More, mini
   cards, history taps, picker registration, and saved `compact: true` cards; a
-  Chromium smoke test drove all four cards. Live testing found a load-order
-  race with Home Assistant's scoped custom-element registry polyfill (cards
-  intermittently "doesn't exist" / endless picker spinner, per device); it was
-  reproduced in a real Home Assistant by delaying its app bundle and fixed by
-  defining the cards only after `<home-assistant>` is defined.
+  Chromium smoke test drove all four cards. Live testing then found the
+  load-order race fixed in 2026.9.1.18.
 - Scope: the VM card and the LXC/VM mini cards on one shared implementation,
   and tapping a stat tile to open the native history; frontend only. Pause,
   Resume, and `qmpstatus` are deferred.
 
+## 2026.9.1.18 card load-order fix
+
+- Defect found in live testing of 2026.9.1.17 (also present since 2026.9.1.14):
+  cards intermittently "Custom element doesn't exist" on the dashboard and an
+  endless spinner in the card picker, differing per device and cache. Cause:
+  Home Assistant imports the card module in parallel with its app bundle, whose
+  scoped custom-element registry polyfill replaces `window.customElements`;
+  cards defined before it are invisible to Home Assistant.
+- Implementation: **IMPLEMENTED IN THIS PR**. Reproduced in a real Home
+  Assistant (frontend 20260826.6) by delaying its app bundle; the card module
+  now defines nothing until `<home-assistant>` is defined (10-second
+  fallback). A Node test fails on the previous module and passes now. The new
+  release version also changes the module URL, so browsers drop cached copies.
+
 ## Next
 
-Tag `2026.9.1.16` (main `0409d76`); after this PR merges, tag and release
-`2026.9.1.17` and validate the new cards live.
+Tag `2026.9.1.16` (main `0409d76`) if still wanted; after this PR merges, tag
+and release `2026.9.1.18` and validate the cards live on every device.
 
 ## Explicitly not started
 
-- Tags and releases of `2026.9.1.16` and `2026.9.1.17`.
+- Tag of `2026.9.1.16`; tag and release of `2026.9.1.18`.
 - Pause and Resume in the VM card, and reading `qmpstatus`.

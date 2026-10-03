@@ -51,7 +51,7 @@ replaces `window.customElements`; cards defined before it are invisible to
 Home Assistant ("Custom element doesn't exist", endless spinner in the card
 picker), depending on which download finishes first. The card module therefore
 declares and defines nothing until `<home-assistant>` is defined (with a
-10-second fallback). This race also existed in 2026.9.1.14 to 2026.9.1.16.
+10-second fallback). This race existed in 2026.9.1.14 to 2026.9.1.17 and is fixed in 2026.9.1.18.
 
 ### Setup connection resilience (2026.9.1.16)
 
