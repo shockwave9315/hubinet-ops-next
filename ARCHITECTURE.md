@@ -221,6 +221,46 @@ cards the used amount comes from the bytes sensor when it is enabled and is
 otherwise computed for display from the unrounded percentage state and the
 maximum sensor. LXC tiles are unchanged.
 
+### A/B/C/D final-review fix set
+
+On 2026-10-04, after the owner's live validation of prerelease
+`2026.9.1.21rc1` (review HEAD `0ec4ea9`) and a final deep review that found no
+P1/P2 issue, the owner accepted this small fix set before the final review. It
+adds no feature, changes no frontend file, and keeps release line
+`2026.9.1.21`.
+
+**F1: no stale running fact after unload.** A config-entry unload removes the
+Create entity before the entry's observation task is cancelled. A removed
+entity no longer writes state, so the task's done callback cannot publish
+completion, and Home Assistant restores the entity from its stored
+capabilities with `snapshot_create_running` still true. The existing Create
+entity therefore clears that stored transient fact in its own removal hook,
+before Home Assistant writes the restored state. Task ownership, the observer,
+and the success, failure, uncertainty, and cancellation flow are unchanged; no
+store, registry, or state machine is added. A newly set up entity starts with
+the fact false.
+
+**F2: backend guard for skip during Create.** The full LXC card already
+disables the Update without a snapshot while `snapshot_create_running` is
+true, but a stale frontend, another client, or a direct action call could still
+start the package mutation. For `skip_snapshot=True` only, the Easy Update
+action now asks Checkpoint B's existing live-entity truth for the same guest
+before `confirm_review()` and rejects while its Create is running: nothing is
+confirmed, the scan token is not consumed, no Update starts, and no package or
+snapshot operation happens. Another guest's Create does not block, and the same
+valid request is accepted once Create has finished. No lock, manager, or
+registry is added, and the normal snapshot-required Update is not redesigned.
+
+**F3: accepted residual.** Between the start of the native Create POST and
+the moment its UPID and observation task handle exist, no running fact is
+published yet, so Restore, Delete, or the F2 guard cannot see that Create. The
+deep review confirmed that the second Restore/Delete check after fresh
+validation works, that nothing can interleave between that check and the
+native mutation, that the window exists only before the handle is created,
+that the native PVE lock decides such a conflict, and that no destructive
+effect was shown. The owner accepted this limit; no submission state, global
+lock, or further lifecycle is added for it.
+
 ### Native Lovelace card resources (2026.9.1.20)
 
 On 2026-10-04, before implementation, the owner explicitly decided to replace

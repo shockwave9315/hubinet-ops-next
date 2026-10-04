@@ -14,7 +14,8 @@ Status date: 2026-10-04
   opt-in VM guest memory telemetry documented in
   [ARCHITECTURE.md](ARCHITECTURE.md).
 - Planned development release for the whole A/B/C/D stage: `2026.9.1.21`,
-  helper v5, protocol v1. No .21 tag or release has been created.
+  helper v5, protocol v1. Prerelease `2026.9.1.21rc1` exists and points to the
+  review HEAD `0ec4ea9`. No final `2026.9.1.21` tag or release has been created.
 - Latest final tagged release: `2026.9.1.20` (merged PR #25, main `b38b950`).
   `2026.9.1.15` (PR #20, `b865968`): the owner reported the post-merge live
   tests passed.
@@ -194,9 +195,15 @@ Status date: 2026-10-04
   residuals: with the option on, numeric text in memory fields counts as
   malformed, and a PVE without `memhost` leaves host memory unknown for VMs
   whose `mem` may be guest-side.
-- Live PVE and owner dashboard validation of C/D have not been performed. The
-  browser lab has no Proxmox host; card data there is injected, and the options
-  dialog was exercised only by tests.
+- Owner live validation of C/D: **PERFORMED BY THE OWNER on prerelease
+  `2026.9.1.21rc1`** (owner statement, 2026-10-04). The agent's own browser lab
+  has no Proxmox host; card data there is injected, and the options dialog was
+  exercised only by tests.
+- Final deep review of the stage: **NO P1/P2 FOUND**; outcome "fix small set,
+  then final review". The accepted fix set F1/F2 and the accepted residual F3
+  are recorded in
+  [ARCHITECTURE.md](ARCHITECTURE.md#abcd-final-review-fix-set).
+  Implementation of F1/F2: **IN PROGRESS**.
 - PR #25 Lovelace Resources mechanism remains unchanged.
 
 ## Guided enrollment
@@ -783,10 +790,10 @@ Scan All remains.
 
 ## Next
 
-Final owner review and live validation of the whole A/B/C/D stage on the
-existing Draft PR #26, planned release .21. A, B, C, and D are done; there is
-no further checkpoint. Do not merge, tag, or create a release until the owner
-decides. Tag `2026.9.1.16` (main `0409d76`) if still wanted.
+Implement the accepted final-review fix set (F1, F2) on the existing Draft
+PR #26, then the final owner review. A, B, C, and D are done; there is no
+further checkpoint. Do not merge, tag the final .21, or create its release
+until the owner decides. Tag `2026.9.1.16` (main `0409d76`) if still wanted.
 
 ## Explicitly not started
 
