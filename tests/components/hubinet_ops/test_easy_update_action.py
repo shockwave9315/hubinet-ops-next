@@ -23,6 +23,7 @@ from custom_components.hubinet_ops.packages.models import (
     PackageUpdateRecord,
     PackageUpdateStatus,
 )
+from custom_components.hubinet_ops.snapshots import RestoreOutcome, RestoreResult
 from homeassistant.core import Context, HomeAssistant
 from homeassistant.exceptions import (
     HomeAssistantError,
@@ -663,3 +664,196 @@ async def test_skip_does_not_resolve_invalid_targets(
     await _expect_invalid(
         hass, device_id, "easy_update_not_package_lxc", skip_snapshot=True
     )
+
+
+CREATE_UPID = "UPID:pve1:00000001:00000002:00000003:vzsnapshot:200:user@pam:"
+
+
+@pytest.fixture
+def blocked_create():
+    """Hold every native snapshot Create observation open until released."""
+    entered = asyncio.Event()
+    release = asyncio.Event()
+
+    async def observe(_proxmox, _node, upid, **_kwargs) -> RestoreResult:
+        entered.set()
+        await release.wait()
+        return RestoreResult(RestoreOutcome.SUCCESS, upid)
+
+    with patch(
+        "custom_components.hubinet_ops.snapshot_restore.async_observe_task",
+        side_effect=observe,
+    ):
+        yield entered, release
+
+
+async def _press_create(
+    hass: HomeAssistant, client: MagicMock, family: str, vmid: int, button: str
+) -> MagicMock:
+    """Start a native Create for one guest and return its POST mock."""
+    post = getattr(client._node_mock, family)(vmid).snapshot.post
+    post.return_value = CREATE_UPID
+    await hass.services.async_call(
+        "button", "press", {"entity_id": button}, blocking=True
+    )
+    assert hass.states.get(button).attributes["snapshot_create_running"] is True
+    return post
+
+
+@pytest.mark.usefixtures("entity_registry_enabled_by_default")
+async def test_skip_is_rejected_while_the_same_guest_create_runs(
+    hass: HomeAssistant,
+    mock_proxmox_client: MagicMock,
+    mock_config_entry: MockConfigEntry,
+    package_transport_material: None,
+    blocked_create,
+    blocked_plan,
+) -> None:
+    """Nothing is confirmed, consumed or started; afterwards the same skip runs."""
+    create_entered, create_release = blocked_create
+    plan_entered, plan_release = blocked_plan
+    await setup_integration(hass, mock_config_entry)
+    _seed_scan(mock_config_entry)
+    manager = mock_config_entry.runtime_data.package_manager
+    original = manager.record("pve1", 200)
+    device_id = _device_id(hass, "1234_container_200")
+    post = await _press_create(
+        hass, mock_proxmox_client, "lxc", 200, "button.ct_nginx_create_snapshot"
+    )
+    await asyncio.wait_for(create_entered.wait(), 1)
+    snapshot = mock_proxmox_client._lxc_mocks[200].snapshot
+    native_calls = list(snapshot.mock_calls)
+
+    with (
+        patch.object(
+            manager, "confirm_review", wraps=manager.confirm_review
+        ) as confirm,
+        patch.object(
+            manager, "async_start_update", wraps=manager.async_start_update
+        ) as start,
+    ):
+        for _attempt in range(2):
+            with pytest.raises(HomeAssistantError) as err:
+                await _easy_update(
+                    hass,
+                    device_id,
+                    skip_snapshot=True,
+                    expected_scan_attempt=SCAN_AT.isoformat(),
+                )
+            assert err.value.translation_key == "snapshot_create_running"
+        confirm.assert_not_called()
+        start.assert_not_called()
+
+    # The review and its token are untouched, and no Update exists.
+    assert manager.record("pve1", 200) is original
+    assert original.status is PackageScanStatus.SUCCESS
+    assert original.token == TOKEN
+    assert original.reviewed is False
+    assert manager.update_record("pve1", 200).status is PackageUpdateStatus.NEVER
+    await hass.async_block_till_done()
+    assert not plan_entered.is_set()
+    # No native snapshot listing, creation or deletion beyond the manual Create.
+    post.assert_called_once()
+    assert snapshot.mock_calls == native_calls
+
+    # Once Create has finished, the same valid request is accepted.
+    create_release.set()
+    await hass.async_block_till_done(wait_background_tasks=True)
+    assert (
+        hass.states.get("button.ct_nginx_create_snapshot").attributes[
+            "snapshot_create_running"
+        ]
+        is False
+    )
+    assert manager.record("pve1", 200) is original
+    await _easy_update(
+        hass,
+        device_id,
+        skip_snapshot=True,
+        expected_scan_attempt=SCAN_AT.isoformat(),
+    )
+    update = manager.update_record("pve1", 200)
+    assert update.status is PackageUpdateStatus.RUNNING
+    assert update.snapshot_skipped is True
+    await plan_entered.wait()
+    plan_release.set()
+    await hass.async_block_till_done(wait_background_tasks=True)
+    post.assert_called_once()
+
+
+@pytest.mark.usefixtures("entity_registry_enabled_by_default")
+@pytest.mark.parametrize(
+    ("family", "vmid", "button"),
+    [
+        pytest.param("lxc", 201, "button.ct_backup_create_snapshot", id="other-lxc"),
+        pytest.param("qemu", 100, "button.vm_web_create_snapshot", id="vm"),
+    ],
+)
+async def test_create_of_another_guest_does_not_block_skip(
+    hass: HomeAssistant,
+    mock_proxmox_client: MagicMock,
+    mock_config_entry: MockConfigEntry,
+    package_transport_material: None,
+    blocked_create,
+    blocked_plan,
+    family: str,
+    vmid: int,
+    button: str,
+) -> None:
+    """The guard concerns only the Create of the guest being updated."""
+    create_entered, create_release = blocked_create
+    plan_entered, plan_release = blocked_plan
+    await setup_integration(hass, mock_config_entry)
+    _seed_scan(mock_config_entry)
+    manager = mock_config_entry.runtime_data.package_manager
+    await _press_create(hass, mock_proxmox_client, family, vmid, button)
+    await asyncio.wait_for(create_entered.wait(), 1)
+
+    await _easy_update(
+        hass,
+        _device_id(hass, "1234_container_200"),
+        skip_snapshot=True,
+        expected_scan_attempt=SCAN_AT.isoformat(),
+    )
+    update = manager.update_record("pve1", 200)
+    assert update.status is PackageUpdateStatus.RUNNING
+    assert update.snapshot_skipped is True
+    assert hass.states.get(button).attributes["snapshot_create_running"] is True
+    await plan_entered.wait()
+    plan_release.set()
+    create_release.set()
+    await hass.async_block_till_done(wait_background_tasks=True)
+
+
+@pytest.mark.usefixtures("entity_registry_enabled_by_default")
+async def test_create_guard_applies_to_skip_only(
+    hass: HomeAssistant,
+    mock_proxmox_client: MagicMock,
+    mock_config_entry: MockConfigEntry,
+    package_transport_material: None,
+    blocked_create,
+    blocked_plan,
+) -> None:
+    """The normal snapshot-required Update keeps its existing acceptance."""
+    create_entered, create_release = blocked_create
+    plan_entered, plan_release = blocked_plan
+    await setup_integration(hass, mock_config_entry)
+    _seed_scan(mock_config_entry)
+    manager = mock_config_entry.runtime_data.package_manager
+    await _press_create(
+        hass, mock_proxmox_client, "lxc", 200, "button.ct_nginx_create_snapshot"
+    )
+    await asyncio.wait_for(create_entered.wait(), 1)
+
+    await _easy_update(
+        hass,
+        _device_id(hass, "1234_container_200"),
+        expected_scan_attempt=SCAN_AT.isoformat(),
+    )
+    update = manager.update_record("pve1", 200)
+    assert update.status is PackageUpdateStatus.RUNNING
+    assert update.snapshot_skipped is False
+    await plan_entered.wait()
+    plan_release.set()
+    create_release.set()
+    await hass.async_block_till_done(wait_background_tasks=True)
