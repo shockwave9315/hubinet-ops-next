@@ -189,7 +189,9 @@ second tap, and the confirmation covers only the scan shown: a newer scan, a
 changed count, another LXC, leaving the dashboard, or waiting longer cancels
 it. It is disabled while a snapshot is being created ("Tworzenie...") and is
 not offered in the mini cards or the Easy Update card. Nothing is saved: the
-next update needs a snapshot again unless you choose this button again.
+next update needs a snapshot again unless you choose this button again. The
+integration itself also refuses `skip_snapshot` for an LXC whose snapshot is
+being created, whichever card, client, or automation asks.
 
 On a narrow dashboard column the cards rearrange instead of overflowing:
 buttons move to the next row and long names are shortened.

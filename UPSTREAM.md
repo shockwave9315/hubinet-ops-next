@@ -48,7 +48,10 @@ Delete resolve that existing entity through HA's entity registry and button
 component, checking the same guest before acceptance and after fresh native
 validation. Native POST shape, UPID observation, terminal notifications,
 success-only selector refresh, power controls, and coordinator ownership remain
-unchanged; no second observer or custom task registry is added.
+unchanged; no second observer or custom task registry is added. The
+final-review fix set adds one removal hook to the same upstream-derived button
+base: it clears the stored running capability before Home Assistant writes the
+restored state of a removed Create entity.
 
 Planned release 2026.9.1.21 Checkpoint D (owner decision on 2026-10-04) adds
 one opt-in to the upstream-derived coordinator and sensor platform. With the

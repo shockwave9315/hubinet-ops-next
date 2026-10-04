@@ -203,7 +203,31 @@ Status date: 2026-10-04
   then final review". The accepted fix set F1/F2 and the accepted residual F3
   are recorded in
   [ARCHITECTURE.md](ARCHITECTURE.md#abcd-final-review-fix-set).
-  Implementation of F1/F2: **IN PROGRESS**.
+  Pre-runtime documentation checkpoint: `152dc4b`.
+- F1 (no stale `snapshot_create_running` after unload): **DONE** (`31cf829`).
+  The Create entity's removal hook clears the stored capability before the
+  restored state is written. The new tests fail on the unfixed code (restored
+  state and first reload state were true) and pass with the fix, for QEMU and
+  LXC, with the unchanged cancellation notification and no warning; a new
+  entity after setup or reload starts false and accepts a new Create.
+- F2 (backend guard for skip during Create): **DONE** (`02aca84`). The new
+  rejection test fails on the unguarded code and passes with the guard: the
+  scan record is the same object with its token and `reviewed` false,
+  `confirm_review` and `async_start_update` are not called, no native snapshot
+  call is added, and the same request is accepted after Create finishes.
+  Another LXC's or a VM's Create does not block, and the normal Update keeps
+  its acceptance.
+- F3 (window before the Create task handle exists): **ACCEPTED RESIDUAL**, not
+  changed. F4-F7 from the same review (RC/final cache, native double-click
+  confirmation, a flaky delete-conflict test, keyboard focus) are accepted or
+  outside this PR and are not changed.
+- Fix-set validation: **3 targeted F1 and 4 targeted F2 Python tests passed**;
+  B regression **177 Python tests and 56 snapshots passed**; A/C regression
+  **192 Python tests and 124 Node tests passed**. Full `scripts/test.sh` on
+  the fix-set HEAD: **1076 Python tests, 124 Node tests, and 221 snapshots
+  passed**, plus repository Ruff; `git diff --check` passed. No translation
+  changed. Every tracked file under `frontend/` is byte-identical to
+  `2026.9.1.21rc1` (`0ec4ea9`).
 - PR #25 Lovelace Resources mechanism remains unchanged.
 
 ## Guided enrollment
@@ -790,10 +814,10 @@ Scan All remains.
 
 ## Next
 
-Implement the accepted final-review fix set (F1, F2) on the existing Draft
-PR #26, then the final owner review. A, B, C, and D are done; there is no
-further checkpoint. Do not merge, tag the final .21, or create its release
-until the owner decides. Tag `2026.9.1.16` (main `0409d76`) if still wanted.
+Final owner review of the whole A/B/C/D stage with the applied fix set on the
+existing Draft PR #26. A, B, C, and D are done; there is no further
+checkpoint. Do not merge, tag the final .21, or create its release until the
+owner decides. Tag `2026.9.1.16` (main `0409d76`) if still wanted.
 
 ## Explicitly not started
 

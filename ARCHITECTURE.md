@@ -261,6 +261,16 @@ that the native PVE lock decides such a conflict, and that no destructive
 effect was shown. The owner accepted this limit; no submission state, global
 lock, or further lifecycle is added for it.
 
+The pre-runtime documentation checkpoint is commit `152dc4b`; F1 is
+implemented in `31cf829` and F2 in `02aca84`. F1 uses the Create entity's
+`async_will_remove_from_hass`. Once Home Assistant marks an entity removed it
+ignores that entity's state writes, and it builds the restored placeholder
+state from the capabilities stored in the entity registry, so the hook sets
+the stored `snapshot_create_running` capability to false through that
+registry. F2 calls Checkpoint B's `snapshot_create_is_running()` and raises
+the existing translated `snapshot_create_running` error. No frontend file
+changed: the card modules are byte-identical to `2026.9.1.21rc1`.
+
 ### Native Lovelace card resources (2026.9.1.20)
 
 On 2026-10-04, before implementation, the owner explicitly decided to replace
