@@ -95,6 +95,12 @@ existing coordinator/runtime data, and call only existing `PackageManager` entry
 points. Upstream-derived entities, device identifiers, coordinator, buttons,
 sensors, permissions, and native PVE behavior are unchanged.
 
+Release 2026.9.1.20 (owner decision on 2026-10-04) replaces the fork-owned
+frontend helper's `frontend.add_extra_js_url` call with Home Assistant's native
+Lovelace resource collection. The existing setup hook is unchanged. The
+manifest also orders after `lovelace` when configured. No upstream frontend,
+Lovelace, discovery, or coordinator code is modified.
+
 Release 2026.9.1.15 adds an owner-approved divergence to the upstream-derived
 coordinator. Each refresh read (nodes, per-node QEMU, LXC, storage, and the
 latest vzdump task) is retried once after a short delay when it fails with an

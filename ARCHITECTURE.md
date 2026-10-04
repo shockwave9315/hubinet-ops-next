@@ -36,6 +36,8 @@ does not rewrite YAML or add an in-memory resource overlay. A frontend reload
 is required after installing or updating. The current readiness guard and
 five card implementations are preserved.
 
+The pre-implementation documentation checkpoint is commit `fa2dd32`.
+
 ### VM card, mini cards, and stat history (2026.9.1.17)
 
 On 2026-10-03, before implementation, the owner accepted the mockup for these
@@ -73,7 +75,7 @@ mini Start when stopped or Shut down (confirmed) when running. The previous
 or Space on it, opens Home Assistant's native more-info dialog for that sensor,
 which shows its history. It is navigation only and never calls a service.
 
-**Load order.** Home Assistant imports the card module in parallel with its own
+**Load order through 2026.9.1.19.** Home Assistant imports the card module in parallel with its own
 app bundle, which can install a scoped custom-element registry polyfill that
 replaces `window.customElements`; cards defined before it are invisible to
 Home Assistant ("Custom element doesn't exist", endless spinner in the card
@@ -83,7 +85,8 @@ native `whenDefined` promise, which the polyfill's native stand-in also resolves
 when the registry is replaced during the wait. There is no timeout that permits
 early registration. The initial 2026.9.1.18 fix had a 10-second fallback that
 reintroduced the race when the app took longer to start; the 2026.9.1.19
-correction removes that fallback. Delivery and the five card types are unchanged.
+correction removes that fallback. Version 2026.9.1.20 uses the native Lovelace
+delivery described above and retains this readiness guard and all five types.
 
 ### Setup connection resilience (2026.9.1.16)
 
@@ -251,7 +254,7 @@ never starts Autoremove. The continuation adds no record, status, persistence,
 queue, scheduler, worker, or manager state; it is the Python equivalent of the
 blueprint's `wait_template`, not a second lifecycle.
 
-**Frontend delivery.** The card is one dependency-free ES module (plus a pure
+**Original frontend delivery (2026.9.1.14–19).** The card is one dependency-free ES module (plus a pure
 logic module) shipped inside `custom_components/hubinet_ops/frontend/`, so HACS
 installs it with the integration. `async_setup` serves that directory through
 `hass.http.async_register_static_paths` with cache headers and registers the

@@ -12,7 +12,7 @@ Status date: 2026-10-04
   subsystem, guided fresh-install enrollment, native snapshot Restore, and
   native snapshot Create observation and explicit native Delete documented in
   [ARCHITECTURE.md](ARCHITECTURE.md).
-- Integration after merge: `2026.9.1.19`, helper v5, protocol v1.
+- Integration after merge: `2026.9.1.20`, helper v5, protocol v1.
 - Latest tagged release: `2026.9.1.19` (merged PR #24, main `d4eb2eb`).
   `2026.9.1.15` (PR #20, `b865968`): the owner reported the post-merge live
   tests passed.
@@ -21,6 +21,7 @@ Status date: 2026-10-04
 - Starting merged baseline for 2026.9.1.17: main `0409d76`.
 - Starting merged baseline for 2026.9.1.18: main `e7c03e6`.
 - Starting merged baseline for 2026.9.1.19: main `05b0e20`.
+- Starting merged baseline for 2026.9.1.20: main `d4eb2eb`.
 - Git history is authoritative for the eventual feature merge SHA.
 
 ## Merged
@@ -462,7 +463,8 @@ Scan All remains.
   2026-10-04**, before implementation. The owner explicitly requested replacing
   `add_extra_js_url` with native Lovelace Resources of type `module`, loaded
   when the dashboard starts. See [ARCHITECTURE.md](ARCHITECTURE.md).
-  Implementation: **IN PROGRESS**; release target `2026.9.1.20`.
+  Implementation: **IMPLEMENTED / READY FOR DRAFT REVIEW**; release target
+  `2026.9.1.20`. Pre-implementation documentation checkpoint: `fa2dd32`.
 - Owner report after installing 2026.9.1.19: the Android app uses an external
   HA URL through Cloudflare Tunnel with client-certificate authentication
   (mTLS). HA itself works, but the saved VM card still reports
@@ -487,7 +489,7 @@ Scan All remains.
   Resource timing has a bounded buffer, so the empty external history alone
   is not proof that no module request occurred.
 - Investigation: **IN PROGRESS** on `fix/cards-external-mtls`. Native resource
-  delivery is being implemented after the owner's decision; the slow-start
+  delivery is implemented after the owner's decision; the slow-start
   race must not be presented as an explanation of this remaining failure.
 - Isolated HA Container 2026.9.4 lab: a loopback-only HTTPS reverse proxy
   rejects requests without a valid test client certificate. All four card
@@ -583,13 +585,46 @@ Scan All remains.
   test credentials, certificates, and evidence remain under ignored
   `.dev/frontend-lab-2026.9.4`; the pinned development environment is unchanged.
 
+## 2026.9.1.20 native Lovelace resource delivery
+
+- Architecture: **ACCEPTED BY OWNER BEFORE IMPLEMENTATION on 2026-10-04**.
+  Implementation: **READY FOR DRAFT REVIEW**, on `fix/cards-external-mtls`.
+  Checkpoint: `fa2dd32`.
+- Setup serves the existing static directory and uses HA's native resource
+  collection to create/update one relative versioned `module` entry. Old
+  entries for the exact integration-served relative path are consolidated;
+  unrelated resources and dashboard configs are preserved. The setup no
+  longer calls `add_extra_js_url`; `lovelace` is a soft ordering dependency.
+- Native YAML resource mode remains operator configured, with a precise
+  logged URL and a README declaration. No YAML is rewritten or overlaid.
+- Validation: full `scripts/test.sh` passed **884 Python tests, 66 Node tests,
+  and 213 snapshots**, plus Ruff and formatting/diff checks. Native-collection
+  regressions cover release upgrades, stable IDs, duplicate owned URLs,
+  unrelated resources, repeated setup, YAML mode, and isolated save failures.
+- Seven checks passed on actual HA Container 2026.9.4 with the local mTLS
+  proxy and mobile Chromium: automatic resource creation during HA startup,
+  rejection without a client certificate, the no-resource negative control,
+  browser, native V1/V2 frontend paths, external -> local -> external switching,
+  and a controlled service-worker reload. All healthy dashboard and picker
+  runs have five definitions/types with no Hubinet import in the navigation
+  HTML. Removing the native resource leaves zero definitions while the source
+  still returns HTTP 200; restoring it repairs loading on the next dashboard
+  start. These are Chromium tests with simulated native bridges, not native
+  Android WebView or Cloudflare tests. Private lab certificate validation is
+  bypassed only in Chromium; the proxy still enforces the client certificate.
+- No Proxmox host is configured in the frontend lab; the saved VM card and
+  picker previews render the normal choose-device state. Live operations,
+  native Android WebView 153, and the owner's Cloudflare endpoint remain
+  outside the successful lab coverage.
+- Release metadata target: `2026.9.1.20`; helper v5 and protocol v1 unchanged.
+
 ## Next
 
-Implement the owner-accepted native Lovelace resource delivery, reproduce
-the missing HTML import with native dashboard resource loading, and verify
-the same saved dashboard and Add card picker across the external/local URL
-transition before publishing 2026.9.1.20. Live Android/Cloudflare confirmation
-remains required after the local lab checks. Tag
+Review the owner-accepted native Lovelace resource delivery and have the owner
+validate 2026.9.1.20 in the external Android app without the diagnostic's
+force-load button. The missing HTML import and native resource recovery are
+verified in the local HA/mTLS lab; live Android/Cloudflare confirmation remains
+required before treating the reported failure as closed. Tag
 `2026.9.1.16` (main `0409d76`) if still wanted.
 
 ## Explicitly not started
