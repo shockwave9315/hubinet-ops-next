@@ -41,6 +41,15 @@ UPID to fork-owned background task observation, terminal notification, and a
 confirmed-success signal for the exact guest's snapshot selector. This adds no
 snapshot inventory or main-coordinator refresh.
 
+Planned release 2026.9.1.21 Checkpoint B minimally extends that hook: the
+launcher returns the same existing observation task, and the native Create
+entity keeps its handle and publishes task-derived running truth. Restore and
+Delete resolve that existing entity through HA's entity registry and button
+component, checking the same guest before acceptance and after fresh native
+validation. Native POST shape, UPID observation, terminal notifications,
+success-only selector refresh, power controls, and coordinator ownership remain
+unchanged; no second observer or custom task registry is added.
+
 Release 2026.9.1.11 extends the existing fork-owned snapshot adapter and
 orchestration with explicit QEMU/LXC Delete through the ordinary native PVE
 DELETE endpoint, without force. Delete shares the existing selector and

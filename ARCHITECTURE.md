@@ -40,8 +40,9 @@ was skipped, or classify a pre-mutation failure/cancellation as snapshot failure
 when no snapshot work failed. Autoremove remains snapshot-required and never
 inherits this flag, including the existing opt-in Easy Update continuation.
 There is no frontend "without snapshot" button in A. Checkpoints B/C/D,
-version changes, PR creation, and changes to PR #25's Lovelace Resources
-mechanism are outside this implementation. The pre-runtime acceptance
+version changes, and PR creation were outside the original A checkpoint;
+the subsequent stage/B authorization is recorded below. Changes to PR #25's
+Lovelace Resources mechanism remain outside the stage. The pre-runtime acceptance
 checkpoint is commit `1988eaa`; A is implemented in the existing modules.
 Permission is a native button capability attribute, available even while
 approval makes that button unavailable. Failure/cancellation before any
@@ -86,6 +87,15 @@ running. Reload/remount reconstructs it from entity state. Local service-call
 duration. C's skip button/responsive layout and D's mini width/RAM changes
 are outside B. Existing transient ownership still ends on HA reload/restart;
 no persistent task recovery or new PVE authority is added.
+
+The pre-runtime acceptance checkpoint is `35a82ac`. B is implemented in the
+existing button, orchestration, and guest-card modules. Running is a native
+Create button capability attribute, retained even when coordinator failure
+makes that entity unavailable. Restore/Delete read the live entity property,
+not a potentially stale state projection; stable unique-ID resolution also
+survives an entity rename. Their fresh-validation rejection publishes the
+existing `NOT_STARTED` result and releases the ordinary LXC reservation without
+invalidating package truth or submitting a mutation.
 
 ### Native Lovelace card resources (2026.9.1.20)
 

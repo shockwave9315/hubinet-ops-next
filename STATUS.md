@@ -103,9 +103,35 @@ Status date: 2026-10-04
 - A: **DONE**, HEAD after A `49a12c1`, validation recorded above.
 - B architecture: **ACCEPTED BY OWNER BEFORE RUNTIME IMPLEMENTATION**; see
   [the accepted contract](ARCHITECTURE.md#checkpoint-b-native-snapshot-create-running).
-  Implementation: **IN PROGRESS**. The existing native Create entity owns the
-  existing observation task; Restore/Delete read it through native HA entity
-  ownership. This documentation checkpoint precedes runtime edits.
+  Implementation: **DONE / READY FOR OWNER REVIEW**. Pre-runtime
+  documentation checkpoint: `35a82ac`; runtime/tests: `8f679cf`.
+- Draft PR: [#26](https://github.com/shockwave9315/hubinet-ops-next/pull/26),
+  against `main`, on the existing branch. It covers the whole A/B/C/D stage and
+  remains **DRAFT**. Version-only commit: `cc5b1e2`.
+- B's native Create entity owns the exact existing observation task and
+  publishes `snapshot_create_running` at launch and task completion.
+  Restore/Delete read the same live entity through HA's existing registry and
+  button component, before acceptance and after fresh validation. No new
+  observer, registry, store, timer, coordinator, or lifecycle is introduced.
+- Full VM/LXC cards reconstruct the spinner/label and snapshot-only blocking
+  from the backend fact, including remount; power controls retain their rules.
+  Success, failure, uncertainty, cancellation, eager completion, POST failure,
+  and observation-launch failure are covered. Notifications and success-only
+  selector refresh retain their existing semantics.
+- B validation: **174 targeted Python tests, 80 Node tests, and 56 snapshots
+  passed**, plus repository Ruff. Targeted self-review: **PASS**, no unresolved
+  B finding. A regression: **188 Python tests and 80 Node tests passed**.
+- Final full `scripts/test.sh`: **1004 Python tests, 80 Node tests, and 213
+  snapshots passed**, plus repository Ruff (56.18s Python run).
+  `git diff --check`, canonical EN parity and PL exception-key parity passed.
+  The unchanged observer/notification functions and A package-button classes
+  were checked structurally against A's HEAD. No Lovelace Resources mechanism
+  or C/D runtime/layout change is included.
+- Live PVE and owner dashboard validation of B have not been performed. Existing
+  bounded-observation uncertainty and ephemeral HA ownership remain accepted
+  limits; there is no PVE-success claim on UNCERTAIN. Optional test-file Ruff
+  still reports the same 13 pre-existing diagnostics in upstream-derived
+  `test_button.py`; mandatory repository Ruff passes and B adds none.
 - C/D: **NOT STARTED** and outside the current implementation.
 - PR #25 Lovelace Resources mechanism remains unchanged.
 
@@ -693,8 +719,8 @@ Scan All remains.
 
 ## Next
 
-Implement and validate Checkpoint B on the existing A/B/C/D Draft PR, keeping
-A passing and C/D unimplemented. The whole stage uses planned release .21.
+Owner review and live validation of completed A/B on the existing A/B/C/D
+Draft PR; keep C/D unimplemented. The whole stage uses planned release .21.
 Owner review and live validation remain outstanding; do not merge, tag, or
 create a release. Tag `2026.9.1.16` (main `0409d76`) if still wanted.
 
