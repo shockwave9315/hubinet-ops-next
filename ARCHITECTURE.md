@@ -136,6 +136,23 @@ width calculation, library, or `overflow: hidden` on the whole card is used.
 Checkpoint B's semantics are preserved: the backend running fact drives the
 spinner and blocks only Create/Restore/Delete; power controls stay independent.
 
+The pre-runtime acceptance checkpoint is commit `e4d741d`; C is implemented in
+the existing card and logic modules (`58cddce`). The shared Easy Update view
+adds `skipSnapshot` only for a caller that passes `offerSkipSnapshot`, which
+only the full LXC card does. It needs the package Update button, a parsable
+displayed scan attempt, and the same "updates available" state as the normal
+action. The armed target is
+`JSON.stringify([device_id, "skip_snapshot", expected_scan_attempt, pending])`.
+Every button of an action group keeps one fixed flex slot, so a longer armed
+label wraps inside its own button and never moves a neighbour: arming skip
+cannot put it under a tap aimed at the normal Update. A skip tap is also
+refused while a card request is in flight, even from a not yet rebuilt button.
+
+Real-browser validation found that the Home Assistant 2026.9.4 frontend no
+longer ships `<ha-circular-progress>`, so B's Create spinner drew nothing there
+while its label and blocking worked. B's markup and semantics are unchanged; a
+CSS rule in the card draws the spinner on that element while it is undefined.
+
 ### Checkpoint D: mini width and optional VM guest memory
 
 Accepted by the owner on 2026-10-04 together with Checkpoint C, before runtime
@@ -179,6 +196,30 @@ data only Host is shown as before. The tile's tap/history and its sparkline
 stay the host sensor's; there is no guest sparkline, guest history, new tile,
 or new dashboard section. A current amount derived from the host percentage
 and maximum is presentation only and is never stored as telemetry.
+
+The pre-runtime acceptance checkpoint is commit `e4d741d`; D is implemented in
+`364719f` (backend) and `58cddce` (cards). `CONF_VM_GUEST_MEMORY` lives in
+`const.py`; the coordinator reads the entry option once at construction and
+`OptionsFlowWithReload` rebuilds it on save. `ProxmoxVMSensorEntityDescription`
+gains an optional `full_value_fn` that replaces `value_fn` only while the
+option is on, so with the option off every existing reader, including the raw
+`mem` host values, runs unchanged. The pure readers live in the fork-owned
+`vm_memory.py`.
+
+A usable number is a JSON number: finite, non-negative, and not a boolean;
+numeric text counts as malformed. Guest-override evidence is a `freemem` key, a
+`ballooninfo` carrying `total_mem` or `free_mem`, or a `ballooninfo` that is
+not an object. A present but unusable `memhost` is unknown rather than replaced
+by `mem`, and a `freemem` that contradicts `free_mem` fails guest validation.
+Accepted consequence: on a PVE that reports no `memhost`, turning the option on
+leaves host memory unknown for VMs whose `mem` may be guest-side; turning it
+off restores the previous value.
+
+`vm_guest_memory_percentage` is enabled by default and `vm_guest_memory`
+(bytes) is disabled by default, like the existing host bytes sensor. In the VM
+cards the used amount comes from the bytes sensor when it is enabled and is
+otherwise computed for display from the unrounded percentage state and the
+maximum sensor. LXC tiles are unchanged.
 
 ### Native Lovelace card resources (2026.9.1.20)
 

@@ -9,8 +9,9 @@ Status date: 2026-10-04
 - Baseline tag: `baseline-ha-2026.9.1`.
 - Runtime after merge: a domain-isolated custom-integration fork of Home Assistant
   Core `proxmoxve`, plus the package scan, review, update, and LXC Health
-  subsystem, guided fresh-install enrollment, native snapshot Restore, and
-  native snapshot Create observation and explicit native Delete documented in
+  subsystem, guided fresh-install enrollment, native snapshot Restore,
+  native snapshot Create observation and explicit native Delete, and the
+  opt-in VM guest memory telemetry documented in
   [ARCHITECTURE.md](ARCHITECTURE.md).
 - Planned development release for the whole A/B/C/D stage: `2026.9.1.21`,
   helper v5, protocol v1. No .21 tag or release has been created.
@@ -73,7 +74,7 @@ Status date: 2026-10-04
 - Execution plan A/B/C/D: **ACCEPTED BY OWNER on 2026-10-04**.
   A was the first authorized implementation; its accepted contract is in
   [ARCHITECTURE.md](ARCHITECTURE.md#checkpoint-a-explicit-one-shot-package-update-without-a-snapshot).
-- Checkpoint A implementation: **IMPLEMENTED / READY FOR OWNER REVIEW** on
+- Checkpoint A implementation: **IMPLEMENTED / OWNER-REVIEWED AND ACCEPTED** on
   `feat/checkpoint-a-skip-snapshot`, based on main `b38b950` after PR #25.
   Pre-runtime documentation acceptance checkpoint: `1988eaa`.
 - Default/native Update and all Autoremove remain snapshot-required; the
@@ -91,8 +92,9 @@ Status date: 2026-10-04
   `scripts/test.sh`: **981 Python tests, 72 Node tests, 213 snapshots passed**,
   plus repository Ruff. `git diff --check` passed. Targeted self-review of the
   full A change found no unresolved scope, runtime, or architecture issue.
-- Live PVE execution of A has not been performed; owner review/live validation
-  remains outstanding. The A checkpoint itself changed no release metadata.
+- The owner reviewed and accepted A (owner statement, 2026-10-04). A live PVE
+  execution of A is not recorded here. The A checkpoint itself changed no
+  release metadata.
 
 ## Current A/B/C/D stage (2026.9.1.21)
 
@@ -103,8 +105,9 @@ Status date: 2026-10-04
 - A: **DONE**, HEAD after A `49a12c1`, validation recorded above.
 - B architecture: **ACCEPTED BY OWNER BEFORE RUNTIME IMPLEMENTATION**; see
   [the accepted contract](ARCHITECTURE.md#checkpoint-b-native-snapshot-create-running).
-  Implementation: **DONE / READY FOR OWNER REVIEW**. Pre-runtime
-  documentation checkpoint: `35a82ac`; runtime/tests: `8f679cf`.
+  Implementation: **DONE / OWNER-REVIEWED AND ACCEPTED** (owner statement,
+  2026-10-04). Pre-runtime documentation checkpoint: `35a82ac`; runtime/tests:
+  `8f679cf`.
 - Draft PR: [#26](https://github.com/shockwave9315/hubinet-ops-next/pull/26),
   against `main`, on the existing branch. It covers the whole A/B/C/D stage and
   remains **DRAFT**. Version-only commit: `cc5b1e2`.
@@ -121,24 +124,79 @@ Status date: 2026-10-04
 - B validation: **174 targeted Python tests, 80 Node tests, and 56 snapshots
   passed**, plus repository Ruff. Targeted self-review: **PASS**, no unresolved
   B finding. A regression: **188 Python tests and 80 Node tests passed**.
-- Final full `scripts/test.sh`: **1004 Python tests, 80 Node tests, and 213
+- Full `scripts/test.sh` after B: **1004 Python tests, 80 Node tests, and 213
   snapshots passed**, plus repository Ruff (56.18s Python run).
   `git diff --check`, canonical EN parity and PL exception-key parity passed.
   The unchanged observer/notification functions and A package-button classes
   were checked structurally against A's HEAD. No Lovelace Resources mechanism
   or C/D runtime/layout change is included.
-- Live PVE and owner dashboard validation of B have not been performed. Existing
+- Live PVE and owner dashboard validation of B is not recorded here. Existing
   bounded-observation uncertainty and ephemeral HA ownership remain accepted
   limits; there is no PVE-success claim on UNCERTAIN. Optional test-file Ruff
   still reports the same 13 pre-existing diagnostics in upstream-derived
   `test_button.py`; mandatory repository Ruff passes and B adds none.
+- A and B: **OWNER-REVIEWED AND ACCEPTED** before C/D started.
 - C/D architecture: **ACCEPTED BY OWNER BEFORE RUNTIME IMPLEMENTATION on
-  2026-10-04**, as one joint stage after owner review and acceptance of A and
-  B; see the accepted contracts for
+  2026-10-04**, as one joint stage; see the accepted contracts for
   [C](ARCHITECTURE.md#checkpoint-c-full-lxc-skip-action-and-responsive-guest-cards)
   and
   [D](ARCHITECTURE.md#checkpoint-d-mini-width-and-optional-vm-guest-memory).
-  Implementation: **IN PROGRESS**.
+  Pre-runtime documentation checkpoint: `e4d741d`.
+- C: **DONE / READY FOR FINAL OWNER REVIEW** (`58cddce`). The full LXC card
+  offers a confirmed one-shot Update without a snapshot through the existing
+  `easy_update` action (`skip_snapshot: true`, `autoremove: false`, displayed
+  `expected_scan_attempt`); VM, mini, legacy compact, and standalone Easy
+  Update cards do not. The normal Update still requires `snapshot_permission`.
+  All four guest cards keep their controls inside their own `ha-card` with CSS
+  only.
+- D: **DONE / READY FOR FINAL OWNER REVIEW** (`364719f` backend, `58cddce`
+  cards). Mini cards default to `{ columns: 9, min_columns: 6 }`. The
+  `vm_guest_memory` entry option (default off) switches the per-node QEMU
+  listing to `full=1`; two stable guest memory sensors exist regardless of the
+  option; the VM RAM tile shows Guest and Host only with valid guest data.
+- Owner evidence, supplied by the owner and recorded as **PASS**: the QEMU
+  listing took about 0.492 s with `full=0` and about 0.492 s with `full=1` on
+  the owner node, and the real VM100 `full=1` payload carries `mem`,
+  `memhost`, `maxmem`, `freemem`, `balloon`, and `ballooninfo` with `actual`,
+  `free_mem`, `max_mem`, and `total_mem`. The tests use that field set with
+  test values. The option still defaults to off.
+- C/D validation: **111 targeted D Python tests** (135 snapshots) and **124
+  Node tests** (44 new for C/D: skip visibility, arm/confirm and its
+  cancellations, exact payload, busy and Create blocking, B regressions, grid
+  defaults, host-only and dual RAM). B regression: **174 Python tests and 56
+  snapshots passed**; A regression: **188 Python tests passed**.
+- Final full `scripts/test.sh` for the whole stage: **1069 Python tests, 124
+  Node tests, and 221 snapshots passed**, plus repository Ruff.
+  `git diff --check` passed. The 8 added snapshots are the two guest sensors of
+  each fixture VM; no existing snapshot changed. The changed test files add no
+  Ruff diagnostic or formatting difference; upstream-derived `test_sensor.py`
+  keeps its 3 earlier optional diagnostics.
+- Real-browser geometry validation: **PASS** on Home Assistant Container
+  2026.9.4 (frontend 20260826.7) with Chromium 154, using the existing
+  frontend lab and the real `ha-card`/`ha-icon` elements with injected guest
+  data. 24 scenarios (four card types, PL/EN, long names, armed labels,
+  "Tworzenie...", two update buttons, dual and host-only RAM, no-data and
+  error states) at 156, 180, 240, 300, 360, 390, and 420 px; several cards
+  side by side in a 12-column grid at five section widths; one-column phone
+  viewports of 320 to 412 px; and real pointer two-tap confirmations. No child
+  leaves its `ha-card`, overlaps a neighbour, or is clipped, and nothing
+  scrolls horizontally. As a control, the same checks on the pre-C/D modules
+  (`e7dd8fd`) report 194 of 312 card renderings with children outside their
+  card, 26 of them overlapping a neighbour, and horizontal scrolling in every
+  phone viewport, which reproduces the reported overflow.
+- In the real sections view, both mini cards and a legacy compact card take 9
+  of 12 columns by default, saved `grid_options` of 6 and 12 columns win, and
+  the stored dashboard configuration is unchanged.
+- Finding fixed in scope: the 2026.9.4 frontend has no
+  `<ha-circular-progress>`, so B's Create spinner was invisible there; a CSS
+  fallback now draws it without changing B's markup or semantics.
+- Targeted self-review of C and of D: **PASS**, no unresolved finding. Accepted
+  residuals: with the option on, numeric text in memory fields counts as
+  malformed, and a PVE without `memhost` leaves host memory unknown for VMs
+  whose `mem` may be guest-side.
+- Live PVE and owner dashboard validation of C/D have not been performed. The
+  browser lab has no Proxmox host; card data there is injected, and the options
+  dialog was exercised only by tests.
 - PR #25 Lovelace Resources mechanism remains unchanged.
 
 ## Guided enrollment
@@ -725,9 +783,10 @@ Scan All remains.
 
 ## Next
 
-Implement the accepted Checkpoints C and D on the existing A/B/C/D Draft PR.
-The whole stage uses planned release .21. Do not merge, tag, or create a
-release. Tag `2026.9.1.16` (main `0409d76`) if still wanted.
+Final owner review and live validation of the whole A/B/C/D stage on the
+existing Draft PR #26, planned release .21. A, B, C, and D are done; there is
+no further checkpoint. Do not merge, tag, or create a release until the owner
+decides. Tag `2026.9.1.16` (main `0409d76`) if still wanted.
 
 ## Explicitly not started
 
