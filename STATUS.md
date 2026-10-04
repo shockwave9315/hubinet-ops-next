@@ -72,11 +72,26 @@ Status date: 2026-10-04
 - Execution plan A/B/C/D: **ACCEPTED BY OWNER on 2026-10-04**.
   Only A is authorized for this implementation; its accepted contract is in
   [ARCHITECTURE.md](ARCHITECTURE.md#checkpoint-a-explicit-one-shot-package-update-without-a-snapshot).
-- Checkpoint A implementation: **IN PROGRESS** on
+- Checkpoint A implementation: **IMPLEMENTED / READY FOR OWNER REVIEW** on
   `feat/checkpoint-a-skip-snapshot`, based on main `b38b950` after PR #25.
-  The documentation acceptance checkpoint precedes all runtime changes.
+  Pre-runtime documentation acceptance checkpoint: `1988eaa`.
 - Default/native Update and all Autoremove remain snapshot-required; the
   explicit one-shot Easy Update exception changes only snapshot work.
+- `skip_snapshot=False` is the service/manager default and explicit native
+  press value. `True` skips permission gating, listing, warnings, naming,
+  Create/confirmation, and cleanup, then uses the existing guarded Update,
+  liveness, cleanup observation, Health, and invalidation path.
+- The native Update button also exists without `VM.Snapshot`, but remains
+  unavailable; its `snapshot_permission` capability attribute separately gates
+  the normal Easy action. `snapshot_skipped` and EN/PL notifications report
+  actual attempt truth, including failure/cancellation before mutation and
+  pruning. The YOLO continuation never passes skip to Autoremove.
+- Validation: **188 targeted Python tests and 72 Node tests passed**; full
+  `scripts/test.sh`: **981 Python tests, 72 Node tests, 213 snapshots passed**,
+  plus repository Ruff. `git diff --check` passed. Targeted self-review of the
+  full A change found no unresolved scope, runtime, or architecture issue.
+- Live PVE execution of A has not been performed; owner review/live validation
+  remains outstanding. No PR was created and no release metadata changed.
 - B/C/D: **NOT STARTED**. No frontend skip button, version bump, PR, or
   Lovelace Resources change is included. Release line remains `2026.9.1.20`.
 
@@ -657,15 +672,15 @@ Scan All remains.
   config entries; full cleanup cannot be promised when files disappear first.
   README documents removing all host entries in HA before HACS uninstall, and
   manual removal of an exact leftover resource through HA's Resources UI.
-  No .21 version or new final/RC tag is created.
+  P3 retained the .20 release pins; no .21 runtime version was introduced.
 - Review readiness: **MERGED IN PR #25 / TAGGED AS 2026.9.1.20**.
   The owner validation covers RC `2026.9.1.rc.01.20`; the subsequent P3 backend
   lifecycle fix is covered by the native HA config-entry/resource tests above.
 
 ## Next
 
-Complete Checkpoint A, review its full scope, run `scripts/test.sh`, and hand
-off for owner review. Keep B/C/D unimplemented and retain the .20 release pins;
+Owner review and live validation of completed Checkpoint A. Keep B/C/D
+unimplemented and retain the .20 release pins;
 do not create a PR. Tag `2026.9.1.16` (main `0409d76`) if still wanted.
 
 ## Explicitly not started

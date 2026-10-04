@@ -41,7 +41,13 @@ when no snapshot work failed. Autoremove remains snapshot-required and never
 inherits this flag, including the existing opt-in Easy Update continuation.
 There is no frontend "without snapshot" button in A. Checkpoints B/C/D,
 version changes, PR creation, and changes to PR #25's Lovelace Resources
-mechanism are outside this implementation.
+mechanism are outside this implementation. The pre-runtime acceptance
+checkpoint is commit `1988eaa`; A is implemented in the existing modules.
+Permission is a native button capability attribute, available even while
+approval makes that button unavailable. Failure/cancellation before any
+snapshot work is `PLAN_FAILED`; after mutation starts, an interrupted or
+unexpected result remains `MUTATION_UNCERTAIN`. Normal snapshot-work failures
+remain `SNAPSHOT_FAILED`, with the existing retention/uncertainty facts.
 
 ### Native Lovelace card resources (2026.9.1.20)
 
@@ -240,10 +246,11 @@ artifacts is not required.
   unchanged. The Easy Update card picker now lists Container devices that have
   the package Update button, whose native device class is `update`
   (`ButtonDeviceClass.UPDATE`, used by no other Hubinet-Ops entity); Easy
-  Update needs the same snapshot permission as that button. The same button is
-  the single Easy Update eligibility criterion in the frontend: the picker,
-  the default device of a new card, and whether a card offers the Easy Update
-  action (without it the card shows the count and opens details). The public
+  Update needs snapshot permission by default. Checkpoint A supersedes the
+  former button-existence permission assumption: the picker and default device
+  use the button for package capability, while the normal Easy Update action
+  additionally requires its explicit `snapshot_permission=True` attribute.
+  Without it the card shows the count and opens details. The public
   actions are `easy_update` and `scan_all_packages`.
 - **LXC card confirmation is bound to its target.** An armed tap records the
   action, its exact target (this LXC's button; for Restore and Delete also the
@@ -266,7 +273,8 @@ still stands.
 
 **Action.** One fork-owned domain action, `hubinet_ops.easy_update`, registered
 once in `async_setup` beside Scan All, takes `device_id` (required), `autoremove`
-(default false), and an optional `expected_scan_attempt`. Its target identity is
+(default false), an optional `expected_scan_attempt`, and, since Checkpoint A,
+`skip_snapshot` (default false, scoped to one Update). Its target identity is
 the Home Assistant `device_id` of one Hubinet-Ops Container device. Resolution is
 exact and read-only: device registry entry -> a loaded `hubinet_ops` config entry
 among its config entries -> that entry's existing coordinator `package_node` data
@@ -283,7 +291,8 @@ action requires the current successful non-empty `PackageScanRecord`; when
 `last_attempt`, so a click authorizes only the scan observation it displayed.
 It then calls the existing `PackageManager.confirm_review()` with the record's
 own token and the existing `async_start_update()`. Cheap read-only prechecks of
-running state, `VM.Snapshot` permission, Restore reservation, and same-target
+running state, `VM.Snapshot` permission unless explicitly skipped, Restore
+reservation, and same-target
 running work avoid leaving review state behind on predictable rejections; the
 manager remains authoritative for every check. Accepted work runs as the
 existing background Update, so the action returns immediately after acceptance
@@ -1579,6 +1588,10 @@ row actually changed; that count is reporting, not another safety gate.
 
 ### Native PVE snapshot lifecycle
 
+This lifecycle applies to NORMAL/default and native Update. The explicit
+Checkpoint A one-shot skip omits it entirely, including retained-name warnings
+and cleanup; it never falls back here after a failed snapshot.
+
 `packages/snapshots.py` is small stateless proxmoxer glue used only by this
 operation. It uses the native PVE API to list LXC snapshots, create one
 snapshot, read task status, delete the exact current snapshot, and list again.
@@ -1609,8 +1622,9 @@ background operation; it never selects newest, first, last, or a prefix match.
 
 ### Mutation, liveness, and retention
 
-Only after the exact temporary snapshot is confirmed does `update_packages`
-run the fixed mutation and post-mutation dpkg sanity. Generic liveness then
+After a confirmed exact temporary snapshot, or the explicit Checkpoint A
+one-shot skip, `update_packages` runs the same fixed mutation and post-mutation
+dpkg sanity. Generic liveness then
 requires both native PVE LXC status `running` and the existing typed guest
 helper boundary returning PONG for fixed `/bin/true`, with one bounded retry.
 It checks no DNS, HTTP, port, network service, process, container runtime,
