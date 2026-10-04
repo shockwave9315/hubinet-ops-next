@@ -420,6 +420,12 @@
       "vm_disk": {
         "name": "Użycie dysku"
       },
+      "vm_guest_memory": {
+        "name": "Użycie pamięci gościa"
+      },
+      "vm_guest_memory_percentage": {
+        "name": "Procent użycia pamięci gościa"
+      },
       "vm_max_cpu": {
         "name": "Maks. CPU"
       },
@@ -784,14 +790,17 @@
   "options": {
     "step": {
       "init": {
-        "title": "Automatyczny skan pakietów",
-        "description": "Raz dziennie sprawdza dostępne aktualizacje pakietów we wszystkich obsługiwanych LXC na tym hoście Proxmox. Skan niczego nie aktualizuje ani nie usuwa.",
+        "title": "Opcje Hubinet-Ops",
+        "description": "Opcje tego hosta Proxmox. Zapisanie przeładowuje integrację.",
         "data": {
           "auto_scan": "Skanuj automatycznie codziennie",
-          "auto_scan_time": "Godzina"
+          "auto_scan_time": "Godzina",
+          "vm_guest_memory": "Rozszerzone dane pamięci VM"
         },
         "data_description": {
-          "auto_scan_time": "Czas lokalny Home Assistanta. Zatrzymane lub zajęte LXC zostaną pominięte do następnego dnia."
+          "auto_scan": "Raz dziennie sprawdza dostępne aktualizacje pakietów we wszystkich obsługiwanych LXC na tym hoście Proxmox. Skan niczego nie aktualizuje ani nie usuwa.",
+          "auto_scan_time": "Czas lokalny Home Assistanta. Zatrzymane lub zajęte LXC zostaną pominięte do następnego dnia.",
+          "vm_guest_memory": "Wyłączone: pamięć VM pokazuje dotychczasowe zużycie po stronie hosta. Włączone: integracja używa pełnego listingu QEMU i może pokazać osobno pamięć Gość/Host. Na większych instalacjach może to zwiększyć koszt odczytu."
         }
       }
     }

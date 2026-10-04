@@ -15,6 +15,7 @@ from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers import selector
 from homeassistant.helpers.event import async_track_time_change
 
+from .const import CONF_VM_GUEST_MEMORY
 from .services import async_scan_entry
 
 _LOGGER = logging.getLogger(__name__)
@@ -53,12 +54,12 @@ def async_setup_auto_scan(hass: HomeAssistant, entry: ConfigEntry) -> None:
 
 
 class HubinetOpsOptionsFlow(OptionsFlowWithReload):
-    """Turn the daily automatic Scan on or off and choose its time."""
+    """Per-host options: the daily automatic Scan and extended VM memory data."""
 
     async def async_step_init(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
-        """Show and store the automatic Scan options."""
+        """Show and store the entry options."""
         if user_input is not None:
             return self.async_create_entry(data=user_input)
         options = self.config_entry.options
@@ -75,6 +76,10 @@ class HubinetOpsOptionsFlow(OptionsFlowWithReload):
                             CONF_AUTO_SCAN_TIME, DEFAULT_AUTO_SCAN_TIME
                         ),
                     ): selector.TimeSelector(),
+                    vol.Required(
+                        CONF_VM_GUEST_MEMORY,
+                        default=options.get(CONF_VM_GUEST_MEMORY, False),
+                    ): selector.BooleanSelector(),
                 }
             ),
         )

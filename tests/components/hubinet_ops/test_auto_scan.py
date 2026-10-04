@@ -2,13 +2,14 @@
 
 from datetime import datetime
 from types import MappingProxyType
-from unittest.mock import patch
+from unittest.mock import MagicMock, call, patch
 
 from freezegun.api import FrozenDateTimeFactory
 import pytest
 from tests.common import MockConfigEntry, async_fire_time_changed  # noqa: TID251
 
 from custom_components.hubinet_ops.auto_scan import CONF_AUTO_SCAN, CONF_AUTO_SCAN_TIME
+from custom_components.hubinet_ops.const import CONF_VM_GUEST_MEMORY
 from homeassistant.config_entries import ConfigEntryState
 from homeassistant.core import HomeAssistant
 from homeassistant.data_entry_flow import FlowResultType
@@ -37,7 +38,11 @@ async def test_options_flow_stores_choice_and_reloads(
     result = await hass.config_entries.options.async_init(mock_config_entry.entry_id)
     assert result["type"] is FlowResultType.FORM
     defaults = {key.schema: key.default() for key in result["data_schema"].schema}
-    assert defaults == {CONF_AUTO_SCAN: False, CONF_AUTO_SCAN_TIME: "06:00:00"}
+    assert defaults == {
+        CONF_AUTO_SCAN: False,
+        CONF_AUTO_SCAN_TIME: "06:00:00",
+        CONF_VM_GUEST_MEMORY: False,
+    }
     with patch.object(
         hass.config_entries, "async_reload", wraps=hass.config_entries.async_reload
     ) as reload:
@@ -50,8 +55,101 @@ async def test_options_flow_stores_choice_and_reloads(
     assert mock_config_entry.options == {
         CONF_AUTO_SCAN: True,
         CONF_AUTO_SCAN_TIME: "05:30:00",
+        CONF_VM_GUEST_MEMORY: False,
     }
     reload.assert_called_once_with(mock_config_entry.entry_id)
+
+
+async def _save_options(
+    hass: HomeAssistant, entry: MockConfigEntry, **changes: object
+) -> MagicMock:
+    """Submit the options form with its shown defaults plus the given changes."""
+    result = await hass.config_entries.options.async_init(entry.entry_id)
+    shown = {key.schema: key.default() for key in result["data_schema"].schema}
+    with patch.object(
+        hass.config_entries, "async_reload", wraps=hass.config_entries.async_reload
+    ) as reload:
+        result = await hass.config_entries.options.async_configure(
+            result["flow_id"], {**shown, **changes}
+        )
+        await hass.async_block_till_done()
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    return reload
+
+
+async def test_vm_guest_memory_defaults_off(
+    hass: HomeAssistant,
+    mock_proxmox_client: MagicMock,
+    mock_config_entry: MockConfigEntry,
+) -> None:
+    """Without the option the entry keeps the lightweight QEMU listing."""
+    await setup_integration(hass, mock_config_entry)
+    assert CONF_VM_GUEST_MEMORY not in mock_config_entry.options
+    assert mock_config_entry.runtime_data.vm_guest_memory is False
+    listing = mock_proxmox_client._node_mock.qemu.get  # noqa: SLF001
+    assert listing.call_args_list
+    assert all(used == call() for used in listing.call_args_list)
+
+
+async def test_vm_guest_memory_saved_on_and_off_reloads_and_is_read(
+    hass: HomeAssistant,
+    mock_proxmox_client: MagicMock,
+    mock_config_entry: MockConfigEntry,
+) -> None:
+    """Saving reloads; the new coordinator reads the option; others are kept."""
+    _set_options(mock_config_entry, auto_scan=True, auto_scan_time="05:30:00")
+    await setup_integration(hass, mock_config_entry)
+    listing = mock_proxmox_client._node_mock.qemu.get  # noqa: SLF001
+    first = mock_config_entry.runtime_data
+    assert first.vm_guest_memory is False
+
+    reload = await _save_options(
+        hass, mock_config_entry, **{CONF_VM_GUEST_MEMORY: True}
+    )
+    reload.assert_called_once_with(mock_config_entry.entry_id)
+    assert mock_config_entry.options == {
+        CONF_AUTO_SCAN: True,
+        CONF_AUTO_SCAN_TIME: "05:30:00",
+        CONF_VM_GUEST_MEMORY: True,
+    }
+    assert mock_config_entry.state is ConfigEntryState.LOADED
+    second = mock_config_entry.runtime_data
+    assert second is not first
+    assert second.vm_guest_memory is True
+    assert listing.call_args_list[-1] == call(full=1)
+
+    reload = await _save_options(
+        hass, mock_config_entry, **{CONF_VM_GUEST_MEMORY: False}
+    )
+    reload.assert_called_once_with(mock_config_entry.entry_id)
+    assert mock_config_entry.options == {
+        CONF_AUTO_SCAN: True,
+        CONF_AUTO_SCAN_TIME: "05:30:00",
+        CONF_VM_GUEST_MEMORY: False,
+    }
+    third = mock_config_entry.runtime_data
+    assert third is not second
+    assert third.vm_guest_memory is False
+    assert listing.call_args_list[-1] == call()
+
+
+async def test_changing_scan_options_keeps_vm_guest_memory(
+    hass: HomeAssistant,
+    mock_proxmox_client: MagicMock,
+    mock_config_entry: MockConfigEntry,
+) -> None:
+    """The form shows the saved value, so other changes do not reset it."""
+    _set_options(mock_config_entry, **{CONF_VM_GUEST_MEMORY: True})
+    await setup_integration(hass, mock_config_entry)
+    await _save_options(
+        hass, mock_config_entry, auto_scan=True, auto_scan_time="07:15:00"
+    )
+    assert mock_config_entry.options == {
+        CONF_AUTO_SCAN: True,
+        CONF_AUTO_SCAN_TIME: "07:15:00",
+        CONF_VM_GUEST_MEMORY: True,
+    }
+    assert mock_config_entry.runtime_data.vm_guest_memory is True
 
 
 async def test_enabled_scan_runs_daily_at_local_time(

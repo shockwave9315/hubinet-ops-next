@@ -35,6 +35,12 @@ from .packages.models import (
     PackageUpdateRecord,
     PackageUpdateStatus,
 )
+from .vm_memory import (
+    vm_guest_memory,
+    vm_guest_memory_percentage,
+    vm_host_memory,
+    vm_host_memory_percentage,
+)
 
 PARALLEL_UPDATES = 0
 
@@ -53,6 +59,8 @@ class ProxmoxVMSensorEntityDescription(SensorEntityDescription):
     """Class to hold Proxmox VM sensor description."""
 
     value_fn: Callable[[dict[str, Any]], StateType]
+    # Replaces value_fn only while the entry opted in to the full QEMU listing.
+    full_value_fn: Callable[[dict[str, Any]], StateType] | None = None
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -213,6 +221,7 @@ VM_SENSORS: tuple[ProxmoxVMSensorEntityDescription, ...] = (
         key="vm_memory",
         translation_key="vm_memory",
         value_fn=lambda data: data["mem"],
+        full_value_fn=vm_host_memory,
         device_class=SensorDeviceClass.DATA_SIZE,
         native_unit_of_measurement=UnitOfInformation.BYTES,
         suggested_unit_of_measurement=UnitOfInformation.GIBIBYTES,
@@ -236,6 +245,32 @@ VM_SENSORS: tuple[ProxmoxVMSensorEntityDescription, ...] = (
         key="vm_memory_percentage",
         translation_key="vm_memory_percentage",
         value_fn=lambda data: int(data["mem"]) / int(data["maxmem"]) * 100,
+        full_value_fn=vm_host_memory_percentage,
+        native_unit_of_measurement=PERCENTAGE,
+        entity_category=EntityCategory.DIAGNOSTIC,
+        suggested_display_precision=2,
+        state_class=SensorStateClass.MEASUREMENT,
+    ),
+    # Guest-reported memory: unknown unless the entry opted in and the VM's
+    # balloon data is consistent. The host sensors above keep their meaning.
+    ProxmoxVMSensorEntityDescription(
+        key="vm_guest_memory",
+        translation_key="vm_guest_memory",
+        value_fn=lambda data: None,
+        full_value_fn=vm_guest_memory,
+        device_class=SensorDeviceClass.DATA_SIZE,
+        native_unit_of_measurement=UnitOfInformation.BYTES,
+        suggested_unit_of_measurement=UnitOfInformation.GIBIBYTES,
+        suggested_display_precision=1,
+        entity_category=EntityCategory.DIAGNOSTIC,
+        state_class=SensorStateClass.MEASUREMENT,
+        entity_registry_enabled_default=False,
+    ),
+    ProxmoxVMSensorEntityDescription(
+        key="vm_guest_memory_percentage",
+        translation_key="vm_guest_memory_percentage",
+        value_fn=lambda data: None,
+        full_value_fn=vm_guest_memory_percentage,
         native_unit_of_measurement=PERCENTAGE,
         entity_category=EntityCategory.DIAGNOSTIC,
         suggested_display_precision=2,
@@ -625,7 +660,10 @@ class ProxmoxVMSensor(ProxmoxVMEntity, SensorEntity):
     @override
     def native_value(self) -> StateType:
         """Return the native value of the sensor."""
-        return self.entity_description.value_fn(self.vm_data)
+        description = self.entity_description
+        if self.coordinator.vm_guest_memory and description.full_value_fn is not None:
+            return description.full_value_fn(self.vm_data)
+        return description.value_fn(self.vm_data)
 
 
 class ProxmoxContainerSensor(ProxmoxContainerEntity, SensorEntity):

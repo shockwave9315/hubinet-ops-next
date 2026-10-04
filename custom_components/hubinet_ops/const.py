@@ -14,6 +14,8 @@ CONF_CONTAINERS = "containers"
 CONF_SSH_PRIVATE_KEY = "ssh_private_key"
 CONF_SSH_HOST_KEY = "ssh_host_key"
 CONF_PACKAGE_NODE = "package_node"
+# Entry option: request the full QEMU listing to tell guest and host memory apart.
+CONF_VM_GUEST_MEMORY = "vm_guest_memory"
 
 CONF_USER = "user"
 

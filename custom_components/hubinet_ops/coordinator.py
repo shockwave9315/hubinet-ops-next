@@ -36,6 +36,7 @@ from .const import (
     CONF_SSH_PRIVATE_KEY,
     CONF_TOKEN_ID,
     CONF_TOKEN_SECRET,
+    CONF_VM_GUEST_MEMORY,
     DEFAULT_TIMEOUT,
     DEFAULT_VERIFY_SSL,
     DOMAIN,
@@ -231,6 +232,10 @@ class ProxmoxCoordinator(DataUpdateCoordinator[dict[str, ProxmoxNodeData]]):
             ),
         )
         self.package_node: str | None = config_entry.data.get(CONF_PACKAGE_NODE)
+        # Opt-in entry option, read once per setup; saving options reloads.
+        self.vm_guest_memory = bool(
+            config_entry.options.get(CONF_VM_GUEST_MEMORY, False)
+        )
 
         self.known_nodes: set[str] = set()
         self.known_vms: set[tuple[str, int]] = set()
@@ -410,7 +415,17 @@ class ProxmoxCoordinator(DataUpdateCoordinator[dict[str, ProxmoxNodeData]]):
         api = self.proxmox.nodes(name)
         # Guest lists are required current truth: a failure still fails the
         # refresh rather than presenting old guests as current.
-        vms = _read(f"nodes/{name}/qemu", api.qemu.get) or []
+        # Still one listing per node: full=1 only adds PVE's own guest and
+        # host memory fields to it (opt-in), never a request per VM.
+        vms = (
+            _read(
+                f"nodes/{name}/qemu",
+                (lambda: api.qemu.get(full=1))
+                if self.vm_guest_memory
+                else api.qemu.get,
+            )
+            or []
+        )
         containers = _read(f"nodes/{name}/lxc", api.lxc.get) or []
         previous = (self.data or {}).get(name)
         try:
