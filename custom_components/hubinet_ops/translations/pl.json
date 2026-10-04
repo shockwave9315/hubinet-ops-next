@@ -727,6 +727,12 @@
     },
     "api_read_failed": {
       "message": "Zapytanie do API Proxmox VE nie powiodło się: {error}"
+    },
+    "package_update_success_without_snapshot_notification": {
+      "message": "Aktualizacja pakietów dla {node}/{vmid} zakończyła się pomyślnie. Faktycznie zmieniono {changed} zainstalowanych pakietów i potwierdzono działanie LXC. Snapshot bezpieczeństwa pominięto na jawne żądanie tylko dla tej operacji; nie utworzono ani nie usunięto snapshota."
+    },
+    "package_update_snapshot_skipped_detail": {
+      "message": "Snapshot bezpieczeństwa pominięto na jawne żądanie tylko dla tej operacji; nie utworzono ani nie usunięto snapshota."
     }
   },
   "issues": {
@@ -764,6 +770,10 @@
         "expected_scan_attempt": {
           "name": "Oczekiwany skan",
           "description": "Opcjonalny last_attempt skanu widzianego przez użytkownika; aktualizacja zostanie odrzucona, jeśli bieżący jest inny skan."
+        },
+        "skip_snapshot": {
+          "name": "Pomiń snapshot dla tej aktualizacji",
+          "description": "Jawnie pomija snapshot bezpieczeństwa tylko dla tej jednej operacji Update. Domyślnie wyłączone; pozostałe kontrole obowiązują. Autoremove nadal wymaga snapshota."
         }
       }
     }

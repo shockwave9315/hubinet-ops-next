@@ -334,6 +334,7 @@ async def async_setup_entry(
                         PackageReviewButtonEntity(coordinator, container, node_data),
                         PackageApproveButtonEntity(coordinator, container, node_data),
                         PackageHealthButtonEntity(coordinator, container, node_data),
+                        PackageUpdateButtonEntity(coordinator, container, node_data),
                     )
                 )
                 if is_granted(
@@ -342,9 +343,6 @@ async def async_setup_entry(
                     p_id=container["vmid"],
                     permission=ProxmoxPermission.SNAPSHOT,
                 ):
-                    entities.append(
-                        PackageUpdateButtonEntity(coordinator, container, node_data)
-                    )
                     entities.append(
                         PackageAutoremoveButtonEntity(
                             coordinator, container, node_data
@@ -675,7 +673,8 @@ class PackageUpdateButtonEntity(ProxmoxContainerEntity, ButtonEntity):
                 self._node_name,
                 self.device_id,
                 target_is_running=(
-                    container is not None
+                    self.coordinator.last_update_success
+                    and container is not None
                     and container.get("status") == VM_CONTAINER_RUNNING
                 ),
                 snapshot_permission=is_granted(
@@ -684,6 +683,7 @@ class PackageUpdateButtonEntity(ProxmoxContainerEntity, ButtonEntity):
                     p_id=self.device_id,
                     permission=ProxmoxPermission.SNAPSHOT,
                 ),
+                skip_snapshot=False,
             )
         except PackageUpdateError as err:
             raise HomeAssistantError(
@@ -691,6 +691,19 @@ class PackageUpdateButtonEntity(ProxmoxContainerEntity, ButtonEntity):
                 translation_key="package_update_failed",
                 translation_placeholders={"reason": str(err)},
             ) from err
+
+    @property
+    @override
+    def capability_attributes(self) -> dict[str, Any]:
+        """Expose permission independently of button existence/approval state."""
+        return {
+            "snapshot_permission": is_granted(
+                self.coordinator.permissions,
+                p_type="vms",
+                p_id=self.device_id,
+                permission=ProxmoxPermission.SNAPSHOT,
+            )
+        }
 
     @property
     @override

@@ -175,7 +175,11 @@ def notify_update_complete(
                 "snapshot": escape_markdown_cell(record.snapshot_name),
             }
         else:
-            key = "package_update_success_notification"
+            key = (
+                "package_update_success_without_snapshot_notification"
+                if record.snapshot_skipped
+                else "package_update_success_notification"
+            )
             placeholders = {**target, "changed": changed}
     elif record.outcome is PackageUpdateOutcome.PLAN_CHANGED:
         key = "package_update_plan_changed_notification"
@@ -188,7 +192,9 @@ def notify_update_complete(
         reason_key = _REASON_KEYS.get(
             record.outcome, "package_update_reason_mutation_uncertain"
         )
-        if record.snapshot_uncertain and record.snapshot_name is not None:
+        if record.snapshot_skipped:
+            retained = _translate(hass, "package_update_snapshot_skipped_detail")
+        elif record.snapshot_uncertain and record.snapshot_name is not None:
             retained = _translate(
                 hass,
                 "package_update_uncertain_snapshot_detail",

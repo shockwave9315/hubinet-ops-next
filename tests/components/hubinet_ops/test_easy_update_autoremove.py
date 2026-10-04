@@ -39,6 +39,7 @@ from .test_package_cleanup import (
     _scan,
     _snapshot_patches,
 )
+from .test_packages import _forbid_snapshot_operations
 
 
 class FakeCoordinator:
@@ -67,16 +68,25 @@ async def _updated(
     hass: HomeAssistant,
     entry: MockConfigEntry,
     transport: CleanupTransport,
+    *,
+    skip_snapshot: bool = False,
+    snapshot_permission: bool = True,
 ):
     """Scan, approve, start the real Update, then start the continuation."""
     entry.add_to_hass(hass)
     coordinator = FakeCoordinator()
+    if not snapshot_permission:
+        coordinator.permissions = {}
     manager, _ = _manager(hass, entry, transport, on_state_change=coordinator.notify)
     coordinator.package_manager = manager
     await _scan(manager)
     await _review(manager)
     manager.async_start_update(
-        "pve1", 200, target_is_running=True, snapshot_permission=True
+        "pve1",
+        200,
+        target_is_running=True,
+        snapshot_permission=snapshot_permission,
+        skip_snapshot=skip_snapshot,
     )
     target = EasyUpdateTarget(entry, coordinator, "pve1", 200)
     async_start_post_update_autoremove(hass, target, manager.update_record("pve1", 200))
@@ -300,3 +310,61 @@ async def test_stale_coordinator_data_ends_the_follower(
         transport.health_release.set()
         await _finish(hass)
     assert transport.autoremove_calls == 0
+
+
+@pytest.mark.parametrize("snapshot_permission", [False, True])
+async def test_skipped_update_never_passes_skip_to_yolo_autoremove(
+    hass: HomeAssistant,
+    mock_config_entry: MockConfigEntry,
+    snapshot_permission: bool,
+) -> None:
+    """YOLO after skip either takes its own confirmed snapshot or is refused."""
+    transport = _held_health()
+    with _forbid_snapshot_operations():
+        manager, coordinator = await _updated(
+            hass,
+            mock_config_entry,
+            transport,
+            skip_snapshot=True,
+            snapshot_permission=snapshot_permission,
+        )
+        await transport.health_entered.wait()
+        assert manager.update_record("pve1", 200).snapshot_skipped is True
+        assert transport.autoremove_calls == 0
+    patches = _snapshot_patches()
+    with (
+        patches[0] as listing,
+        patches[1] as create,
+        patches[2] as delete,
+        patches[3] as name,
+        patch.object(
+            manager, "async_start_autoremove", wraps=manager.async_start_autoremove
+        ) as start,
+    ):
+        transport.health_release.set()
+        await _finish(hass)
+    assert manager.update_record("pve1", 200).status is PackageUpdateStatus.SUCCESS
+    assert manager.update_record("pve1", 200).snapshot_skipped is True
+    assert manager.cleanup_record("pve1", 200).snapshot_skipped is False
+    assert coordinator.listeners == []
+    if snapshot_permission:
+        start.assert_called_once_with(
+            "pve1", 200, target_is_running=True, snapshot_permission=True
+        )
+        listing.assert_awaited_once()
+        create.assert_awaited_once()
+        delete.assert_awaited_once()
+        name.assert_called_once()
+        assert transport.autoremove_calls == 1
+        assert manager.cleanup_record("pve1", 200).status is PackageUpdateStatus.SUCCESS
+    else:
+        start.assert_not_called()
+        for operation in (listing, create, delete, name):
+            operation.assert_not_called()
+        assert transport.autoremove_calls == 0
+        # Even a direct Autoremove call after a skipped Update requires permission.
+        with pytest.raises(PackageUpdateError) as err:
+            manager.async_start_autoremove(
+                "pve1", 200, target_is_running=True, snapshot_permission=False
+            )
+        assert err.value.outcome is PackageUpdateOutcome.SNAPSHOT_FAILED

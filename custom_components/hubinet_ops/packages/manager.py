@@ -711,6 +711,7 @@ class PackageManager:
         *,
         target_is_running: bool,
         snapshot_permission: bool,
+        skip_snapshot: bool = False,
     ) -> asyncio.Task[None]:
         """Accept a reviewed plan, invalidate scan evidence, and start update."""
         if not self.configured or self._proxmox_getter is None:
@@ -723,7 +724,7 @@ class PackageManager:
                 PackageUpdateOutcome.GUEST_UNAVAILABLE,
                 "LXC is not present and running in current Proxmox data",
             )
-        if not snapshot_permission:
+        if not skip_snapshot and not snapshot_permission:
             raise PackageUpdateError(
                 PackageUpdateOutcome.SNAPSHOT_FAILED,
                 "VM.Snapshot permission is required for package updates",
@@ -757,6 +758,7 @@ class PackageManager:
             or reviewed.status is not PackageScanStatus.SUCCESS
             or reviewed.result is None
             or not reviewed.result.packages
+            or reviewed.token is None
             or not reviewed.reviewed
         ):
             raise PackageUpdateError(
@@ -775,6 +777,7 @@ class PackageManager:
         own_record = PackageUpdateRecord(
             status=PackageUpdateStatus.RUNNING,
             last_attempt=attempted_at,
+            snapshot_skipped=skip_snapshot,
         )
         self._set_update_record(node, vmid, own_record)
         task = self._config_entry.async_create_background_task(
@@ -797,6 +800,7 @@ class PackageManager:
     ) -> None:
         """Run the accepted plan/snapshot/mutation/sanity/liveness lifecycle."""
         snapshot_name: str | None = None
+        snapshot_started = False
         snapshot_submitted = False
         snapshot_ready = False
         mutation_started = False
@@ -809,32 +813,34 @@ class PackageManager:
                 _require_plan_unchanged(fresh, reviewed_plan)
 
                 proxmox = self._proxmox_getter()
-                rows = await async_list_snapshots(
-                    proxmox,
-                    node,
-                    vmid,
-                    executor=self._hass.async_add_executor_job,
-                )
-                retained = retained_snapshot_summary(rows)
-                if retained.total_count:
-                    self._notify_retained_snapshots(node, vmid, retained)
+                if not own_record.snapshot_skipped:
+                    snapshot_started = True
+                    rows = await async_list_snapshots(
+                        proxmox,
+                        node,
+                        vmid,
+                        executor=self._hass.async_add_executor_job,
+                    )
+                    retained = retained_snapshot_summary(rows)
+                    if retained.total_count:
+                        self._notify_retained_snapshots(node, vmid, retained)
 
-                snapshot_name = generate_snapshot_name()
+                    snapshot_name = generate_snapshot_name()
 
-                def _mark_snapshot_submitted() -> None:
-                    nonlocal snapshot_submitted
-                    snapshot_submitted = True
+                    def _mark_snapshot_submitted() -> None:
+                        nonlocal snapshot_submitted
+                        snapshot_submitted = True
 
-                await async_create_snapshot(
-                    proxmox,
-                    node,
-                    vmid,
-                    snapshot_name,
-                    executor=self._hass.async_add_executor_job,
-                    sleep=self._sleep,
-                    on_submit=_mark_snapshot_submitted,
-                )
-                snapshot_ready = True
+                    await async_create_snapshot(
+                        proxmox,
+                        node,
+                        vmid,
+                        snapshot_name,
+                        executor=self._hass.async_add_executor_job,
+                        sleep=self._sleep,
+                        on_submit=_mark_snapshot_submitted,
+                    )
+                    snapshot_ready = True
 
                 mutation_started = True
                 mutation = await self._async_transport(
@@ -844,40 +850,38 @@ class PackageManager:
 
                 await self._async_require_liveness(proxmox, node, vmid)
 
-                try:
-                    await async_delete_snapshot(
-                        proxmox,
-                        node,
-                        vmid,
-                        snapshot_name,
-                        executor=self._hass.async_add_executor_job,
-                        sleep=self._sleep,
-                    )
-                except SnapshotError:
-                    outcome = PackageUpdateRecord(
-                        status=PackageUpdateStatus.SUCCESS,
-                        last_attempt=attempted_at,
-                        outcome=PackageUpdateOutcome.SUCCESS,
-                        snapshot_retained=True,
-                        snapshot_cleanup_failed=True,
-                        snapshot_name=snapshot_name,
-                        liveness=True,
-                        changed_package_count=changed_count,
-                        error_message="package update succeeded but snapshot cleanup failed",
-                    )
-                else:
-                    outcome = PackageUpdateRecord(
-                        status=PackageUpdateStatus.SUCCESS,
-                        last_attempt=attempted_at,
-                        outcome=PackageUpdateOutcome.SUCCESS,
-                        liveness=True,
-                        changed_package_count=changed_count,
-                    )
+                outcome = PackageUpdateRecord(
+                    status=PackageUpdateStatus.SUCCESS,
+                    last_attempt=attempted_at,
+                    outcome=PackageUpdateOutcome.SUCCESS,
+                    snapshot_skipped=own_record.snapshot_skipped,
+                    liveness=True,
+                    changed_package_count=changed_count,
+                )
+                if not own_record.snapshot_skipped:
+                    try:
+                        await async_delete_snapshot(
+                            proxmox,
+                            node,
+                            vmid,
+                            snapshot_name,
+                            executor=self._hass.async_add_executor_job,
+                            sleep=self._sleep,
+                        )
+                    except SnapshotError:
+                        outcome = replace(
+                            outcome,
+                            snapshot_retained=True,
+                            snapshot_cleanup_failed=True,
+                            snapshot_name=snapshot_name,
+                            error_message="package update succeeded but snapshot cleanup failed",
+                        )
         except PackageUpdateError as err:
             outcome = PackageUpdateRecord(
                 status=PackageUpdateStatus.FAILED,
                 last_attempt=attempted_at,
                 outcome=err.outcome,
+                snapshot_skipped=own_record.snapshot_skipped,
                 snapshot_retained=snapshot_ready,
                 snapshot_name=snapshot_name if snapshot_ready else None,
                 liveness=False
@@ -895,6 +899,7 @@ class PackageManager:
                 status=PackageUpdateStatus.FAILED,
                 last_attempt=attempted_at,
                 outcome=PackageUpdateOutcome.SNAPSHOT_FAILED,
+                snapshot_skipped=own_record.snapshot_skipped,
                 snapshot_uncertain=err.may_exist,
                 snapshot_name=snapshot_name if err.may_exist else None,
                 error_message=str(err)[:_MAX_ERROR_MESSAGE_LENGTH],
@@ -907,7 +912,10 @@ class PackageManager:
                     PackageUpdateOutcome.MUTATION_UNCERTAIN
                     if mutation_started
                     else PackageUpdateOutcome.SNAPSHOT_FAILED
+                    if snapshot_started
+                    else PackageUpdateOutcome.PLAN_FAILED
                 ),
+                snapshot_skipped=own_record.snapshot_skipped,
                 snapshot_retained=snapshot_ready,
                 snapshot_uncertain=snapshot_submitted and not snapshot_ready,
                 snapshot_name=(
@@ -933,7 +941,10 @@ class PackageManager:
                     PackageUpdateOutcome.MUTATION_UNCERTAIN
                     if mutation_started
                     else PackageUpdateOutcome.SNAPSHOT_FAILED
+                    if snapshot_started
+                    else PackageUpdateOutcome.PLAN_FAILED
                 ),
+                snapshot_skipped=own_record.snapshot_skipped,
                 snapshot_retained=snapshot_ready,
                 snapshot_uncertain=snapshot_submitted and not snapshot_ready,
                 snapshot_name=(

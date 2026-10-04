@@ -4,6 +4,7 @@
 
 import asyncio
 from copy import deepcopy
+from dataclasses import replace
 from datetime import UTC, datetime
 from unittest.mock import MagicMock, patch
 
@@ -19,6 +20,7 @@ from custom_components.hubinet_ops.packages.models import (
     PackageScanStatus,
     PackageUpdateError,
     PackageUpdateOutcome,
+    PackageUpdateRecord,
     PackageUpdateStatus,
 )
 from homeassistant.core import Context, HomeAssistant
@@ -111,6 +113,7 @@ async def test_device_resolves_to_exact_lxc_and_starts_existing_update(
         )
     confirm.assert_called_once_with("pve1", 200, TOKEN)
     assert manager.update_record("pve1", 200).status is PackageUpdateStatus.RUNNING
+    assert manager.update_record("pve1", 200).snapshot_skipped is False
     # Accepted Update invalidates old scan evidence, as the button path does.
     assert manager.record("pve1", 200).status is PackageScanStatus.NEVER
     await entered.wait()
@@ -250,10 +253,12 @@ async def test_empty_scan_is_rejected(
     )
 
 
+@pytest.mark.parametrize("skip_snapshot", [False, True])
 async def test_changed_scan_never_authorizes_the_new_plan(
     hass: HomeAssistant,
     mock_config_entry: MockConfigEntry,
     package_transport_material: None,
+    skip_snapshot: bool,
 ) -> None:
     """The click authorizes only the scan observation the card displayed."""
     await setup_integration(hass, mock_config_entry)
@@ -265,6 +270,7 @@ async def test_changed_scan_never_authorizes_the_new_plan(
             _device_id(hass, "1234_container_200"),
             "easy_update_scan_changed",
             expected_scan_attempt="2026-10-02T04:00:00+00:00",
+            skip_snapshot=skip_snapshot,
         )
     start.assert_not_called()
     assert manager.record("pve1", 200).reviewed is False
@@ -393,10 +399,12 @@ async def test_autoremove_choice_controls_only_the_continuation(
     await hass.async_block_till_done(wait_background_tasks=True)
 
 
+@pytest.mark.parametrize("skip_snapshot", [False, True])
 async def test_stale_coordinator_data_is_rejected_without_side_effects(
     hass: HomeAssistant,
     mock_config_entry: MockConfigEntry,
     package_transport_material: None,
+    skip_snapshot: bool,
 ) -> None:
     """A failed latest Proxmox refresh never starts Easy Update."""
     await setup_integration(hass, mock_config_entry)
@@ -404,7 +412,10 @@ async def test_stale_coordinator_data_is_rejected_without_side_effects(
     coordinator = mock_config_entry.runtime_data
     coordinator.last_update_success = False
     await _expect_invalid(
-        hass, _device_id(hass, "1234_container_200"), "easy_update_not_running"
+        hass,
+        _device_id(hass, "1234_container_200"),
+        "easy_update_not_running",
+        skip_snapshot=skip_snapshot,
     )
     manager = coordinator.package_manager
     record = manager.record("pve1", 200)
@@ -428,16 +439,20 @@ async def _expect_unauthorized(hass: HomeAssistant, user_id: str, **data) -> Non
         )
 
 
+@pytest.mark.parametrize("skip_snapshot", [False, True])
 async def test_user_without_control_is_unauthorized_before_review(
     hass: HomeAssistant,
     mock_config_entry: MockConfigEntry,
     package_transport_material: None,
     hass_read_only_user: MockUser,
+    skip_snapshot: bool,
 ) -> None:
     """A restricted user needs CONTROL on the Update button; nothing changes."""
     await setup_integration(hass, mock_config_entry)
     _seed_scan(mock_config_entry)
-    await _expect_unauthorized(hass, hass_read_only_user.id)
+    await _expect_unauthorized(
+        hass, hass_read_only_user.id, skip_snapshot=skip_snapshot
+    )
     manager = mock_config_entry.runtime_data.package_manager
     assert manager.record("pve1", 200).reviewed is False
     assert manager.record("pve1", 200).token == TOKEN
@@ -498,3 +513,153 @@ async def test_admin_user_is_unchanged(
     await entered.wait()
     release.set()
     await hass.async_block_till_done(wait_background_tasks=True)
+
+
+async def test_skip_without_snapshot_permission_still_requires_and_accepts_control(
+    hass: HomeAssistant,
+    mock_proxmox_client: MagicMock,
+    mock_config_entry: MockConfigEntry,
+    package_transport_material: None,
+    blocked_plan,
+    hass_read_only_user: MockUser,
+) -> None:
+    """The unavailable native button remains a real CONTROL authorization target."""
+    permissions = deepcopy(mock_proxmox_client.access.permissions.get.return_value)
+    for grants in permissions.values():
+        grants.pop("VM.Snapshot", None)
+    mock_proxmox_client.access.permissions.get.return_value = permissions
+    entered, release = blocked_plan
+    await setup_integration(hass, mock_config_entry)
+    _seed_scan(mock_config_entry)
+    manager = mock_config_entry.runtime_data.package_manager
+    button = hass.states.get(UPDATE_BUTTON)
+    assert button is not None
+    assert button.state == "unavailable"
+    assert button.attributes["snapshot_permission"] is False
+    await _expect_unauthorized(hass, hass_read_only_user.id, skip_snapshot=True)
+    assert manager.record("pve1", 200).reviewed is False
+    # Same permission boundary as native button press, despite VM.Snapshot absence.
+    user = MockUser().add_to_hass(hass)
+    user.mock_policy({"entities": {"entity_ids": {UPDATE_BUTTON: True}}})
+    with patch.object(
+        manager, "async_start_update", wraps=manager.async_start_update
+    ) as start:
+        await hass.services.async_call(
+            DOMAIN,
+            "easy_update",
+            {
+                "device_id": _device_id(hass, "1234_container_200"),
+                "skip_snapshot": True,
+            },
+            blocking=True,
+            context=Context(user_id=user.id),
+        )
+    start.assert_called_once_with(
+        "pve1",
+        200,
+        target_is_running=True,
+        snapshot_permission=False,
+        skip_snapshot=True,
+    )
+    assert manager.record("pve1", 200).status is PackageScanStatus.NEVER
+    assert manager.update_record("pve1", 200).snapshot_skipped is True
+    await entered.wait()
+    release.set()
+    await hass.async_block_till_done(wait_background_tasks=True)
+    assert (
+        manager.update_record("pve1", 200).outcome is PackageUpdateOutcome.PLAN_FAILED
+    )
+    assert manager.update_record("pve1", 200).snapshot_skipped is True
+
+
+@pytest.mark.parametrize(
+    ("guard", "key"),
+    [
+        ("stopped", "easy_update_not_running"),
+        ("never", "easy_update_no_current_scan"),
+        ("scan", "easy_update_no_current_scan"),
+        ("failed", "easy_update_no_current_scan"),
+        ("no_result", "easy_update_no_current_scan"),
+        ("no_token", "easy_update_no_current_scan"),
+        ("empty", "easy_update_nothing_to_update"),
+        ("restore", "package_update_failed"),
+        ("update", "package_update_failed"),
+        ("autoremove", "package_update_failed"),
+        ("health", "package_update_failed"),
+    ],
+)
+async def test_skip_keeps_easy_update_evidence_and_busy_guards_before_review(
+    hass: HomeAssistant,
+    mock_config_entry: MockConfigEntry,
+    package_transport_material: None,
+    guard: str,
+    key: str,
+) -> None:
+    """Skip cannot confirm an invalid plan or begin work on a stopped/busy LXC."""
+    await setup_integration(hass, mock_config_entry)
+    _seed_scan(mock_config_entry)
+    coordinator = mock_config_entry.runtime_data
+    manager = coordinator.package_manager
+    record = manager.record("pve1", 200)
+    if guard == "stopped":
+        coordinator.data["pve1"].containers[200]["status"] = "stopped"
+    elif guard in {"never", "scan", "failed", "no_result", "no_token", "empty"}:
+        changes = {
+            "never": {"status": PackageScanStatus.NEVER},
+            "scan": {"status": PackageScanStatus.RUNNING},
+            "failed": {"status": PackageScanStatus.FAILED},
+            "no_result": {"result": None},
+            "no_token": {"token": None},
+            "empty": {"result": replace(RESULT, packages=())},
+        }
+        manager._set_record("pve1", 200, replace(record, **changes[guard]))
+    elif guard == "restore":
+        manager._restore_reserved.add(("pve1", 200))
+    elif guard == "update":
+        manager._update_records["pve1", 200] = PackageUpdateRecord(
+            status=PackageUpdateStatus.RUNNING
+        )
+    elif guard == "autoremove":
+        manager._cleanup_records["pve1", 200] = PackageUpdateRecord(
+            status=PackageUpdateStatus.RUNNING
+        )
+    else:
+        manager._health_records["pve1", 200] = PackageHealthRecord(
+            check_status=HealthCheckStatus.RUNNING
+        )
+    original = manager.record("pve1", 200)
+    with patch.object(
+        manager, "confirm_review", wraps=manager.confirm_review
+    ) as confirm:
+        with pytest.raises(HomeAssistantError) as err:
+            await _easy_update(
+                hass, _device_id(hass, "1234_container_200"), skip_snapshot=True
+            )
+        assert err.value.translation_key == key
+    confirm.assert_not_called()
+    assert manager.record("pve1", 200) is original
+    assert original.reviewed is False
+
+
+async def test_skip_does_not_resolve_invalid_targets(
+    hass: HomeAssistant,
+    mock_config_entry: MockConfigEntry,
+    package_transport_material: None,
+) -> None:
+    """Skip neither broadens the resolver nor enables unloaded package transport."""
+    await setup_integration(hass, mock_config_entry)
+    for identifier in ("1234_vm_100", "1234_node_node/pve1"):
+        await _expect_invalid(
+            hass,
+            _device_id(hass, identifier),
+            "easy_update_not_package_lxc",
+            skip_snapshot=True,
+        )
+    await _expect_invalid(
+        hass, "missing-device", "easy_update_unknown_device", skip_snapshot=True
+    )
+    device_id = _device_id(hass, "1234_container_200")
+    assert await hass.config_entries.async_unload(mock_config_entry.entry_id)
+    await _expect_invalid(
+        hass, device_id, "easy_update_not_package_lxc", skip_snapshot=True
+    )

@@ -727,6 +727,12 @@
     },
     "api_read_failed": {
       "message": "A Proxmox VE API request failed: {error}"
+    },
+    "package_update_success_without_snapshot_notification": {
+      "message": "Package update for {node}/{vmid} succeeded. {changed} installed package row(s) actually changed and LXC liveness was confirmed. The safety snapshot was explicitly skipped for this operation only; no snapshot was created or deleted."
+    },
+    "package_update_snapshot_skipped_detail": {
+      "message": "The safety snapshot was explicitly skipped for this operation only; no snapshot was created or deleted."
     }
   },
   "issues": {
@@ -764,6 +770,10 @@
         "expected_scan_attempt": {
           "name": "Expected scan",
           "description": "Optional last_attempt of the scan the user saw; the update is refused if a different scan is current."
+        },
+        "skip_snapshot": {
+          "name": "Skip snapshot for this update",
+          "description": "Explicitly omit the safety snapshot for this one Update operation. Off by default; all other guards apply. Autoremove still requires a snapshot."
         }
       }
     }

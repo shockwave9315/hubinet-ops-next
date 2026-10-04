@@ -16,9 +16,8 @@ export const ROLES = {
   health: ["sensor", "package_health"],
   status: ["sensor", "container_status"],
   scan: ["button", "package_scan"],
-  // The package Update button exists only where Easy Update can run (it needs
-  // the same VM.Snapshot permission); it is the one eligibility criterion for
-  // the picker (native device class "update"), the stub, and the action.
+  // The button identifies package capability for the picker and stub. Its
+  // snapshot_permission attribute separately gates the normal Easy action.
   updater: ["button", "package_update"],
 };
 
@@ -357,8 +356,8 @@ export const deriveView = ({ states, entities, devices, config, now, lang }) => 
     if (Number.isFinite(unused) && unused > 0) {
       parts.push(fill(s.unused, { count: unused }));
     }
-    if (!ids.updater) {
-      // Without the Update button the backend would refuse Easy Update.
+    if (!ids.updater || attr("updater", "snapshot_permission") !== true) {
+      // Button existence alone cannot authorize snapshot-required Update.
       return result(
         view("amber", "mdi:package-up", formatUpdates(count, lang), s.update_unavailable, DETAILS)
       );

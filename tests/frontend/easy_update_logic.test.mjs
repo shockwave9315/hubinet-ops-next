@@ -58,7 +58,7 @@ const baseStates = () => ({
   "sensor.renamed_d": { state: "unknown", attributes: { check_status: "never" } },
   "sensor.renamed_e": { state: "running", attributes: {} },
   "button.renamed_f": { state: "unknown", attributes: {} },
-  "button.renamed_g": { state: "unknown", attributes: { device_class: "update" } },
+  "button.renamed_g": { state: "unknown", attributes: { device_class: "update", snapshot_permission: true } },
 });
 
 const render = (mutate = () => {}, config = {}, lang = "pl") => {
@@ -94,7 +94,7 @@ test("resolves entities by device, platform and translation key only", () => {
 
 test("stub config uses the picker's criterion: the package Update button", () => {
   assert.equal(firstEligibleDevice({}), null);
-  // LXC A has packages but no Update button (no VM.Snapshot); B has both.
+  // LXC A lacks the package capability button; B has it. Permission is a state fact.
   const entities = {
     "sensor.a": entry("sensor.a", "pending_packages", "lxc-a"),
     "sensor.b": entry("sensor.b", "pending_packages", "lxc-b"),
@@ -119,6 +119,25 @@ test("without the Update button the card never offers Easy Update", () => {
   assert.equal(result.primary, "7 aktualizacji");
   assert.equal(result.secondary, "Aktualizacja niedostępna dla tego LXC");
   assert.deepEqual(result.action, { kind: "details" });
+});
+
+for (const permission of [false, undefined, null, "true", 1]) {
+  test(`normal Easy Update requires explicit snapshot permission (${permission})`, () => {
+    const result = render((states) => {
+      states["button.renamed_g"].attributes.snapshot_permission = permission;
+    });
+    assert.equal(result.secondary, "Aktualizacja niedostępna dla tego LXC");
+    assert.deepEqual(result.action, { kind: "details" });
+    assert.equal(firstEligibleDevice(ENTITIES), DEVICE, "capability is separate");
+  });
+}
+
+test("an unapproved native button still permits Easy Update with snapshot permission", () => {
+  const result = render((states) => {
+    states["button.renamed_g"].state = "unavailable";
+  });
+  assert.equal(result.action.kind, "easy_update");
+  assert.equal(result.action.data.skip_snapshot, undefined, "no frontend skip path in A");
 });
 
 test("amber: updates available start Easy Update with the displayed scan", () => {

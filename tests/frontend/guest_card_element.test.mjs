@@ -268,7 +268,7 @@ test("a tap acts on the shown scan, not on a newer one not yet shown", async () 
       attributes: { scan_status: "success", last_attempt: at(hh) },
     };
     hass.states["sensor.update"] = { state: "never", attributes: {} };
-    hass.states["button.update"] = { state: "unknown", attributes: {} };
+    hass.states["button.update"] = { state: "unknown", attributes: { snapshot_permission: true } };
     return hass;
   };
   const { card, calls, connect } = setup();
@@ -335,7 +335,7 @@ for (const [name, mutate] of Object.entries(DETAILS_STATES)) {
       "sensor.update": { state: "never", attributes: {} },
       "sensor.unused": { state: "0", attributes: { autoremove_status: "never" } },
       "sensor.health": { state: "unknown", attributes: { check_status: "never" } },
-      "button.update": { state: "unknown", attributes: { device_class: "update" } },
+      "button.update": { state: "unknown", attributes: { device_class: "update", snapshot_permission: true } },
       "button.scan": { state: "unknown", attributes: {} },
     });
     mutate(hass.states, entities);
@@ -545,7 +545,7 @@ const lxcPackageHass = () => {
       attributes: { scan_status: "success", last_attempt: new Date(2026, 9, 3, 4).toISOString() },
     },
     "sensor.update": { state: "never", attributes: {} },
-    "button.update": { state: "unknown", attributes: { device_class: "update" } },
+    "button.update": { state: "unknown", attributes: { device_class: "update", snapshot_permission: true } },
   });
   return hass;
 };

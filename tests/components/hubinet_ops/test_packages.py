@@ -2,7 +2,7 @@
 
 import asyncio
 from collections.abc import Callable
-from contextlib import suppress
+from contextlib import ExitStack, contextmanager, suppress
 from copy import deepcopy
 from dataclasses import replace
 from datetime import UTC, datetime
@@ -15,10 +15,12 @@ from tests.common import MockConfigEntry  # noqa: TID251
 
 from custom_components.hubinet_ops.packages.manager import PackageManager
 from custom_components.hubinet_ops.packages.models import (
+    HealthCheckStatus,
     HealthDpkgState,
     HealthState,
     PackageHealthEvidence,
     PackageHealthOutcome,
+    PackageHealthRecord,
     PackageMutationResult,
     PackageScanError,
     PackageScanFailure,
@@ -1112,22 +1114,42 @@ def _snapshot_patches(*, old_rows: object = ()):
     )
 
 
+@contextmanager
+def _forbid_snapshot_operations():
+    """Fail and record any entry into snapshot work, even synchronous helpers."""
+    with ExitStack() as stack:
+        mocks = [
+            stack.enter_context(
+                patch(
+                    f"custom_components.hubinet_ops.packages.manager.{name}",
+                    side_effect=AssertionError(f"skip entered {name}"),
+                )
+            )
+            for name in (
+                "async_list_snapshots",
+                "retained_snapshot_summary",
+                "generate_snapshot_name",
+                "async_create_snapshot",
+                "async_delete_snapshot",
+            )
+        ]
+        yield mocks
+        for mock in mocks:
+            mock.assert_not_called()
+
+
+@pytest.mark.parametrize("skip_snapshot", [False, True])
 @pytest.mark.parametrize(
     "packages",
     [
-        RESULT.packages
-        + (PendingPackage("gained", "amd64", "1", "2", None, None),),
+        RESULT.packages + (PendingPackage("gained", "amd64", "1", "2", None, None),),
         RESULT.packages[:1],
         (
-            PendingPackage(
-                "openssl", "amd64", "1.0", "1.2", "Debian-Security", True
-            ),
+            PendingPackage("openssl", "amd64", "1.0", "1.2", "Debian-Security", True),
             RESULT.packages[1],
         ),
         (
-            PendingPackage(
-                "openssl", "arm64", "1.0", "1.1", "Debian-Security", True
-            ),
+            PendingPackage("openssl", "arm64", "1.0", "1.1", "Debian-Security", True),
             RESULT.packages[1],
         ),
     ],
@@ -1137,6 +1159,7 @@ async def test_update_plan_changes_stop_before_snapshot_or_mutation(
     hass: HomeAssistant,
     mock_config_entry: MockConfigEntry,
     packages: tuple[PendingPackage, ...],
+    skip_snapshot: bool,
 ) -> None:
     """Every equality-bearing plan change requires a normal review cycle."""
     transport = UpdateTransport()
@@ -1147,7 +1170,11 @@ async def test_update_plan_changes_stop_before_snapshot_or_mutation(
     list_patch, create_patch, delete_patch, name_patch = _snapshot_patches()
     with list_patch as list_snapshots, create_patch as create, delete_patch, name_patch:
         task = manager.async_start_update(
-            "pve1", 200, target_is_running=True, snapshot_permission=True
+            "pve1",
+            200,
+            target_is_running=True,
+            snapshot_permission=True,
+            skip_snapshot=skip_snapshot,
         )
         assert manager.record("pve1", 200) == PackageScanRecord()
         await task
@@ -1156,6 +1183,7 @@ async def test_update_plan_changes_stop_before_snapshot_or_mutation(
     assert record.status is PackageUpdateStatus.FAILED
     assert record.outcome is PackageUpdateOutcome.PLAN_CHANGED
     assert record.snapshot_retained is False
+    assert record.snapshot_skipped is skip_snapshot
     assert transport.update_calls == 0
     list_snapshots.assert_not_awaited()
     create.assert_not_awaited()
@@ -1384,8 +1412,11 @@ async def test_cancellation_after_snapshot_submission_is_uncertain(
     delete.assert_not_awaited()
 
 
+@pytest.mark.parametrize("skip_snapshot", [False, True])
 async def test_pruned_interrupted_mutation_still_reports_retained_snapshot(
-    hass: HomeAssistant, mock_config_entry: MockConfigEntry
+    hass: HomeAssistant,
+    mock_config_entry: MockConfigEntry,
+    skip_snapshot: bool,
 ) -> None:
     """Target pruning discards state but still reports interrupted safety state."""
     transport = UpdateTransport()
@@ -1405,7 +1436,11 @@ async def test_pruned_interrupted_mutation_still_reports_retained_snapshot(
     patches = _snapshot_patches()
     with patches[0], patches[1], patches[2] as delete, patches[3]:
         task = manager.async_start_update(
-            "pve1", 200, target_is_running=True, snapshot_permission=True
+            "pve1",
+            200,
+            target_is_running=True,
+            snapshot_permission=True,
+            skip_snapshot=skip_snapshot,
         )
         await mutation_entered.wait()
         manager.async_prune(current_targets=set())
@@ -1417,9 +1452,12 @@ async def test_pruned_interrupted_mutation_still_reports_retained_snapshot(
     complete.assert_called_once()
     outcome = complete.call_args.args[2]
     assert outcome.outcome is PackageUpdateOutcome.MUTATION_UNCERTAIN
-    assert outcome.snapshot_retained is True
+    assert outcome.snapshot_skipped is skip_snapshot
+    assert outcome.snapshot_retained is not skip_snapshot
     assert outcome.snapshot_uncertain is False
-    assert outcome.snapshot_name == "hubinet-preupd-20260908120000-ab12cd"
+    assert outcome.snapshot_name == (
+        None if skip_snapshot else "hubinet-preupd-20260908120000-ab12cd"
+    )
 
 
 async def test_liveness_retries_once_then_succeeds(
@@ -1557,3 +1595,331 @@ async def test_update_while_same_vmid_scan_running_is_rejected(
     assert caught.value.outcome is PackageUpdateOutcome.PACKAGE_MANAGER_BUSY
     transport.release(200)
     await scan
+
+
+@pytest.mark.parametrize("snapshot_permission", [False, True])
+async def test_skip_snapshot_success_uses_same_update_health_and_no_snapshot_work(
+    hass: HomeAssistant,
+    mock_config_entry: MockConfigEntry,
+    snapshot_permission: bool,
+) -> None:
+    """Explicit skip bypasses all snapshot work and preserves normal lifecycle."""
+    transport = UpdateTransport()
+    transport.plan_release.clear()
+    complete, retained = MagicMock(), MagicMock()
+    manager, proxmox = _update_manager(
+        hass,
+        mock_config_entry,
+        transport,
+        complete_callback=complete,
+        retained_callback=retained,
+    )
+    await _review_target(manager, "pve1", 200)
+    transport.plan_autoremove_calls = 0  # Count only work after Update acceptance.
+    # A new Update must invalidate all current evidence, including Health.
+    token = manager.record("pve1", 200).token
+    manager._viewed_tokens["pve1", 200] = token  # noqa: SLF001
+    manager._health_records["pve1", 200] = PackageHealthRecord(  # noqa: SLF001
+        check_status=HealthCheckStatus.COMPLETED, state=HealthState.DEGRADED
+    )
+    with _forbid_snapshot_operations():
+        task = manager.async_start_update(
+            "pve1",
+            200,
+            target_is_running=True,
+            snapshot_permission=snapshot_permission,
+            skip_snapshot=True,
+        )
+        assert manager.update_record("pve1", 200).snapshot_skipped is True
+        assert manager.record("pve1", 200) == PackageScanRecord()
+        assert manager.viewed_token("pve1", 200) is None
+        assert manager.cleanup_evidence("pve1", 200) is None
+        assert manager.health_record("pve1", 200) == PackageHealthRecord()
+        transport.plan_release.set()
+        await task
+        await hass.async_block_till_done(wait_background_tasks=True)
+    record = manager.update_record("pve1", 200)
+    assert record.status is PackageUpdateStatus.SUCCESS
+    assert record.snapshot_skipped is True
+    assert record.snapshot_name is None
+    assert not record.snapshot_retained
+    assert not record.snapshot_uncertain
+    assert not record.snapshot_cleanup_failed
+    assert record.liveness is True
+    assert record.changed_package_count == 2
+    assert transport.update_calls == 1
+    assert transport.plan_autoremove_calls == 1  # read-only observation remains
+    assert transport.health_calls == 1
+    assert manager.health_record("pve1", 200).state is HealthState.HEALTHY
+    retained.assert_not_called()
+    complete.assert_called_once_with("pve1", 200, record)
+    # The native PVE read for liveness remains; snapshot/task APIs are absent.
+    proxmox.nodes.return_value.lxc.return_value.status.current.get.assert_called_once()
+    assert not any(
+        "snapshot" in str(call) or "tasks" in str(call) for call in proxmox.mock_calls
+    )
+
+
+@pytest.mark.parametrize("explicit_default", [False, None])
+async def test_default_update_without_snapshot_permission_is_fail_closed(
+    hass: HomeAssistant,
+    mock_config_entry: MockConfigEntry,
+    explicit_default: bool | None,
+) -> None:
+    """Omitting the flag and explicitly passing False both require VM.Snapshot."""
+    transport = UpdateTransport()
+    manager, _ = _update_manager(hass, mock_config_entry, transport)
+    await _review_target(manager, "pve1", 200)
+    original = manager.record("pve1", 200)
+    kwargs = {} if explicit_default is None else {"skip_snapshot": False}
+    with _forbid_snapshot_operations(), pytest.raises(PackageUpdateError) as err:
+        manager.async_start_update(
+            "pve1", 200, target_is_running=True, snapshot_permission=False, **kwargs
+        )
+    assert err.value.outcome is PackageUpdateOutcome.SNAPSHOT_FAILED
+    assert manager.record("pve1", 200) is original
+    assert manager.update_record("pve1", 200) == PackageUpdateRecord()
+    assert transport.update_calls == 0
+
+
+@pytest.mark.parametrize("skip_snapshot", [False, True])
+@pytest.mark.parametrize(
+    "guard",
+    [
+        "unconfigured",
+        "no_api",
+        "stopped",
+        "never",
+        "failed",
+        "no_result",
+        "no_token",
+        "empty",
+        "unreviewed",
+        "scan",
+        "restore",
+        "update",
+        "autoremove",
+        "health",
+    ],
+)
+async def test_update_other_guards_reject_with_or_without_skip(
+    hass: HomeAssistant,
+    mock_config_entry: MockConfigEntry,
+    guard: str,
+    skip_snapshot: bool,
+) -> None:
+    """Skip is no authorization for invalid evidence, targets or concurrency."""
+    transport = UpdateTransport()
+    manager, _ = _update_manager(hass, mock_config_entry, transport)
+    await _review_target(manager, "pve1", 200)
+    expected = PackageUpdateOutcome.PLAN_FAILED
+    if guard == "unconfigured":
+        transport.configured = False
+        expected = PackageUpdateOutcome.HELPER_OUTDATED
+    elif guard == "no_api":
+        manager._proxmox_getter = None  # noqa: SLF001
+        expected = PackageUpdateOutcome.HELPER_OUTDATED
+    elif guard == "stopped":
+        expected = PackageUpdateOutcome.GUEST_UNAVAILABLE
+    elif guard in {"never", "failed", "no_result", "no_token", "empty", "unreviewed"}:
+        record = manager.record("pve1", 200)
+        changes = {
+            "never": {"status": PackageScanStatus.NEVER},
+            "failed": {"status": PackageScanStatus.FAILED},
+            "no_result": {"result": None},
+            "no_token": {"token": None},
+            "empty": {"result": replace(RESULT, packages=())},
+            "unreviewed": {"reviewed": False},
+        }
+        manager._set_record("pve1", 200, replace(record, **changes[guard]))  # noqa: SLF001
+    else:
+        expected = PackageUpdateOutcome.PACKAGE_MANAGER_BUSY
+        # Exclusion is by VMID, even if conflicting evidence has another node.
+        if guard == "scan":
+            manager._records["other_node", 200] = PackageScanRecord(  # noqa: SLF001
+                status=PackageScanStatus.RUNNING
+            )
+        elif guard == "restore":
+            manager._restore_reserved.add(("other_node", 200))  # noqa: SLF001
+        elif guard == "update":
+            manager._update_records["other_node", 200] = PackageUpdateRecord(  # noqa: SLF001
+                status=PackageUpdateStatus.RUNNING
+            )
+        elif guard == "autoremove":
+            manager._cleanup_records["other_node", 200] = PackageUpdateRecord(  # noqa: SLF001
+                status=PackageUpdateStatus.RUNNING
+            )
+        else:
+            manager._health_records["other_node", 200] = PackageHealthRecord(  # noqa: SLF001
+                check_status=HealthCheckStatus.RUNNING
+            )
+    original = manager.record("pve1", 200)
+    with _forbid_snapshot_operations(), pytest.raises(PackageUpdateError) as err:
+        manager.async_start_update(
+            "pve1",
+            200,
+            target_is_running=guard != "stopped",
+            snapshot_permission=True,
+            skip_snapshot=skip_snapshot,
+        )
+    assert err.value.outcome is expected
+    assert manager.record("pve1", 200) is original
+    assert manager.update_record("pve1", 200) == PackageUpdateRecord()
+    assert transport.update_calls == 0
+
+
+@pytest.mark.parametrize(
+    "outcome",
+    [
+        PackageUpdateOutcome.MUTATION_FAILED,
+        PackageUpdateOutcome.MUTATION_TIMED_OUT,
+        PackageUpdateOutcome.MUTATION_UNCERTAIN,
+        PackageUpdateOutcome.PACKAGE_MANAGER_BUSY,
+        PackageUpdateOutcome.LIVENESS_FAILED,
+        PackageUpdateOutcome.GUEST_UNAVAILABLE,
+    ],
+)
+async def test_skip_snapshot_mutation_and_liveness_failures_remain_fail_closed(
+    hass: HomeAssistant,
+    mock_config_entry: MockConfigEntry,
+    outcome: PackageUpdateOutcome,
+) -> None:
+    """Failure retains no invented snapshot and starts no Health."""
+    transport = UpdateTransport()
+    complete, retained = MagicMock(), MagicMock()
+    manager, proxmox = _update_manager(
+        hass,
+        mock_config_entry,
+        transport,
+        complete_callback=complete,
+        retained_callback=retained,
+    )
+    if outcome is PackageUpdateOutcome.LIVENESS_FAILED:
+        transport.ping_results = [False, False]
+    elif outcome is PackageUpdateOutcome.GUEST_UNAVAILABLE:
+        proxmox.nodes.return_value.lxc.return_value.status.current.get.return_value = {
+            "status": "stopped"
+        }
+    else:
+        transport.mutation = PackageUpdateError(outcome, "test failure")
+    await _review_target(manager, "pve1", 200)
+    transport.plan_autoremove_calls = 0  # Count only work after Update acceptance.
+    with _forbid_snapshot_operations():
+        await manager.async_start_update(
+            "pve1",
+            200,
+            target_is_running=True,
+            snapshot_permission=False,
+            skip_snapshot=True,
+        )
+    record = manager.update_record("pve1", 200)
+    assert record.status is PackageUpdateStatus.FAILED
+    assert record.outcome is outcome
+    assert record.snapshot_skipped is True
+    assert record.snapshot_name is None
+    assert not record.snapshot_retained
+    assert not record.snapshot_uncertain
+    assert not record.snapshot_cleanup_failed
+    assert transport.update_calls == 1
+    assert transport.health_calls == 0
+    assert transport.plan_autoremove_calls == 0
+    retained.assert_not_called()
+    complete.assert_called_once_with("pve1", 200, record)
+
+
+@pytest.mark.parametrize("skip_snapshot", [False, True])
+@pytest.mark.parametrize(
+    "end",
+    ["cancel_plan", "unexpected_plan", "cancel_waiting_slot", "unexpected_getter"],
+)
+async def test_failure_before_snapshot_never_reports_snapshot_failure(
+    hass: HomeAssistant,
+    mock_config_entry: MockConfigEntry,
+    skip_snapshot: bool,
+    end: str,
+) -> None:
+    """No snapshot failure can be inferred before entering snapshot work."""
+    transport = UpdateTransport()
+    transport.plan_release.clear()
+    complete = MagicMock()
+    manager, _ = _update_manager(
+        hass, mock_config_entry, transport, complete_callback=complete
+    )
+    await _review_target(manager, "pve1", 200)
+    if end == "unexpected_plan":
+        transport.async_plan = AsyncMock(side_effect=RuntimeError("plan failed"))
+    if end == "unexpected_getter":
+        transport.plan_release.set()
+        manager._proxmox_getter = MagicMock(side_effect=RuntimeError("no API"))  # noqa: SLF001
+    if end == "cancel_waiting_slot":
+        await manager._update_slot.acquire()  # noqa: SLF001
+    with _forbid_snapshot_operations():
+        task = manager.async_start_update(
+            "pve1",
+            200,
+            target_is_running=True,
+            snapshot_permission=True,
+            skip_snapshot=skip_snapshot,
+        )
+        if end.startswith("cancel"):
+            if end == "cancel_plan":
+                await transport.plan_entered.wait()
+            else:
+                await asyncio.sleep(0)
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await task
+            if end == "cancel_waiting_slot":
+                manager._update_slot.release()  # noqa: SLF001
+        else:
+            await task
+    record = manager.update_record("pve1", 200)
+    assert record.status is PackageUpdateStatus.FAILED
+    assert record.outcome is PackageUpdateOutcome.PLAN_FAILED
+    assert record.snapshot_skipped is skip_snapshot
+    assert record.snapshot_name is None
+    assert not record.snapshot_retained
+    assert not record.snapshot_uncertain
+    assert transport.update_calls == 0
+    complete.assert_called_once_with("pve1", 200, record)
+
+
+async def test_skip_snapshot_is_one_attempt_only(
+    hass: HomeAssistant,
+    mock_config_entry: MockConfigEntry,
+) -> None:
+    """A subsequent default Update again requires permission and creates/deletes."""
+    transport = UpdateTransport()
+    manager, _ = _update_manager(hass, mock_config_entry, transport)
+    await _review_target(manager, "pve1", 200)
+    with _forbid_snapshot_operations():
+        await manager.async_start_update(
+            "pve1",
+            200,
+            target_is_running=True,
+            snapshot_permission=False,
+            skip_snapshot=True,
+        )
+        await hass.async_block_till_done(wait_background_tasks=True)
+    assert manager.update_record("pve1", 200).snapshot_skipped is True
+    await _review_target(manager, "pve1", 200)
+    with pytest.raises(PackageUpdateError):
+        manager.async_start_update(
+            "pve1", 200, target_is_running=True, snapshot_permission=False
+        )
+    patches = _snapshot_patches()
+    transport.ping_results = [True]
+    with (
+        patches[0] as listing,
+        patches[1] as create,
+        patches[2] as delete,
+        patches[3] as name,
+    ):
+        await manager.async_start_update(
+            "pve1", 200, target_is_running=True, snapshot_permission=True
+        )
+    assert manager.update_record("pve1", 200).snapshot_skipped is False
+    listing.assert_awaited_once()
+    create.assert_awaited_once()
+    delete.assert_awaited_once()
+    name.assert_called_once()
