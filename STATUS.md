@@ -13,7 +13,9 @@ Status date: 2026-10-04
   native snapshot Create observation and explicit native Delete documented in
   [ARCHITECTURE.md](ARCHITECTURE.md).
 - Integration after merge: `2026.9.1.20`, helper v5, protocol v1.
-- Latest tagged release: `2026.9.1.19` (merged PR #24, main `d4eb2eb`).
+- Latest final tagged release: `2026.9.1.19` (merged PR #24, main `d4eb2eb`).
+  Draft .20 has owner-tested RC `2026.9.1.rc.01.20` at `7c2bc16`;
+  no final `2026.9.1.20` tag exists.
   `2026.9.1.15` (PR #20, `b865968`): the owner reported the post-merge live
   tests passed.
 - Starting merged baseline for 2026.9.1.16: main `b865968`.
@@ -489,8 +491,9 @@ Scan All remains.
   fetches do not establish the earlier startup responses or their cause.
   Resource timing has a bounded buffer, so the empty external history alone
   is not proof that no module request occurred.
-- Investigation: **IN PROGRESS** on `fix/cards-external-mtls`. Native resource
-  delivery is implemented after the owner's decision; the slow-start
+- Investigation: **OWNER VALIDATION PASS** on `fix/cards-external-mtls` for
+  native resource delivery; the owner-reported Android/mTLS failure is resolved.
+  The P3 resource-removal lifecycle review below remains in progress. The slow-start
   race must not be presented as an explanation of this remaining failure.
 - Isolated HA Container 2026.9.4 lab: a loopback-only HTTPS reverse proxy
   rejects requests without a valid test client certificate. All four card
@@ -618,15 +621,32 @@ Scan All remains.
   native Android WebView 153, and the owner's Cloudflare endpoint remain
   outside the successful lab coverage.
 - Release metadata target: `2026.9.1.20`; helper v5 and protocol v1 unchanged.
+- **OWNER VALIDATION — PASS** on HA Core 2026.9.4, Companion 2026.8.4,
+  `hapka.hubinet.pl`, LTE/mTLS with VPN off and no diagnostic force-load.
+  Cold start, repeated app starts, resume from background, Wi-Fi/LTE changes
+  in both directions, HA restart/reconnect and app restart afterward all pass.
+  Both local/external desktop access, the card picker, and pre-existing saved
+  cards pass. Exactly one native `module` resource was added automatically:
+  `/hubinet_ops_static/hubinet-ops-cards.js?v=2026.9.1.20`; no duplicate exists.
+  The .19 failure did not recur. This establishes the real owner-case fix,
+  beyond the lab's earlier simulated-native checks.
+- P3 cleanup/uninstall hygiene: **REAL / SUPPORTED CONFIG-ENTRY FIX ACCEPTED
+  BY OWNER / IMPLEMENTATION IN PROGRESS**, within the existing draft .20.
+  HA's `async_remove_entry` runs after deletion and supports last-host cleanup
+  through the native resource collection. Unload/reload and removal while
+  another host remains must preserve the resource; entry setup must restore
+  it after the last host was removed and a new one is added. YAML stays
+  operator configured. HACS 2.0.5 removes files without deleting the custom
+  integration's config entries; full cleanup cannot be promised when files
+  disappear first. The supported uninstall order and manual leftover removal
+  will be documented. No .21 version or new final/RC tag is created.
 
 ## Next
 
 Review [PR #25](https://github.com/shockwave9315/hubinet-ops-next/pull/25) with
-the owner-accepted native Lovelace resource delivery and have the owner
-validate 2026.9.1.20 in the external Android app without the diagnostic's
-force-load button. The missing HTML import and native resource recovery are
-verified in the local HA/mTLS lab; live Android/Cloudflare confirmation remains
-required before treating the reported failure as closed. Tag
+the owner-validated native Lovelace resource delivery after the supported P3
+cleanup is implemented and checked. Keep it DRAFT and retain the .20 release
+pins; final review and release publication are maintainer decisions. Tag
 `2026.9.1.16` (main `0409d76`) if still wanted.
 
 ## Explicitly not started

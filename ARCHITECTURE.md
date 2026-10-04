@@ -29,14 +29,35 @@ custom loader, polling, retry, or new backend.
 The manifest adds `lovelace` to the existing soft `after_dependencies` ordering.
 Without the frontend, HTTP, or Lovelace, delivery is skipped and the integration
 still operates. Registration errors are logged without disabling native PVE
-or package functionality. The resource is global, registered once per HA
-start, and is not removed on a Proxmox entry unload. In YAML resource mode,
+or package functionality. The resource is global; the static directory is
+served once per HA start and resource registration is idempotent at integration
+and entry setup. It is not removed on a Proxmox entry unload. In YAML resource mode,
 the operator uses the normal native resource declaration; the integration
 does not rewrite YAML or add an in-memory resource overlay. A frontend reload
 is required after installing or updating. The current readiness guard and
 five card implementations are preserved.
 
 The pre-implementation documentation checkpoint is commit `fa2dd32`.
+
+The owner's 2026-10-04 P3 follow-up authorizes cleanup within the same draft
+2026.9.1.20. HA's supported `async_remove_entry` hook runs after permanent
+entry deletion. When no non-ignored Hubinet entry remains (disabled and
+not-loaded hosts still count), it deletes only resources for the exact
+integration-owned relative module path through the native storage collection.
+It rechecks host presence after asynchronous collection loading and before
+deletions. Unload/reload never invokes cleanup; entry setup restores the one
+resource if a host is added again in the same HA runtime, without registering
+the HTTP route twice. YAML resource declarations remain operator-owned.
+
+This guarantee requires integration code to be available when the last entry
+is removed. HACS 2.0.5's uninstall removes the files and refreshes the custom
+component cache without calling HA's config-entry removal API. HA may skip
+the remove callback when the integration is missing, so deleting files first
+cannot guarantee cleanup. The supported uninstall order is to remove all
+Hubinet entries in HA first, then remove the integration through HACS. If the
+files were removed first, the operator removes the exact leftover resource
+through HA's Resources UI. No HACS event listener or direct storage-file edit
+is introduced.
 
 ### VM card, mini cards, and stat history (2026.9.1.17)
 
