@@ -1,0 +1,368 @@
+<!doctype html>
+<html lang="pl">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Hubinet — test ładowania kart</title>
+<style>
+  :root { color-scheme: light dark; font: 15px/1.5 system-ui, sans-serif; }
+  body { margin: 0; padding: 16px; }
+  h1 { font-size: 20px; margin: 0 0 8px; }
+  p { margin: 8px 0; }
+  button { font: inherit; padding: 8px 12px; margin: 4px 8px 8px 0; cursor: pointer; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th, td { text-align: left; padding: 8px 4px; border-bottom: 1px solid #8885; overflow-wrap: anywhere; }
+  .good { color: light-dark(#146d34, #7dda99); }
+  .bad { color: light-dark(#a32222, #ff9a9a); }
+  pre { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 12px; }
+  textarea { width: 100%; box-sizing: border-box; min-height: 180px; }
+  #summary { font-weight: 600; }
+</style>
+<h1>Hubinet — test ładowania kart</h1>
+<p>Test 2 dla wersji 2026.9.1.19. Otwórz tę stronę jako kartę „Strona internetowa”
+  pod adresem <code>/local/hubinet-card-probe-v2.html</code>.</p>
+<p>Pierwszy test odczytuje stan kart, wpisy startowe HTML i pobiera cztery pliki JavaScript.
+  Przycisk „Uruchom moduł w HA” wykonuje osobną próbę w otwartej stronie HA.
+  Test nie zmienia konfiguracji i nie odczytuje tokenów ani certyfikatów.</p>
+<button id="run" type="button">Powtórz test</button>
+<button id="copy" type="button" disabled>Skopiuj wynik</button>
+<button id="force" type="button" disabled>Uruchom moduł w HA</button>
+<p id="summary" role="status">Sprawdzanie…</p>
+<div id="metadata"></div>
+<table>
+  <thead><tr><th>Plik</th><th>Odpowiedź</th><th>Treść względem .19</th></tr></thead>
+  <tbody id="files"></tbody>
+</table>
+<p id="note"></p>
+<details><summary>Pełny wynik</summary><pre id="report"></pre></details>
+<textarea id="fallback" aria-label="Wynik do skopiowania" hidden readonly></textarea>
+<script>
+"use strict";
+// Standalone test artifact, outside the integration's production frontend.
+// All resource requests use this document's own HA origin. Existing WebView
+// TLS authentication applies; no credentials or auth headers are copied.
+const release = "2026.9.1.19";
+const files = {
+  "hubinet-ops-cards.js": "79ce2b362be9556f6b73e4818f291594a0337c20d2567cf7e7ce86ff7e2544f7",
+  "easy-update-logic.js": "8a63697397037ee966857c5f522a61df72c87b0f7ec3c153db470fa521eee84f",
+  "hubinet-ops-guest-cards.js": "feab89d57ba463ff1ae0377e279a05c635d0a4e46af5825420dc3af0ffc6f069",
+  "guest-card-logic.js": "e833538e464cd7f2479720b97efaeaba4e9a5763db869ab5f0cff69762e03285",
+};
+const types = ["hubinet-ops-easy-update-card", "hubinet-ops-lxc-card",
+  "hubinet-ops-lxc-mini-card", "hubinet-ops-vm-card", "hubinet-ops-vm-mini-card"];
+const byId = (id) => document.getElementById(id);
+let report;
+
+function safeUrl(value, base = location.origin) {
+  try {
+    const url = new URL(value, base);
+    if (url.protocol !== "http:" && url.protocol !== "https:") return null;
+    return { origin: url.origin, path: url.pathname, version: url.searchParams.get("v") };
+  } catch { return null; }
+}
+
+function bootstrapState(scripts, base) {
+  const hubinetLaunchers = [];
+  const frontendEntries = [];
+  let rocketLoader = false;
+  for (const script of scripts) {
+    const source = script.src ? safeUrl(script.src, base) : null;
+    rocketLoader ||= Boolean(source?.path.includes("rocket-loader"));
+    const text = script.text || "";
+    const imports = [...text.matchAll(/(?:import|_ls)\(\s*["']([^"']+)["']/g)]
+      .map((match) => safeUrl(match[1], base)).filter(Boolean);
+    frontendEntries.push(...imports.filter((url) => /^\/frontend_(?:latest|es5)\//.test(url.path)));
+    if (source && /^\/frontend_(?:latest|es5)\//.test(source.path)) frontendEntries.push(source);
+    const references = imports.filter((url) => url.path.startsWith("/hubinet_ops_static/"));
+    if (text.includes("/hubinet_ops_static/") || source?.path.startsWith("/hubinet_ops_static/")) {
+      hubinetLaunchers.push({
+        type: script.type || "classic", source, references,
+        cfAsync: script.cfAsync, hasNonce: script.hasNonce,
+        dynamicImport: /import\(\s*["'][^"']*\/hubinet_ops_static\//.test(text),
+        classicLoader: /_ls\(\s*["'][^"']*\/hubinet_ops_static\//.test(text),
+      });
+    }
+  }
+  return { scriptCount: scripts.length, hubinetLaunchers, frontendEntries, rocketLoader };
+}
+
+function liveScripts(document) {
+  return [...document.scripts].map((script) => ({
+    src: script.getAttribute("src"), type: script.getAttribute("type"),
+    cfAsync: script.getAttribute("data-cfasync"), hasNonce: script.hasAttribute("nonce"),
+    text: script.textContent,
+  }));
+}
+
+function htmlScripts(html) {
+  // Extract script text without inserting or parsing a complete HTML document:
+  // no script execution and no iframe/image requests from the fetched markup.
+  return [...html.matchAll(/<script\b([^>]*)>([\s\S]*?)<\/script\s*>/gi)].map((match) => {
+    const attrs = Object.fromEntries([...match[1].matchAll(/([^\s=]+)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))/g)]
+      .map((attr) => [attr[1].toLowerCase(), attr[2] ?? attr[3] ?? attr[4]]));
+    return { src: attrs.src, type: attrs.type, cfAsync: attrs["data-cfasync"] ?? null,
+      hasNonce: /(?:^|\s)nonce(?:\s|=|$)/i.test(match[1]), text: match[2] };
+  });
+}
+
+function parentState(host = parent) {
+  if (host === window) return { available: false, reason: "Otwórz test w karcie HA, aby sprawdzić rejestrację elementów." };
+  try {
+    const ha = host.document.querySelector("home-assistant");
+    return {
+      available: true,
+      origin: host.location.origin,
+      coreVersion: ha?.hass?.config?.version ?? null,
+      hassPresent: Boolean(ha?.hass),
+      integrationLoaded: ha?.hass?.config?.components?.includes("hubinet_ops") ?? null,
+      safeMode: ha?.hass?.config?.safe_mode ?? null,
+      homeAssistantDefined: Boolean(host.customElements.get("home-assistant")),
+      isModern: typeof host.isModern === "boolean" ? host.isModern : null,
+      latestJS: typeof host.latestJS === "boolean" ? host.latestJS : null,
+      serviceWorkerControlled: Boolean(host.navigator.serviceWorker?.controller),
+      resourceTimingEntriesTotal: host.performance.getEntriesByType("resource").length,
+      bootstrap: bootstrapState(liveScripts(host.document), host.location.origin),
+      documentContainsHubinetModule: host.document.documentElement.innerHTML
+        .includes("/hubinet_ops_static/hubinet-ops-cards.js"),
+      definitions: Object.fromEntries(types.map((type) => [type, Boolean(host.customElements.get(type))])),
+      pickerTypes: (host.customCards || []).filter((card) => types.includes(card.type)).map((card) => card.type),
+      resourceRequestsBeforeProbe: host.performance.getEntriesByType("resource")
+        .filter((entry) => new URL(entry.name).pathname.startsWith("/hubinet_ops_static/"))
+        .map((entry) => ({
+          path: new URL(entry.name).pathname,
+          version: new URL(entry.name).searchParams.get("v"),
+          initiator: entry.initiatorType,
+          responseStatus: entry.responseStatus ?? null,
+          durationMs: Math.round(entry.duration),
+        })),
+    };
+  } catch (error) {
+    return { available: false, reason: String(error.message) };
+  }
+}
+
+async function checkDocument() {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 12000);
+  try {
+    const path = parent === window ? "/" : parent.location.pathname;
+    const url = new URL(path, location.origin);
+    url.searchParams.set("hubinet_probe", `2-${Date.now()}`);
+    if (parent !== window && new URL(parent.location.href).searchParams.has("external_auth")) {
+      url.searchParams.set("external_auth", "1");
+    }
+    const response = await fetch(url, { credentials: "same-origin", cache: "no-store", signal: controller.signal });
+    const html = await response.text();
+    const csp = response.headers.get("content-security-policy") || "";
+    return {
+      requestedPath: path, status: response.status, contentType: response.headers.get("content-type"),
+      redirected: response.redirected, finalUrl: safeUrl(response.url), bytes: new TextEncoder().encode(html).length,
+      cfRay: response.headers.get("cf-ray"), cfCacheStatus: response.headers.get("cf-cache-status"),
+      age: response.headers.get("age"),
+      serviceWorkerControlled: Boolean(navigator.serviceWorker?.controller),
+      csp: { present: Boolean(csp), usesNonce: /'nonce-/.test(csp), usesHash: /'sha(?:256|384|512)-/.test(csp),
+        allowsInline: /'unsafe-inline'/.test(csp), strictDynamic: /'strict-dynamic'/.test(csp) },
+      bootstrap: bootstrapState(htmlScripts(html), response.url),
+      documentContainsHubinetModule: html.includes("/hubinet_ops_static/hubinet-ops-cards.js"),
+    };
+  } catch (error) {
+    return { error: error.name === "AbortError" ? "Brak odpowiedzi HTML w ciągu 12 sekund" : String(error.message) };
+  } finally { clearTimeout(timeout); }
+}
+
+async function checkFile(name) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 12000);
+  try {
+    const response = await fetch(`/hubinet_ops_static/${name}?v=${release}`, {
+      credentials: "same-origin", cache: "no-store", signal: controller.signal,
+    });
+    const bytes = await response.arrayBuffer();
+    const text = new TextDecoder().decode(bytes);
+    const mime = response.headers.get("content-type") || "";
+    const sha256 = crypto.subtle ? [...new Uint8Array(await crypto.subtle.digest("SHA-256", bytes))]
+      .map((byte) => byte.toString(16).padStart(2, "0")).join("") : null;
+    const result = {
+      file: name, status: response.status, contentType: mime,
+      javascript: /(?:java|ecma)script/i.test(mime),
+      bytes: bytes.byteLength, sha256, matchesRelease19: sha256 ? sha256 === files[name] : null,
+      redirected: response.redirected,
+      finalOrigin: new URL(response.url).origin, finalPath: new URL(response.url).pathname,
+      cfRay: response.headers.get("cf-ray"),
+      cfCacheStatus: response.headers.get("cf-cache-status"),
+    };
+    if (name === "hubinet-ops-cards.js" && result.javascript && response.ok) {
+      result.waitsForHomeAssistant = /await\s+customElements\.whenDefined\(["']home-assistant["']\)/.test(text);
+      result.timeoutFallback = /Promise\.race/.test(text.slice(0, 3000));
+    }
+    return result;
+  } catch (error) {
+    return { file: name, error: error.name === "AbortError" ? "Brak odpowiedzi w ciągu 12 sekund" : String(error.message) };
+  } finally { clearTimeout(timeout); }
+}
+
+async function run() {
+  if (parent !== window) { try { delete parent.__hubinetCardProbeReportV2; } catch {} }
+  byId("run").disabled = true;
+  byId("copy").disabled = true;
+  byId("copy").textContent = "Skopiuj wynik";
+  byId("force").disabled = true;
+  byId("fallback").hidden = true;
+  byId("summary").textContent = "Sprawdzanie…";
+  byId("summary").className = "";
+  byId("files").replaceChildren();
+  const parentBefore = parentState();
+  const [resources, documentResponse] = await Promise.all([
+    Promise.all(Object.keys(files).map(checkFile)), checkDocument(),
+  ]);
+  const parentAfter = parentState();
+  report = {
+    probeVersion: 2, referenceRelease: release, time: new Date().toISOString(),
+    origin: location.origin, userAgent: navigator.userAgent,
+    parentBefore, resources, documentResponse, parentAfter,
+  };
+  const failures = resources.filter((resource) => resource.error || resource.status !== 200 || !resource.javascript);
+  const count = parentAfter.available ? Object.values(parentAfter.definitions).filter(Boolean).length : null;
+  byId("summary").textContent = `Pliki: ${resources.length - failures.length}/4 poprawnych odpowiedzi.`
+    + (count !== null ? ` Zarejestrowane karty: ${count}/5.` : "");
+  byId("summary").className = failures.length || (count !== null && count !== 5) ? "bad" : "good";
+  byId("metadata").textContent = `Adres: ${location.origin}`
+    + (parentBefore.coreVersion ? ` · HA ${parentBefore.coreVersion}` : "");
+  for (const resource of resources) {
+    const row = document.createElement("tr");
+    const values = [resource.file,
+      resource.error || `HTTP ${resource.status} · ${resource.contentType || "brak typu"}`,
+      resource.matchesRelease19 === true ? "zgodna" : resource.matchesRelease19 === false ? "inna" : "nieporównana"];
+    for (const value of values) {
+      const cell = document.createElement("td"); cell.textContent = value; row.append(cell);
+    }
+    row.className = resource.error || resource.status !== 200 || !resource.javascript ? "bad" : "";
+    byId("files").append(row);
+  }
+  byId("note").textContent = parentBefore.available
+    ? `Wpisy startowe Hubinet w otwartej stronie: ${parentBefore.bootstrap.hubinetLaunchers.length}.`
+      + ` W kolejnej odpowiedzi HTML: ${documentResponse.bootstrap?.hubinetLaunchers.length ?? "brak odczytu"}.`
+      + " Pełny wynik zawiera typy skryptów i wykrycie Rocket Loader. Test nie wykonuje odczytanego kodu."
+    : parentBefore.reason;
+  byId("report").textContent = JSON.stringify(report, null, 2);
+  byId("run").disabled = false;
+  byId("copy").disabled = false;
+  byId("force").disabled = !parentAfter.available || !parentAfter.hassPresent || !parentAfter.homeAssistantDefined;
+}
+
+function errorText(value) {
+  return String(value || "").replace(/https?:\/\/[^\s"'<>]+/g, (value) => {
+    const url = safeUrl(value); return url ? url.origin + url.path : "[URL]";
+  }).replace(/nonce-[\w+/=-]+/g, "nonce-[ukryto]")
+    .replace(/Bearer\s+\S+/gi, "Bearer [ukryto]").slice(0, 2000);
+}
+
+async function monitorForce(result, host) {
+  while (!result.after && Date.now() - result.startedEpochMs < 20000) {
+    await new Promise((resolve) => host.setTimeout(resolve, 100));
+    const count = types.filter((type) => host.customElements.get(type)).length;
+    if (Date.now() - result.startedEpochMs >= 1000 && (count === 5 || result.scriptEvent === "error" || result.errors.length)) break;
+  }
+}
+
+function completeForce(result, host, registry = null) {
+  if (result.after) return;
+  result.elapsedMs = Date.now() - result.startedEpochMs;
+  result.registryChanged = registry ? host.customElements !== registry : null;
+  result.after = parentState(host);
+  const count = result.after.available ? Object.values(result.after.definitions).filter(Boolean).length : 0;
+  result.timedOut = result.elapsedMs >= 20000 && count !== 5 && result.scriptEvent !== "error" && !result.errors.length;
+}
+
+async function forceLoad() {
+  const host = parent;
+  const before = parentState(host);
+  if (!before.available || !before.hassPresent || !before.homeAssistantDefined) return;
+  byId("force").disabled = true;
+  byId("run").disabled = true;
+  byId("copy").disabled = true;
+  byId("fallback").hidden = true;
+  byId("summary").textContent = "Uruchamianie modułu w HA…";
+  const registry = host.customElements;
+  const result = { before, startedEpochMs: Date.now(), scriptEvent: "pending", currentWhenDefinedResolved: false, errors: [] };
+  const script = host.document.createElement("script");
+  script.type = "module";
+  script.src = `/hubinet_ops_static/hubinet-ops-cards.js?v=${release}&probe=${Date.now()}`;
+  result.moduleUrl = safeUrl(script.src);
+  report.forceLoad = result;
+  host.__hubinetCardProbeReportV2 = report;
+  const onLoad = () => { result.scriptEvent = "load"; };
+  const onScriptError = () => { result.scriptEvent = "error"; };
+  const onError = (event) => {
+    const error = event.error || event.reason;
+    const stack = String(error?.stack || "");
+    const filename = String(event.filename || "");
+    const message = String(error?.message || event.message || "");
+    if (![filename, stack, message].some((value) => value.includes("/hubinet_ops_static/"))) return;
+    result.errors.push({ event: event.type, name: error?.name || null,
+      message: errorText(error?.message || event.message), stack: errorText(stack),
+      file: filename ? safeUrl(filename) : null, line: event.lineno || null, column: event.colno || null });
+  };
+  script.addEventListener("load", onLoad);
+  script.addEventListener("error", onScriptError);
+  host.addEventListener("error", onError);
+  host.addEventListener("unhandledrejection", onError);
+  try {
+    registry.whenDefined("home-assistant").then(() => { result.currentWhenDefinedResolved = true; },
+      (error) => result.errors.push({ event: "whenDefined", message: errorText(error.message) }));
+    host.document.head.append(script);
+    await monitorForce(result, host);
+  } catch (error) { result.errors.push({ event: "probe", message: errorText(error.message) }); }
+  finally {
+    script.removeEventListener("load", onLoad);
+    script.removeEventListener("error", onScriptError);
+    host.removeEventListener("error", onError);
+    host.removeEventListener("unhandledrejection", onError);
+    script.remove();
+  }
+  completeForce(result, host, registry);
+  showForceResult(result);
+}
+
+function showForceResult(result) {
+  const count = result.after.available ? Object.values(result.after.definitions).filter(Boolean).length : 0;
+  byId("metadata").textContent = `Adres: ${report.origin} · HA ${report.parentBefore.coreVersion}`;
+  byId("report").textContent = JSON.stringify(report, null, 2);
+  byId("summary").textContent = `Po uruchomieniu modułu w HA: ${count}/5 zarejestrowanych kart.`;
+  byId("summary").className = count === 5 ? "good" : "bad";
+  byId("note").textContent = "Pierwotny wynik pozostał w raporcie. Próba zmienia rejestr kart w tej otwartej stronie; przeładowanie HA rozpoczyna nową sesję. Błędy i stan oczekiwania są w sekcji forceLoad.";
+  byId("copy").textContent = "Skopiuj wynik";
+  byId("copy").disabled = false;
+  byId("run").disabled = false;
+}
+byId("run").addEventListener("click", run);
+byId("force").addEventListener("click", forceLoad);
+byId("copy").addEventListener("click", async () => {
+  const text = JSON.stringify(report, null, 2);
+  try {
+    await navigator.clipboard.writeText(text);
+    byId("copy").textContent = "Skopiowano";
+  } catch {
+    byId("fallback").hidden = false;
+    byId("fallback").value = text;
+    byId("fallback").focus();
+    byId("fallback").select();
+  }
+});
+async function start() {
+  let previous;
+  try { previous = parent.__hubinetCardProbeReportV2; } catch {}
+  if (previous?.origin === location.origin && previous.forceLoad) {
+    report = previous;
+    byId("run").disabled = true;
+    byId("force").disabled = true;
+    byId("summary").textContent = "Odczytywanie wyniku próby w HA…";
+    if (!report.forceLoad.after) {
+      await monitorForce(report.forceLoad, parent);
+      completeForce(report.forceLoad, parent);
+    }
+    showForceResult(report.forceLoad);
+  } else await run();
+}
+start();
+</script>
+</html>

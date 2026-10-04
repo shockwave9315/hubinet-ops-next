@@ -1,5 +1,6 @@
 """The dashboard card ships with the integration without a manual resource."""
 
+import asyncio
 import re
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -12,11 +13,13 @@ from custom_components.hubinet_ops.button import (
     PACKAGE_UPDATE_BUTTON,
     VM_BUTTONS,
 )
-from custom_components.hubinet_ops.const import INTEGRATION_VERSION
+from custom_components.hubinet_ops.const import DOMAIN, INTEGRATION_VERSION
 from custom_components.hubinet_ops.frontend import (
     CARD_MODULE,
     FRONTEND_DIRECTORY,
     STATIC_URL,
+    async_register_frontend,
+    async_remove_frontend_resource,
     card_module_url,
 )
 from custom_components.hubinet_ops.select import SNAPSHOT_SELECT
@@ -33,7 +36,22 @@ from custom_components.hubinet_ops.snapshot_restore import (
     SNAPSHOT_RESTORE_BUTTON,
 )
 from homeassistant.components.http import StaticPathConfig
-from homeassistant.config_entries import ConfigEntryState
+from homeassistant.components.lovelace import LovelaceData
+from homeassistant.components.lovelace.const import (
+    LOVELACE_DATA,
+    MODE_STORAGE,
+    MODE_YAML,
+)
+from homeassistant.components.lovelace.dashboard import LovelaceStorage
+from homeassistant.components.lovelace.resources import (
+    ResourceStorageCollection,
+    ResourceYAMLCollection,
+)
+from homeassistant.config_entries import (
+    SOURCE_IGNORE,
+    ConfigEntryDisabler,
+    ConfigEntryState,
+)
 from homeassistant.core import HomeAssistant
 
 from . import setup_integration
@@ -43,12 +61,19 @@ pytestmark = pytest.mark.usefixtures("mock_proxmox_client")
 
 @pytest.fixture
 def frontend_loaded(hass: HomeAssistant):
-    """Stand in for Home Assistant's stage-0 http and frontend integrations."""
+    """Use HA's real resource collection with a mocked static-path server."""
     hass.http = MagicMock()
     hass.http.async_register_static_paths = AsyncMock()
-    hass.config.components.add("frontend")
-    with patch("custom_components.hubinet_ops.frontend.add_extra_js_url") as extra:
-        yield hass.http.async_register_static_paths, extra
+    hass.config.components.update(("frontend", "lovelace"))
+    dashboard = LovelaceStorage(hass, None)
+    resources = ResourceStorageCollection(hass, dashboard)
+    hass.data[LOVELACE_DATA] = LovelaceData(
+        resource_mode=MODE_STORAGE,
+        dashboards={None: dashboard},
+        resources=resources,
+        yaml_dashboards={},
+    )
+    return hass.http.async_register_static_paths, resources
 
 
 def test_card_url_is_versioned_per_release() -> None:
@@ -62,24 +87,29 @@ async def test_setup_serves_directory_and_registers_module_once(
     hass: HomeAssistant, mock_config_entry: MockConfigEntry, frontend_loaded
 ) -> None:
     """Delivery runs once per start, not once per entry setup or reload."""
-    register, extra = frontend_loaded
-    await setup_integration(hass, mock_config_entry)
+    register, resources = frontend_loaded
+    with patch("homeassistant.components.frontend.add_extra_js_url") as extra:
+        await setup_integration(hass, mock_config_entry)
+    extra.assert_not_called()
     register.assert_awaited_once_with(
         [StaticPathConfig(STATIC_URL, str(FRONTEND_DIRECTORY), True)]
     )
-    extra.assert_called_once_with(hass, card_module_url())
+    items = list(resources.async_items())
+    assert len(items) == 1
+    assert items[0]["url"] == card_module_url()
+    assert items[0]["type"] == "module"
 
     assert await hass.config_entries.async_reload(mock_config_entry.entry_id)
     await hass.async_block_till_done()
     register.assert_awaited_once()
-    extra.assert_called_once()
+    assert list(resources.async_items()) == items
 
 
 async def test_missing_frontend_skips_delivery_without_affecting_setup(
     hass: HomeAssistant, mock_config_entry: MockConfigEntry
 ) -> None:
     """Without http/frontend the integration still loads normally."""
-    with patch("custom_components.hubinet_ops.frontend.add_extra_js_url") as extra:
+    with patch("homeassistant.components.frontend.add_extra_js_url") as extra:
         await setup_integration(hass, mock_config_entry)
     extra.assert_not_called()
     assert mock_config_entry.state is ConfigEntryState.LOADED
@@ -92,12 +122,276 @@ async def test_delivery_failure_is_logged_and_isolated(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     """A static-path failure never disables native or package functionality."""
-    register, extra = frontend_loaded
+    register, resources = frontend_loaded
     register.side_effect = RuntimeError("route conflict")
     await setup_integration(hass, mock_config_entry)
     assert mock_config_entry.state is ConfigEntryState.LOADED
-    extra.assert_not_called()
+    assert not list(resources.async_items())
     assert "Could not deliver the Hubinet-Ops dashboard card" in caplog.text
+
+
+async def test_missing_lovelace_skips_delivery(hass: HomeAssistant, frontend_loaded):
+    """HTTP/frontend alone must not load a card through index HTML."""
+    register, _ = frontend_loaded
+    del hass.data[LOVELACE_DATA]
+    await async_register_frontend(hass)
+    register.assert_not_awaited()
+
+
+async def test_resource_upgrade_preserves_id_and_unrelated_resources(
+    hass: HomeAssistant, frontend_loaded
+) -> None:
+    """Use the native collection to upgrade one relative module, not dashboards."""
+    _, resources = frontend_loaded
+    old = await resources.async_create_item(
+        {"url": f"{STATIC_URL}/{CARD_MODULE}?v=older", "res_type": "js"}
+    )
+    unrelated = [
+        await resources.async_create_item({"url": url, "res_type": "module"})
+        for url in (
+            "/hacsfiles/another-card/another-card.js",
+            f"https://other.example{STATIC_URL}/{CARD_MODULE}?v=other",
+            f"{STATIC_URL}/{CARD_MODULE}.backup?v=other",
+        )
+    ]
+    await async_register_frontend(hass)
+    assert list(resources.async_items()) == [
+        {"id": old["id"], "url": card_module_url(), "type": "module"},
+        *unrelated,
+    ]
+
+
+async def test_duplicate_owned_resources_are_consolidated(
+    hass: HomeAssistant, frontend_loaded
+) -> None:
+    """Old versions of this exact relative path must not load multiple copies."""
+    _, resources = frontend_loaded
+    first = await resources.async_create_item(
+        {"url": card_module_url(), "res_type": "module"}
+    )
+    await resources.async_create_item(
+        {"url": f"{STATIC_URL}/{CARD_MODULE}?v=previous", "res_type": "module"}
+    )
+    await async_register_frontend(hass)
+    assert list(resources.async_items()) == [first]
+
+
+async def test_current_resource_needs_no_storage_mutation(
+    hass: HomeAssistant, frontend_loaded
+) -> None:
+    """A restart with the current module should only load the native collection."""
+    _, resources = frontend_loaded
+    item = await resources.async_create_item(
+        {"url": card_module_url(), "res_type": "module"}
+    )
+    with (
+        patch.object(
+            resources, "async_create_item", wraps=resources.async_create_item
+        ) as create,
+        patch.object(
+            resources, "async_update_item", wraps=resources.async_update_item
+        ) as update,
+        patch.object(
+            resources, "async_delete_item", wraps=resources.async_delete_item
+        ) as delete,
+    ):
+        await async_register_frontend(hass)
+    create.assert_not_called()
+    update.assert_not_called()
+    delete.assert_not_called()
+    assert list(resources.async_items()) == [item]
+
+
+async def test_resource_failure_is_logged_and_isolated(
+    hass: HomeAssistant,
+    mock_config_entry: MockConfigEntry,
+    frontend_loaded,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A native resource save failure must not disable the Proxmox integration."""
+    _, resources = frontend_loaded
+    with patch.object(
+        resources, "async_create_item", side_effect=OSError("save failed")
+    ):
+        await setup_integration(hass, mock_config_entry)
+    assert mock_config_entry.state is ConfigEntryState.LOADED
+    assert not list(resources.async_items())
+    assert "Could not deliver the Hubinet-Ops dashboard card" in caplog.text
+
+
+@pytest.mark.parametrize("configured", [False, True])
+async def test_yaml_resources_remain_operator_configured(
+    hass: HomeAssistant,
+    frontend_loaded,
+    caplog: pytest.LogCaptureFixture,
+    configured: bool,
+) -> None:
+    """Use native YAML declarations without silently overlaying the user's list."""
+    register, _ = frontend_loaded
+    items = [{"url": "/another-card.js", "type": "module"}]
+    if configured:
+        items.append({"url": card_module_url(), "type": "module"})
+    resources = ResourceYAMLCollection(items.copy())
+    hass.data[LOVELACE_DATA].resource_mode = MODE_YAML
+    hass.data[LOVELACE_DATA].resources = resources
+    await async_register_frontend(hass)
+    register.assert_awaited_once()
+    assert resources.async_items() == items
+    assert ("Lovelace uses YAML resources" in caplog.text) is not configured
+
+
+async def test_permanent_last_host_removal_deletes_only_owned_resources(
+    hass: HomeAssistant, mock_config_entry: MockConfigEntry, frontend_loaded
+) -> None:
+    """Exercise HA's removal hook, not a simulated unload or raw storage edit."""
+    _, resources = frontend_loaded
+    await setup_integration(hass, mock_config_entry)
+    for url in (f"{STATIC_URL}/{CARD_MODULE}", f"{STATIC_URL}/{CARD_MODULE}?v=older"):
+        await resources.async_create_item({"url": url, "res_type": "module"})
+    unrelated = [
+        await resources.async_create_item({"url": url, "res_type": "module"})
+        for url in (
+            "/hacsfiles/another-card.js",
+            f"https://other.example{STATIC_URL}/{CARD_MODULE}",
+            f"{STATIC_URL}/{CARD_MODULE}.backup",
+            f"/local/wrapper.js?source={STATIC_URL}/{CARD_MODULE}",
+        )
+    ]
+    result = await hass.config_entries.async_remove(mock_config_entry.entry_id)
+    assert result == {"require_restart": False}
+    assert hass.config_entries.async_get_entry(mock_config_entry.entry_id) is None
+    assert list(resources.async_items()) == unrelated
+
+
+@pytest.mark.parametrize("disabled", [False, True])
+async def test_other_host_keeps_resource_until_its_permanent_removal(
+    hass: HomeAssistant,
+    mock_config_entry: MockConfigEntry,
+    frontend_loaded,
+    disabled: bool,
+) -> None:
+    """Not-loaded and disabled hosts still need the one global resource."""
+    _, resources = frontend_loaded
+    await setup_integration(hass, mock_config_entry)
+    other = MockConfigEntry(
+        domain=DOMAIN,
+        version=4,
+        data=mock_config_entry.data,
+        disabled_by=ConfigEntryDisabler.USER if disabled else None,
+    )
+    other.add_to_hass(hass)
+    original = list(resources.async_items())
+    await hass.config_entries.async_remove(mock_config_entry.entry_id)
+    assert list(resources.async_items()) == original
+    await hass.config_entries.async_remove(other.entry_id)
+    assert not list(resources.async_items())
+
+
+async def test_unload_and_same_runtime_readd_preserve_card_delivery(
+    hass: HomeAssistant, mock_config_entry: MockConfigEntry, frontend_loaded
+) -> None:
+    """Unload keeps resources; delete then re-add restores them without a restart."""
+    register, resources = frontend_loaded
+    await setup_integration(hass, mock_config_entry)
+    original = list(resources.async_items())
+    assert await hass.config_entries.async_unload(mock_config_entry.entry_id)
+    assert list(resources.async_items()) == original
+    await hass.config_entries.async_remove(mock_config_entry.entry_id)
+    assert not list(resources.async_items())
+    new = MockConfigEntry(domain=DOMAIN, version=4, data=mock_config_entry.data)
+    await setup_integration(hass, new)
+    restored = list(resources.async_items())
+    assert len(restored) == 1
+    assert restored[0]["url"] == card_module_url()
+    assert restored[0]["type"] == "module"
+    register.assert_awaited_once()
+
+
+async def test_ignored_entry_does_not_keep_an_orphan_resource(
+    hass: HomeAssistant, mock_config_entry: MockConfigEntry, frontend_loaded
+) -> None:
+    """An ignored discovery is not a Proxmox host configuration."""
+    _, resources = frontend_loaded
+    await setup_integration(hass, mock_config_entry)
+    ignored = MockConfigEntry(domain=DOMAIN, source=SOURCE_IGNORE)
+    ignored.add_to_hass(hass)
+    await hass.config_entries.async_remove(mock_config_entry.entry_id)
+    assert not list(resources.async_items())
+    assert hass.config_entries.async_get_entry(ignored.entry_id) is ignored
+
+
+async def test_removal_keeps_yaml_resource_declarations(
+    hass: HomeAssistant, mock_config_entry: MockConfigEntry, frontend_loaded
+) -> None:
+    """Permanent entry removal must not modify the operator's YAML list."""
+    items = [{"url": card_module_url(), "type": "module"}]
+    resources = ResourceYAMLCollection(items.copy())
+    hass.data[LOVELACE_DATA].resource_mode = MODE_YAML
+    hass.data[LOVELACE_DATA].resources = resources
+    await setup_integration(hass, mock_config_entry)
+    await hass.config_entries.async_remove(mock_config_entry.entry_id)
+    assert resources.async_items() == items
+
+
+async def test_host_added_during_resource_load_prevents_cleanup(
+    hass: HomeAssistant, frontend_loaded
+) -> None:
+    """Recheck native config entries after awaiting the collection load."""
+    _, resources = frontend_loaded
+    await async_register_frontend(hass)
+    original = list(resources.async_items())
+    load = resources.async_get_info
+
+    async def add_host():
+        new = MockConfigEntry(domain=DOMAIN)
+        new.add_to_hass(hass)
+        return await load()
+
+    with patch.object(resources, "async_get_info", side_effect=add_host):
+        await async_remove_frontend_resource(hass)
+    assert list(resources.async_items()) == original
+
+
+async def test_concurrent_last_host_removals_are_idempotent(
+    hass: HomeAssistant, frontend_loaded, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Overlapping native notifications must not delete a stale snapshot twice."""
+    _, resources = frontend_loaded
+    await async_register_frontend(hass)
+    await resources.async_create_item(
+        {"url": f"{STATIC_URL}/{CARD_MODULE}?v=older", "res_type": "module"}
+    )
+    deleted = []
+
+    async def listener(change_type, item_id, item):
+        deleted.append(item_id)
+        await asyncio.sleep(0)
+
+    resources.async_add_listener(listener)
+    await asyncio.gather(
+        async_remove_frontend_resource(hass), async_remove_frontend_resource(hass)
+    )
+    assert not list(resources.async_items())
+    assert len(set(deleted)) == len(deleted) == 2
+    assert "Could not remove the Hubinet-Ops dashboard resource" not in caplog.text
+
+
+async def test_resource_cleanup_failure_does_not_block_entry_removal(
+    hass: HomeAssistant,
+    mock_config_entry: MockConfigEntry,
+    frontend_loaded,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Use native removal even when the resource collection cannot delete."""
+    _, resources = frontend_loaded
+    await setup_integration(hass, mock_config_entry)
+    with patch.object(
+        resources, "async_delete_item", side_effect=OSError("save failed")
+    ):
+        await hass.config_entries.async_remove(mock_config_entry.entry_id)
+    assert hass.config_entries.async_get_entry(mock_config_entry.entry_id) is None
+    assert len(list(resources.async_items())) == 1
+    assert "Could not remove the Hubinet-Ops dashboard resource" in caplog.text
 
 
 def test_card_assets_ship_inside_the_integration_package() -> None:

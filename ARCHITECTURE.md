@@ -8,6 +8,58 @@ provenance in [UPSTREAM.md](UPSTREAM.md).
 
 ## Accepted architecture today
 
+### Native Lovelace card resources (2026.9.1.20)
+
+On 2026-10-04, before implementation, the owner explicitly decided to replace
+`frontend.add_extra_js_url` with Home Assistant's native Lovelace Resources
+`module` delivery. This supersedes the index-HTML extra-module delivery and
+the prohibition on writing Lovelace resource storage in the original Easy
+Update card decision below. It changes card delivery only.
+
+The integration still serves its shipped frontend directory through Home
+Assistant's native static-path API. In native resource storage mode, setup
+uses Home Assistant's resource collection to create or update one versioned,
+relative module URL for the existing root card module. Existing entries for
+that exact integration-served relative path are consolidated; other resources
+and dashboard configuration are untouched. Home Assistant retrieves the
+resource list and loads the module when Lovelace starts, after its frontend
+and element registry are available. There is no extra-module registration,
+custom loader, polling, retry, or new backend.
+
+The manifest adds `lovelace` to the existing soft `after_dependencies` ordering.
+Without the frontend, HTTP, or Lovelace, delivery is skipped and the integration
+still operates. Registration errors are logged without disabling native PVE
+or package functionality. The resource is global; the static directory is
+served once per HA start and resource registration is idempotent at integration
+and entry setup. It is not removed on a Proxmox entry unload. In YAML resource
+mode, the operator uses the normal native resource declaration; the integration
+does not rewrite YAML or add an in-memory resource overlay. A frontend reload
+is required after installing or updating. The current readiness guard and
+five card implementations are preserved.
+
+The pre-implementation documentation checkpoint is commit `fa2dd32`.
+
+The owner's 2026-10-04 P3 follow-up authorizes cleanup within the same draft
+2026.9.1.20. HA's supported `async_remove_entry` hook runs after permanent
+entry deletion. When no non-ignored Hubinet entry remains (disabled and
+not-loaded hosts still count), it deletes only resources for the exact
+integration-owned relative module path through the native storage collection.
+It rechecks host presence after asynchronous collection loading and before
+deletions. Unload/reload never invokes cleanup; entry setup restores the one
+resource if a host is added again in the same HA runtime, without registering
+the HTTP route twice. YAML resource declarations remain operator-owned. The P3
+pre-implementation documentation checkpoint is commit `b1f0a42`.
+
+This guarantee requires integration code to be available when the last entry
+is removed. HACS 2.0.5's uninstall removes the files and refreshes the custom
+component cache without calling HA's config-entry removal API. HA may skip
+the remove callback when the integration is missing, so deleting files first
+cannot guarantee cleanup. The supported uninstall order is to remove all
+Hubinet entries in HA first, then remove the integration through HACS. If the
+files were removed first, the operator removes the exact leftover resource
+through HA's Resources UI. No HACS event listener or direct storage-file edit
+is introduced.
+
 ### VM card, mini cards, and stat history (2026.9.1.17)
 
 On 2026-10-03, before implementation, the owner accepted the mockup for these
@@ -45,7 +97,7 @@ mini Start when stopped or Shut down (confirmed) when running. The previous
 or Space on it, opens Home Assistant's native more-info dialog for that sensor,
 which shows its history. It is navigation only and never calls a service.
 
-**Load order.** Home Assistant imports the card module in parallel with its own
+**Load order through 2026.9.1.19.** Home Assistant imports the card module in parallel with its own
 app bundle, which can install a scoped custom-element registry polyfill that
 replaces `window.customElements`; cards defined before it are invisible to
 Home Assistant ("Custom element doesn't exist", endless spinner in the card
@@ -55,7 +107,8 @@ native `whenDefined` promise, which the polyfill's native stand-in also resolves
 when the registry is replaced during the wait. There is no timeout that permits
 early registration. The initial 2026.9.1.18 fix had a 10-second fallback that
 reintroduced the race when the app took longer to start; the 2026.9.1.19
-correction removes that fallback. Delivery and the five card types are unchanged.
+correction removes that fallback. Version 2026.9.1.20 uses the native Lovelace
+delivery described above and retains this readiness guard and all five types.
 
 ### Setup connection resilience (2026.9.1.16)
 
@@ -223,7 +276,7 @@ never starts Autoremove. The continuation adds no record, status, persistence,
 queue, scheduler, worker, or manager state; it is the Python equivalent of the
 blueprint's `wait_template`, not a second lifecycle.
 
-**Frontend delivery.** The card is one dependency-free ES module (plus a pure
+**Original frontend delivery (2026.9.1.14–19).** The card is one dependency-free ES module (plus a pure
 logic module) shipped inside `custom_components/hubinet_ops/frontend/`, so HACS
 installs it with the integration. `async_setup` serves that directory through
 `hass.http.async_register_static_paths` with cache headers and registers the

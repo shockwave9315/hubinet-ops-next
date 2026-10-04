@@ -88,8 +88,11 @@ controls and Health remain available on the LXC device page.
 
 ### Easy Update card
 
-The **Hubinet-Ops Easy Update** card ships with the integration. No dashboard
-resource URL, Mushroom, YAML, or entity mapping is needed.
+The **Hubinet-Ops Easy Update** card ships with the integration. In normal
+Lovelace resource storage mode, its native `module` resource is registered and
+updated automatically. No resource URL, Mushroom, YAML, or entity mapping is
+needed. Home Assistant loads the cards when the dashboard starts, using a
+relative URL that follows the app's selected local or external HA address.
 
 1. Install or update Hubinet-Ops through HACS and restart Home Assistant, then
    **refresh the browser** (or the companion app) once so the new card loads.
@@ -103,6 +106,31 @@ stores only the LXC device, so renaming entities does not break it.
 A newly created LXC becomes selectable automatically after Hubinet-Ops
 discovers it; add a card for it if you want it on the dashboard. Nothing has
 to be recreated, and the integration never edits dashboards.
+
+If you explicitly use **YAML resource mode**, declare the native module in
+your existing `lovelace.resources` list instead. The integration does not edit
+YAML files:
+
+```yaml
+lovelace:
+  resources:
+    - url: /hubinet_ops_static/hubinet-ops-cards.js?v=2026.9.1.20
+      type: module
+```
+
+Update that version query when you upgrade the integration. One resource
+loads all five Hubinet cards.
+
+To uninstall, first remove all Hubinet-Ops host entries in **Settings -> Devices
+& services**, then remove Hubinet-Ops in HACS. Removing the last host deletes
+the integration's native resource; reloads and removal while another host
+remains preserve it. Adding a host again restores the resource automatically.
+
+HACS can delete the integration's files without invoking HA's entry-removal
+hook. If the files were deleted first, remove the leftover entry through
+**Settings -> Dashboards -> Resources**, matching only the relative path
+`/hubinet_ops_static/hubinet-ops-cards.js` (with any version query). YAML
+resource declarations must be removed from your own resource list.
 
 | Card | Meaning | Tap |
 | --- | --- | --- |

@@ -1,6 +1,6 @@
 # Status
 
-Status date: 2026-10-03
+Status date: 2026-10-04
 
 ## Current baseline
 
@@ -12,8 +12,10 @@ Status date: 2026-10-03
   subsystem, guided fresh-install enrollment, native snapshot Restore, and
   native snapshot Create observation and explicit native Delete documented in
   [ARCHITECTURE.md](ARCHITECTURE.md).
-- Integration after merge: `2026.9.1.19`, helper v5, protocol v1.
-- Latest tagged release: `2026.9.1.18` (merged PR #23, main `05b0e20`).
+- Integration after merge: `2026.9.1.20`, helper v5, protocol v1.
+- Latest final tagged release: `2026.9.1.19` (merged PR #24, main `d4eb2eb`).
+  Draft .20 has owner-tested RC `2026.9.1.rc.01.20` at `7c2bc16`;
+  no final `2026.9.1.20` tag exists.
   `2026.9.1.15` (PR #20, `b865968`): the owner reported the post-merge live
   tests passed.
 - Starting merged baseline for 2026.9.1.16: main `b865968`.
@@ -21,6 +23,7 @@ Status date: 2026-10-03
 - Starting merged baseline for 2026.9.1.17: main `0409d76`.
 - Starting merged baseline for 2026.9.1.18: main `e7c03e6`.
 - Starting merged baseline for 2026.9.1.19: main `05b0e20`.
+- Starting merged baseline for 2026.9.1.20: main `d4eb2eb`.
 - Git history is authoritative for the eventual feature merge SHA.
 
 ## Merged
@@ -412,9 +415,9 @@ Scan All remains.
 - The 2026.9.1.18 fallback reproduced the same race when the app started after
   ten seconds: all five cards were defined in the native registry before the
   app installed its polyfill, leaving none visible to Home Assistant.
-- Implementation: **IMPLEMENTED IN THIS DRAFT / OWNER LIVE TESTING PENDING** on
-  `fix/cards-slow-mobile-start`, within the existing frontend
-  delivery. The module waits for `home-assistant` with no timeout fallback;
+- Implementation: **MERGED IN PR #24 / RELEASED AS 2026.9.1.19**, within the
+  existing frontend delivery. The module waits for `home-assistant` with no
+  timeout fallback;
   the polyfill's native stand-in resolves an already-pending native wait.
   No delivery, card configuration, backend, helper, or protocol change.
 - Node regressions exercise a slow app, a registry installed after ten seconds,
@@ -430,7 +433,7 @@ Scan All remains.
   versioned frontend delivery remain consistent.
 - The restarted Docker instance served all four card modules with
   `?v=2026.9.1.19` and HTTP 200; the saved VM and all five picker previews
-  passed the 14-second startup/V2 bridge case again with this draft version.
+  passed the 14-second startup/V2 bridge case again with this version.
 - Runtime validation: official Home Assistant Container **2026.9.4**, frontend
   **20260826.7**, with the integration mounted read-only and one saved VM tile
   opened by fresh Chromium contexts. Unchanged 2026.9.1.18 worked at normal
@@ -445,25 +448,218 @@ Scan All remains.
   All six runtime comparisons met their expected results, with no console or
   page errors. The lab has no Proxmox host: card creation is verified with its
   native choose-device state, not live guest data or power operations.
-- Live confirmation of the correction on owner/tester Android apps:
-  **PENDING**. The runtime lab uses Chromium mobile emulation and HA's actual
-  external-app frontend path, not an Android WebView. The reproduction proves
+- Live confirmation on the owner's Android app: **EXTERNAL-URL FAILURE
+  PERSISTS ON 2026.9.1.19**. The runtime lab used Chromium mobile emulation and
+  HA's actual external-app frontend path, not an Android WebView. The reproduction proves
   the timeout defect, not the tester's exact cause. The isolated container and
   evidence are under ignored `.dev/frontend-lab-2026.9.4`; the standard test
   environment remains pinned to Core 2026.9.1.
 - Release metadata is `2026.9.1.19` in the manifest, integration constant, and
   bootstrap pin. The native extra-module URL and its dependency queries change
-  to `?v=2026.9.1.19` so clients fetch the corrected code. This is a draft test
-  build; no merge, tag, or published release is part of this handoff.
+  to `?v=2026.9.1.19` so clients fetch the corrected code. The owner merged
+  PR #24, tagged the version, and published the release on 2026-10-03.
+
+## Android external-URL card investigation
+
+- Native Lovelace resource delivery architecture: **ACCEPTED BY OWNER on
+  2026-10-04**, before implementation. The owner explicitly requested replacing
+  `add_extra_js_url` with native Lovelace Resources of type `module`, loaded
+  when the dashboard starts. See [ARCHITECTURE.md](ARCHITECTURE.md).
+  Implementation: **IMPLEMENTED / DRAFT PR #25**; release target
+  `2026.9.1.20`. Pre-implementation documentation checkpoint: `fa2dd32`.
+  Draft: [PR #25](https://github.com/shockwave9315/hubinet-ops-next/pull/25).
+- Owner report after installing 2026.9.1.19: the Android app uses an external
+  HA URL through Cloudflare Tunnel with client-certificate authentication
+  (mTLS). HA itself works, but the saved VM card still reports
+  `Custom element doesn't exist: hubinet-ops-vm-card` and Hubinet cards are
+  missing from the picker. Connecting the home VPN makes the app switch to
+  a local IP, reload, and display the cards. Desktop and phone browsers work;
+  the owner's browser Cloudflare access uses a login. The owner confirmed
+  that the browser and app use **different domains**. A successful browser
+  request therefore does not establish delivery on the app's domain.
+- The reported app is **2026.6.5-full**, with Android WebView
+  **153.0.8010.36**. App reinstall, token reset, and phone cache clearing have
+  already been tried. None establishes the external failure's cause.
+- The owner's two probe reports on 2026-10-04 confirm the same Core 2026.9.4,
+  Companion 2026.6.5, and WebView 153 on both origins. Externally, all four
+  diagnostic GETs returned HTTP 200 JavaScript without redirects, with exact
+  2026.9.1.19 SHA-256 hashes; zero card elements or picker types were registered,
+  and the parent resource history contained no Hubinet request. Locally, all
+  five elements and picker types were present, and the parent recorded all
+  four module requests as scripts with HTTP 200. This narrows the investigation
+  to automatic startup/import delivery or execution; successful diagnostic
+  fetches do not establish the earlier startup responses or their cause.
+  Resource timing has a bounded buffer, so the empty external history alone
+  is not proof that no module request occurred.
+- Investigation: **OWNER VALIDATION PASS** on `fix/cards-external-mtls` for
+  native resource delivery; the owner-reported Android/mTLS failure is resolved.
+  The P3 resource-removal lifecycle fix below is implemented and checked. The
+  historical slow-start race is not an established cause of the external failure.
+- Isolated HA Container 2026.9.4 lab: a loopback-only HTTPS reverse proxy
+  rejects requests without a valid test client certificate. All four card
+  modules returned HTTP 200 and JavaScript MIME types with the certificate;
+  the saved VM and all five picker previews passed in a browser and HA's
+  V1/V2 external-app frontend paths. The V2 path also passed
+  HTTPS -> local HTTP -> HTTPS in one context. These are Chromium tests with
+  simulated native bridges, not Cloudflare or Android WebView tests.
+- Three controlled lab denials reproduce the missing VM element while HA
+  remains usable: denying the root module or Easy Update logic prevents all
+  five definitions; denying the guest module leaves only Easy Update
+  defined. These injected HTTP 403 responses show a possible failure
+  mechanism, not evidence of a Cloudflare denial on the owner's server.
+- A standalone read-only diagnostic, [frontend-card-probe.html](tools/frontend-card-probe.html),
+  can run in HA's built-in Webpage card with a relative `/local` URL. It reads
+  the actual parent app's element registry, picker types, and existing resource
+  timing entries, and fetches the four card modules through the selected HA
+  origin. It reports HTTP/MIME, redirects, Cloudflare Ray ID when present, and
+  SHA-256 against 2026.9.1.19; this initial phase never imports those modules
+  or reads auth storage. [Usage](tools/FRONTEND_CARD_PROBE.md) describes the external/local
+  comparison. This is a manual test artifact, not a production delivery change.
+- Diagnostic version 2 also reads the active document's Hubinet import entries,
+  script types, frontend entrypoint paths, modern/legacy flags, and service-worker
+  control. It compares them with a separate HTML response fetched for the current
+  panel path and detects Rocket Loader markers. It never executes fetched HTML
+  or reports raw script bodies, nonce values, or CSP text. Intermediaries can
+  affect this GET too; it is not guaranteed origin-server evidence.
+- At the owner's explicit request, version 2 also offers a separate force-load
+  button: it appends the existing versioned module with a unique probe query
+  to the parent HA document after HA is defined. It records the original
+  state, current-registry readiness, subsequent definitions/picker types,
+  relevant JS errors, script events, and a bounded 20-second observation.
+  A `load` event alone does not prove module evaluation completed. One
+  in-memory parent-window report survives iframe recreation; a full reload
+  clears it. This changes only the open page's registrations, not HA config,
+  backend, release code, or permanent frontend delivery.
+- All four diagnostic runtime cases passed in the isolated HA 2026.9.4 mTLS
+  lab: healthy registration, a denied root module, a denied guest module, and
+  readable release-matching source with registration deliberately suppressed.
+  The reports distinguish 5/0/1/0 registered cards respectively and preserve
+  the parent registry. Copying the complete JSON was checked in each case;
+  none contained the lab's auth tokens or password. These are Chromium tests
+  with a simulated V2 bridge, not native Android or Cloudflare tests.
+- Diagnostic version 2 passed all six runtime cases, including a removed
+  HTML import directive and an inert script type. Both new cases reproduce
+  the owner's empty parent request history and registry while all four files
+  remain readable. The diagnostic correctly distinguishes the missing and
+  present-but-inactive launchers, preserves the registry, and copies the report
+  without lab auth material, including an injected nonce containing a lab token.
+- All nine force-enabled diagnostic cases passed on the same HA/mTLS/V2 lab.
+  Force-loading restores five definitions when the launcher is absent/inert,
+  initial registration was suppressed, or an initial await is deliberately
+  stalled. Root/guest denials remain visible; a deliberately thrown module
+  error is captured, and a forced pending await reaches the observation timeout.
+  Tests verify parent-only registration, no duplicate picker entries, full
+  JSON copying, retained pre-force evidence, and recovery when HA recreates
+  the iframe. These controlled faults validate the diagnostic and do not
+  demonstrate an Android registry-promise defect.
+- The latest stable official Android GitHub release checked on 2026-10-04 is
+  [2026.8.4](https://github.com/home-assistant/android/releases/tag/2026.8.4).
+  It includes [#7284](https://github.com/home-assistant/android/pull/7284),
+  awaiting client-certificate loading, and
+  [#7381](https://github.com/home-assistant/android/pull/7381), priming mTLS
+  before a cold frontend load. The latter addresses a first WebSocket connection
+  failing when it cannot request a client certificate. These are concrete
+  reasons to compare the official full APK with 2026.6.5, not proof of the
+  owner's card-only cause. The owner reports no newer Play Store build offered;
+  that distribution state has not been independently verified.
+- The owner updated to **Companion 2026.8.4-24228** and supplied another
+  external v1 report at 06:06:15 UTC on 2026-10-04. The same WebView 153 and
+  HA 2026.9.4 still have zero definitions/picker types and no recorded Hubinet
+  requests. All four diagnostic responses are HTTP 200 JavaScript, now CF
+  cache hits, with the same correct 2026.9.1.19 hashes. The app update did
+  **NOT** resolve the reported missing cards.
+- The owner reports that the v2 force-load button restored the cards in the
+  external app. The supplied follow-up snapshot at 06:44:33 UTC already has
+  five definitions/picker types and two batches of module script requests;
+  it lacks `forceLoad`, so it does not preserve the failed pre-force state.
+  The active document has no Hubinet launcher or literal module path, whereas
+  the separate HTTP 200 HTML response contains the normal version-19 import.
+  Service-worker control is true; no Rocket Loader marker was detected.
+  This proves that the current app can render the registered cards and shows
+  differing active/fetched bootstrap documents. It does not establish which
+  intermediary supplied the original document or an old-registry await defect.
+- Native Android testing was attempted with the official
+  **2026.6.5-full** APK on an isolated Android 15 emulator. Its bundled
+  WebView is **124.0.6367.219**, so it does not match the owner's WebView 153.
+  The stock emulator renderer repeatedly crashed with SIGTRAP while loading
+  HA's OAuth page over local HTTP. This prevented authenticated card assertions
+  or a native mTLS comparison; it is a lab infrastructure failure, not evidence
+  of the owner's card-loading cause. The emulator was stopped after preserving
+  its userdata and logs. Scripts, private
+  test credentials, certificates, and evidence remain under ignored
+  `.dev/frontend-lab-2026.9.4`; the pinned development environment is unchanged.
+
+## 2026.9.1.20 native Lovelace resource delivery
+
+- Architecture: **ACCEPTED BY OWNER BEFORE IMPLEMENTATION on 2026-10-04**.
+  Implementation: **IN DRAFT PR #25**, on `fix/cards-external-mtls`.
+  Checkpoint: `fa2dd32`.
+- Setup serves the existing static directory and uses HA's native resource
+  collection to create/update one relative versioned `module` entry. Old
+  entries for the exact integration-served relative path are consolidated;
+  unrelated resources and dashboard configs are preserved. The setup no
+  longer calls `add_extra_js_url`; `lovelace` is a soft ordering dependency.
+- Native YAML resource mode remains operator configured, with a precise
+  logged URL and a README declaration. No YAML is rewritten or overlaid.
+- Validation including the P3 fix: full `scripts/test.sh` passed **893 Python
+  tests, 66 Node tests, and 213 snapshots**, plus Ruff and formatting/diff checks.
+  Native-collection
+  regressions cover release upgrades, stable IDs, duplicate owned URLs,
+  unrelated resources, repeated setup, YAML mode, isolated save failures,
+  permanent last-host removal, disabled/not-loaded hosts, ignored discovery,
+  unload and same-runtime re-add, a host added during collection loading,
+  overlapping removals, and isolated cleanup failures.
+- Seven checks passed on actual HA Container 2026.9.4 with the local mTLS
+  proxy and mobile Chromium: automatic resource creation during HA startup,
+  rejection without a client certificate, the no-resource negative control,
+  browser, native V1/V2 frontend paths, external -> local -> external switching,
+  and a controlled service-worker reload. All healthy dashboard and picker
+  runs have five definitions/types with no Hubinet import in the navigation
+  HTML. Removing the native resource leaves zero definitions while the source
+  still returns HTTP 200; restoring it repairs loading on the next dashboard
+  start. These are Chromium tests with simulated native bridges, not native
+  Android WebView or Cloudflare tests. Private lab certificate validation is
+  bypassed only in Chromium; the proxy still enforces the client certificate.
+- No Proxmox host is configured in the frontend lab; the saved VM card and
+  picker previews render the normal choose-device state. Live operations,
+  native Android WebView 153, and the owner's Cloudflare endpoint remain
+  outside the successful lab coverage.
+- Release metadata target: `2026.9.1.20`; helper v5 and protocol v1 unchanged.
+- **OWNER VALIDATION — PASS** on HA Core 2026.9.4, Companion 2026.8.4,
+  `hapka.hubinet.pl`, LTE/mTLS with VPN off and no diagnostic force-load.
+  Cold start, repeated app starts, resume from background, Wi-Fi/LTE changes
+  in both directions, HA restart/reconnect and app restart afterward all pass.
+  Both local/external desktop access, the card picker, and pre-existing saved
+  cards pass. Exactly one native `module` resource was added automatically:
+  `/hubinet_ops_static/hubinet-ops-cards.js?v=2026.9.1.20`; no duplicate exists.
+  The .19 failure did not recur. This establishes the real owner-case fix,
+  beyond the lab's earlier simulated-native checks.
+- P3 cleanup/uninstall hygiene: **REAL / SUPPORTED CONFIG-ENTRY FIX ACCEPTED
+  BY OWNER / IMPLEMENTED AND CHECKED**, within the existing draft .20.
+  Pre-implementation documentation checkpoint: `b1f0a42`.
+  HA's `async_remove_entry` runs after deletion and supports last-host cleanup
+  through the native resource collection, deleting only the exact owned
+  relative path. Unload/reload and removal while another host remains preserve
+  the resource; entry setup restores it when a host is added again in the same
+  HA runtime, without registering the static route twice. YAML stays operator
+  configured. HACS 2.0.5 removes files without deleting the custom integration's
+  config entries; full cleanup cannot be promised when files disappear first.
+  README documents removing all host entries in HA before HACS uninstall, and
+  manual removal of an exact leftover resource through HA's Resources UI.
+  No .21 version or new final/RC tag is created.
+- Review readiness: **READY FOR FINAL REVIEW / PR #25 REMAINS DRAFT**.
+  The owner validation covers RC `2026.9.1.rc.01.20`; the subsequent P3 backend
+  lifecycle fix is covered by the native HA config-entry/resource tests above.
 
 ## Next
 
-Validate the 2026.9.1.19 draft on owner/tester Android apps, including the same
-saved dashboard before and after disconnecting the home VPN; check the native
-Add card picker as well. Review and release after live validation. Tag
+Review [PR #25](https://github.com/shockwave9315/hubinet-ops-next/pull/25) with
+the owner-validated native Lovelace resource delivery and the implemented,
+checked P3 cleanup. Keep it DRAFT and retain the .20 release
+pins; final review and release publication are maintainer decisions. Tag
 `2026.9.1.16` (main `0409d76`) if still wanted.
 
 ## Explicitly not started
 
-- Tag of `2026.9.1.16`; tag/release of `2026.9.1.19`.
+- Tag of `2026.9.1.16`.
 - Pause and Resume in the VM card, and reading `qmpstatus`.
