@@ -13,9 +13,7 @@ Status date: 2026-10-04
   native snapshot Create observation and explicit native Delete documented in
   [ARCHITECTURE.md](ARCHITECTURE.md).
 - Integration after merge: `2026.9.1.20`, helper v5, protocol v1.
-- Latest final tagged release: `2026.9.1.19` (merged PR #24, main `d4eb2eb`).
-  Draft .20 has owner-tested RC `2026.9.1.rc.01.20` at `7c2bc16`;
-  no final `2026.9.1.20` tag exists.
+- Latest final tagged release: `2026.9.1.20` (merged PR #25, main `b38b950`).
   `2026.9.1.15` (PR #20, `b865968`): the owner reported the post-merge live
   tests passed.
 - Starting merged baseline for 2026.9.1.16: main `b865968`.
@@ -68,6 +66,19 @@ Status date: 2026-10-04
   on 2026-09-09**; see the
   [maintainer decision record](ARCHITECTURE.md#package-update-maintainer-decision-record).
 - Package Update: **IMPLEMENTED**.
+
+## Checkpoint A: one-shot Update without a snapshot
+
+- Execution plan A/B/C/D: **ACCEPTED BY OWNER on 2026-10-04**.
+  Only A is authorized for this implementation; its accepted contract is in
+  [ARCHITECTURE.md](ARCHITECTURE.md#checkpoint-a-explicit-one-shot-package-update-without-a-snapshot).
+- Checkpoint A implementation: **IN PROGRESS** on
+  `feat/checkpoint-a-skip-snapshot`, based on main `b38b950` after PR #25.
+  The documentation acceptance checkpoint precedes all runtime changes.
+- Default/native Update and all Autoremove remain snapshot-required; the
+  explicit one-shot Easy Update exception changes only snapshot work.
+- B/C/D: **NOT STARTED**. No frontend skip button, version bump, PR, or
+  Lovelace Resources change is included. Release line remains `2026.9.1.20`.
 
 ## Guided enrollment
 
@@ -465,9 +476,9 @@ Scan All remains.
   2026-10-04**, before implementation. The owner explicitly requested replacing
   `add_extra_js_url` with native Lovelace Resources of type `module`, loaded
   when the dashboard starts. See [ARCHITECTURE.md](ARCHITECTURE.md).
-  Implementation: **IMPLEMENTED / DRAFT PR #25**; release target
+  Implementation: **MERGED IN PR #25**; release line
   `2026.9.1.20`. Pre-implementation documentation checkpoint: `fa2dd32`.
-  Draft: [PR #25](https://github.com/shockwave9315/hubinet-ops-next/pull/25).
+  [PR #25](https://github.com/shockwave9315/hubinet-ops-next/pull/25).
 - Owner report after installing 2026.9.1.19: the Android app uses an external
   HA URL through Cloudflare Tunnel with client-certificate authentication
   (mTLS). HA itself works, but the saved VM card still reports
@@ -592,7 +603,7 @@ Scan All remains.
 ## 2026.9.1.20 native Lovelace resource delivery
 
 - Architecture: **ACCEPTED BY OWNER BEFORE IMPLEMENTATION on 2026-10-04**.
-  Implementation: **IN DRAFT PR #25**, on `fix/cards-external-mtls`.
+  Implementation: **MERGED IN PR #25**, main `b38b950`.
   Checkpoint: `fa2dd32`.
 - Setup serves the existing static directory and uses HA's native resource
   collection to create/update one relative versioned `module` entry. Old
@@ -635,7 +646,7 @@ Scan All remains.
   The .19 failure did not recur. This establishes the real owner-case fix,
   beyond the lab's earlier simulated-native checks.
 - P3 cleanup/uninstall hygiene: **REAL / SUPPORTED CONFIG-ENTRY FIX ACCEPTED
-  BY OWNER / IMPLEMENTED AND CHECKED**, within the existing draft .20.
+  BY OWNER / MERGED IN PR #25**, within release line .20.
   Pre-implementation documentation checkpoint: `b1f0a42`.
   HA's `async_remove_entry` runs after deletion and supports last-host cleanup
   through the native resource collection, deleting only the exact owned
@@ -647,19 +658,18 @@ Scan All remains.
   README documents removing all host entries in HA before HACS uninstall, and
   manual removal of an exact leftover resource through HA's Resources UI.
   No .21 version or new final/RC tag is created.
-- Review readiness: **READY FOR FINAL REVIEW / PR #25 REMAINS DRAFT**.
+- Review readiness: **MERGED IN PR #25 / TAGGED AS 2026.9.1.20**.
   The owner validation covers RC `2026.9.1.rc.01.20`; the subsequent P3 backend
   lifecycle fix is covered by the native HA config-entry/resource tests above.
 
 ## Next
 
-Review [PR #25](https://github.com/shockwave9315/hubinet-ops-next/pull/25) with
-the owner-validated native Lovelace resource delivery and the implemented,
-checked P3 cleanup. Keep it DRAFT and retain the .20 release
-pins; final review and release publication are maintainer decisions. Tag
-`2026.9.1.16` (main `0409d76`) if still wanted.
+Complete Checkpoint A, review its full scope, run `scripts/test.sh`, and hand
+off for owner review. Keep B/C/D unimplemented and retain the .20 release pins;
+do not create a PR. Tag `2026.9.1.16` (main `0409d76`) if still wanted.
 
 ## Explicitly not started
 
+- Checkpoints B/C/D, including the frontend "without snapshot" button.
 - Tag of `2026.9.1.16`.
 - Pause and Resume in the VM card, and reading `qmpstatus`.

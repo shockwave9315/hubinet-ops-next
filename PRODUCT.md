@@ -52,6 +52,11 @@ current state and [ARCHITECTURE.md](ARCHITECTURE.md) for accepted design.
 
 - Package updates are never automatic.
 - An update requires explicit operator action.
+- Package Update requires a confirmed native PVE safety snapshot by default.
+  The sole exception is the operator's explicit `skip_snapshot=True` choice
+  for one Easy Update operation; every other update guard still applies.
+  Snapshot failure never authorizes continuation without a snapshot. Native
+  Package Update and Autoremove remain snapshot-required.
 - The integration never initiates package cleanup by itself. Cleanup requires
   explicit operator action or the operator's opt-in post-Update Autoremove
   (YOLO) choice saved in the Easy Update card or passed to the Easy Update

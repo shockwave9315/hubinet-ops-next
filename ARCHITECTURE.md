@@ -8,6 +8,41 @@ provenance in [UPSTREAM.md](UPSTREAM.md).
 
 ## Accepted architecture today
 
+### Checkpoint A: explicit one-shot Package Update without a snapshot
+
+On 2026-10-04, before runtime implementation, the owner accepted execution
+plan A/B/C/D and authorized **Checkpoint A only**, based on main after PR #25
+and release line `2026.9.1.20`. This decision adds `skip_snapshot: bool = False`
+to the existing `hubinet_ops.easy_update` -> `async_start_easy_update()` ->
+`PackageManager.async_start_update()` -> existing Update execution path.
+It is an explicit choice for one Update attempt, never a saved mode or a
+fallback after snapshot failure.
+
+The default/native path remains snapshot-required: missing `VM.Snapshot`,
+snapshot failure, or unconfirmed creation prevents package mutation. Native
+Package Update explicitly passes `skip_snapshot=False`; its availability
+continues to require snapshot permission. The button may exist without that
+permission, so button existence no longer proves it. Its bounded
+`snapshot_permission` attribute supplies that fact to normal Easy Update
+eligibility.
+
+Only `skip_snapshot=True` omits the snapshot permission gate, native listing,
+retained-snapshot warning, name generation, creation/confirmation, and cleanup.
+It rejoins the same mutation path. Current successful non-empty Scan, expected
+scan attempt, token/review truth, fresh exact-plan equality, running LXC,
+current coordinator truth, CONTROL authorization, Scan/Restore/Update/
+Autoremove/Health exclusion, mutation/dpkg/liveness, Health hand-off,
+invalidation, and fail-closed execution remain mandatory.
+
+`PackageUpdateRecord.snapshot_skipped` reports the choice on that attempt.
+Sensors and notifications must not imply a created/deleted snapshot when it
+was skipped, or classify a pre-mutation failure/cancellation as snapshot failure
+when no snapshot work failed. Autoremove remains snapshot-required and never
+inherits this flag, including the existing opt-in Easy Update continuation.
+There is no frontend "without snapshot" button in A. Checkpoints B/C/D,
+version changes, PR creation, and changes to PR #25's Lovelace Resources
+mechanism are outside this implementation.
+
 ### Native Lovelace card resources (2026.9.1.20)
 
 On 2026-10-04, before implementation, the owner explicitly decided to replace
