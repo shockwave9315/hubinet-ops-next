@@ -1,6 +1,6 @@
 # Status
 
-Status date: 2026-10-03
+Status date: 2026-10-04
 
 ## Current baseline
 
@@ -13,7 +13,7 @@ Status date: 2026-10-03
   native snapshot Create observation and explicit native Delete documented in
   [ARCHITECTURE.md](ARCHITECTURE.md).
 - Integration after merge: `2026.9.1.19`, helper v5, protocol v1.
-- Latest tagged release: `2026.9.1.18` (merged PR #23, main `05b0e20`).
+- Latest tagged release: `2026.9.1.19` (merged PR #24, main `d4eb2eb`).
   `2026.9.1.15` (PR #20, `b865968`): the owner reported the post-merge live
   tests passed.
 - Starting merged baseline for 2026.9.1.16: main `b865968`.
@@ -413,8 +413,8 @@ Scan All remains.
   ten seconds: all five cards were defined in the native registry before the
   app installed its polyfill, leaving none visible to Home Assistant.
 - Implementation: **MERGED IN PR #24 / RELEASED AS 2026.9.1.19**, within the
-  existing frontend
-  delivery. The module waits for `home-assistant` with no timeout fallback;
+  existing frontend delivery. The module waits for `home-assistant` with no
+  timeout fallback;
   the polyfill's native stand-in resolves an already-pending native wait.
   No delivery, card configuration, backend, helper, or protocol change.
 - Node regressions exercise a slow app, a registry installed after ten seconds,
@@ -447,8 +447,7 @@ Scan All remains.
   native choose-device state, not live guest data or power operations.
 - Live confirmation on the owner's Android app: **EXTERNAL-URL FAILURE
   PERSISTS ON 2026.9.1.19**. The runtime lab used Chromium mobile emulation and
-  HA's actual
-  external-app frontend path, not an Android WebView. The reproduction proves
+  HA's actual external-app frontend path, not an Android WebView. The reproduction proves
   the timeout defect, not the tester's exact cause. The isolated container and
   evidence are under ignored `.dev/frontend-lab-2026.9.4`; the standard test
   environment remains pinned to Core 2026.9.1.
@@ -471,6 +470,15 @@ Scan All remains.
 - The reported app is **2026.6.5-full**, with Android WebView
   **153.0.8010.36**. App reinstall, token reset, and phone cache clearing have
   already been tried. None establishes the external failure's cause.
+- The owner's two probe reports on 2026-10-04 confirm the same Core 2026.9.4,
+  Companion 2026.6.5, and WebView 153 on both origins. Externally, all four
+  diagnostic GETs returned HTTP 200 JavaScript without redirects, with exact
+  2026.9.1.19 SHA-256 hashes; zero card elements or picker types were registered,
+  and the parent resource history contained no Hubinet request. Locally, all
+  five elements and picker types were present, and the parent recorded all
+  four module requests as scripts with HTTP 200. This narrows the investigation
+  to automatic startup/import delivery or execution; successful diagnostic
+  fetches do not establish the earlier startup responses or their cause.
 - Investigation: **IN PROGRESS** on `fix/cards-external-mtls`. No further
   runtime fix has been implemented, and the slow-start race must not be
   presented as an explanation of this remaining failure.
@@ -494,14 +502,35 @@ Scan All remains.
   SHA-256 against 2026.9.1.19; it never imports those modules or reads auth
   storage. [Usage](tools/FRONTEND_CARD_PROBE.md) describes the external/local
   comparison. This is a manual test artifact, not a production delivery change.
+- Diagnostic version 2 also reads the active document's Hubinet import entries,
+  script types, frontend entrypoint paths, modern/legacy flags, and service-worker
+  control. It compares them with a separate HTML response fetched for the current
+  panel path and detects Rocket Loader markers. It never executes fetched HTML
+  or reports raw script bodies, nonce values, or CSP text. Intermediaries can
+  affect this GET too; it is not guaranteed origin-server evidence.
 - All four diagnostic runtime cases passed in the isolated HA 2026.9.4 mTLS
   lab: healthy registration, a denied root module, a denied guest module, and
   readable release-matching source with registration deliberately suppressed.
   The reports distinguish 5/0/1/0 registered cards respectively and preserve
   the parent registry. Copying the complete JSON was checked in each case;
   none contained the lab's auth tokens or password. These are Chromium tests
-  with a simulated V2 bridge, not native Android or Cloudflare tests. Actual
-  reports from the owner's external and local origins are still pending.
+  with a simulated V2 bridge, not native Android or Cloudflare tests.
+- Diagnostic version 2 passed all six runtime cases, including a removed
+  HTML import directive and an inert script type. Both new cases reproduce
+  the owner's empty parent request history and registry while all four files
+  remain readable. The diagnostic correctly distinguishes the missing and
+  present-but-inactive launchers, preserves the registry, and copies the report
+  without lab auth material, including an injected nonce containing a lab token.
+- The latest stable official Android GitHub release checked on 2026-10-04 is
+  [2026.8.4](https://github.com/home-assistant/android/releases/tag/2026.8.4).
+  It includes [#7284](https://github.com/home-assistant/android/pull/7284),
+  awaiting client-certificate loading, and
+  [#7381](https://github.com/home-assistant/android/pull/7381), priming mTLS
+  before a cold frontend load. The latter addresses a first WebSocket connection
+  failing when it cannot request a client certificate. These are concrete
+  reasons to compare the official full APK with 2026.6.5, not proof of the
+  owner's card-only cause. The owner reports no newer Play Store build offered;
+  that distribution state has not been independently verified.
 - Native Android testing was attempted with the official
   **2026.6.5-full** APK on an isolated Android 15 emulator. Its bundled
   WebView is **124.0.6367.219**, so it does not match the owner's WebView 153.
@@ -515,10 +544,11 @@ Scan All remains.
 
 ## Next
 
-Obtain the diagnostic reports from the owner's Android app through its
-external mTLS domain and local IP, then reproduce the observed delivery or
-registration failure. Verify the same saved dashboard and Add card picker
-across the external/local URL transition before publishing a further correction. Tag
+Compare the owner's external startup after the official Companion update,
+and obtain version-2 HTML diagnostics if the missing cards persist. Reproduce
+the observed startup/import failure and verify the same saved dashboard and
+Add card picker across the external/local URL transition before publishing
+a further correction. Tag
 `2026.9.1.16` (main `0409d76`) if still wanted.
 
 ## Explicitly not started

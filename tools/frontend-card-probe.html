@@ -18,9 +18,9 @@
   #summary { font-weight: 600; }
 </style>
 <h1>Hubinet — test ładowania kart</h1>
-<p>Test dla wersji 2026.9.1.19. Otwórz tę stronę jako kartę „Strona internetowa”
-  pod adresem <code>/local/hubinet-card-probe.html</code>.</p>
-<p>Test odczytuje stan kart i pobiera cztery pliki JavaScript. Nie uruchamia ich,
+<p>Test 2 dla wersji 2026.9.1.19. Otwórz tę stronę jako kartę „Strona internetowa”
+  pod adresem <code>/local/hubinet-card-probe-v2.html</code>.</p>
+<p>Test odczytuje stan kart, wpisy startowe HTML i pobiera cztery pliki JavaScript. Nie uruchamia ich,
   nie zmienia konfiguracji i nie odczytuje tokenów ani certyfikatów.</p>
 <button id="run" type="button">Powtórz test</button>
 <button id="copy" type="button" disabled>Skopiuj wynik</button>
@@ -50,6 +50,58 @@ const types = ["hubinet-ops-easy-update-card", "hubinet-ops-lxc-card",
 const byId = (id) => document.getElementById(id);
 let report;
 
+function safeUrl(value, base = location.origin) {
+  try {
+    const url = new URL(value, base);
+    if (url.protocol !== "http:" && url.protocol !== "https:") return null;
+    return { origin: url.origin, path: url.pathname, version: url.searchParams.get("v") };
+  } catch { return null; }
+}
+
+function bootstrapState(scripts, base) {
+  const hubinetLaunchers = [];
+  const frontendEntries = [];
+  let rocketLoader = false;
+  for (const script of scripts) {
+    const source = script.src ? safeUrl(script.src, base) : null;
+    rocketLoader ||= Boolean(source?.path.includes("rocket-loader"));
+    const text = script.text || "";
+    const imports = [...text.matchAll(/(?:import|_ls)\(\s*["']([^"']+)["']/g)]
+      .map((match) => safeUrl(match[1], base)).filter(Boolean);
+    frontendEntries.push(...imports.filter((url) => /^\/frontend_(?:latest|es5)\//.test(url.path)));
+    if (source && /^\/frontend_(?:latest|es5)\//.test(source.path)) frontendEntries.push(source);
+    const references = imports.filter((url) => url.path.startsWith("/hubinet_ops_static/"));
+    if (text.includes("/hubinet_ops_static/") || source?.path.startsWith("/hubinet_ops_static/")) {
+      hubinetLaunchers.push({
+        type: script.type || "classic", source, references,
+        cfAsync: script.cfAsync, hasNonce: script.hasNonce,
+        dynamicImport: /import\(\s*["'][^"']*\/hubinet_ops_static\//.test(text),
+        classicLoader: /_ls\(\s*["'][^"']*\/hubinet_ops_static\//.test(text),
+      });
+    }
+  }
+  return { scriptCount: scripts.length, hubinetLaunchers, frontendEntries, rocketLoader };
+}
+
+function liveScripts(document) {
+  return [...document.scripts].map((script) => ({
+    src: script.getAttribute("src"), type: script.getAttribute("type"),
+    cfAsync: script.getAttribute("data-cfasync"), hasNonce: script.hasAttribute("nonce"),
+    text: script.textContent,
+  }));
+}
+
+function htmlScripts(html) {
+  // Extract script text without inserting or parsing a complete HTML document:
+  // no script execution and no iframe/image requests from the fetched markup.
+  return [...html.matchAll(/<script\b([^>]*)>([\s\S]*?)<\/script\s*>/gi)].map((match) => {
+    const attrs = Object.fromEntries([...match[1].matchAll(/([^\s=]+)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))/g)]
+      .map((attr) => [attr[1].toLowerCase(), attr[2] ?? attr[3] ?? attr[4]]));
+    return { src: attrs.src, type: attrs.type, cfAsync: attrs["data-cfasync"] ?? null,
+      hasNonce: /(?:^|\s)nonce(?:\s|=|$)/i.test(match[1]), text: match[2] };
+  });
+}
+
 function parentState() {
   if (parent === window) return { available: false, reason: "Otwórz test w karcie HA, aby sprawdzić rejestrację elementów." };
   try {
@@ -60,7 +112,13 @@ function parentState() {
       coreVersion: ha?.hass?.config?.version ?? null,
       hassPresent: Boolean(ha?.hass),
       integrationLoaded: ha?.hass?.config?.components?.includes("hubinet_ops") ?? null,
+      safeMode: ha?.hass?.config?.safe_mode ?? null,
       homeAssistantDefined: Boolean(parent.customElements.get("home-assistant")),
+      isModern: typeof parent.isModern === "boolean" ? parent.isModern : null,
+      latestJS: typeof parent.latestJS === "boolean" ? parent.latestJS : null,
+      serviceWorkerControlled: Boolean(parent.navigator.serviceWorker?.controller),
+      resourceTimingEntriesTotal: parent.performance.getEntriesByType("resource").length,
+      bootstrap: bootstrapState(liveScripts(parent.document), parent.location.origin),
       definitions: Object.fromEntries(types.map((type) => [type, Boolean(parent.customElements.get(type))])),
       pickerTypes: (parent.customCards || []).filter((card) => types.includes(card.type)).map((card) => card.type),
       resourceRequestsBeforeProbe: parent.performance.getEntriesByType("resource")
@@ -76,6 +134,34 @@ function parentState() {
   } catch (error) {
     return { available: false, reason: String(error.message) };
   }
+}
+
+async function checkDocument() {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 12000);
+  try {
+    const path = parent === window ? "/" : parent.location.pathname;
+    const url = new URL(path, location.origin);
+    url.searchParams.set("hubinet_probe", `2-${Date.now()}`);
+    if (parent !== window && new URL(parent.location.href).searchParams.has("external_auth")) {
+      url.searchParams.set("external_auth", "1");
+    }
+    const response = await fetch(url, { credentials: "same-origin", cache: "no-store", signal: controller.signal });
+    const html = await response.text();
+    const csp = response.headers.get("content-security-policy") || "";
+    return {
+      requestedPath: path, status: response.status, contentType: response.headers.get("content-type"),
+      redirected: response.redirected, finalUrl: safeUrl(response.url), bytes: new TextEncoder().encode(html).length,
+      cfRay: response.headers.get("cf-ray"), cfCacheStatus: response.headers.get("cf-cache-status"),
+      age: response.headers.get("age"),
+      serviceWorkerControlled: Boolean(navigator.serviceWorker?.controller),
+      csp: { present: Boolean(csp), usesNonce: /'nonce-/.test(csp), usesHash: /'sha(?:256|384|512)-/.test(csp),
+        allowsInline: /'unsafe-inline'/.test(csp), strictDynamic: /'strict-dynamic'/.test(csp) },
+      bootstrap: bootstrapState(htmlScripts(html), response.url),
+    };
+  } catch (error) {
+    return { error: error.name === "AbortError" ? "Brak odpowiedzi HTML w ciągu 12 sekund" : String(error.message) };
+  } finally { clearTimeout(timeout); }
 }
 
 async function checkFile(name) {
@@ -116,12 +202,14 @@ async function run() {
   byId("summary").className = "";
   byId("files").replaceChildren();
   const parentBefore = parentState();
-  const resources = await Promise.all(Object.keys(files).map(checkFile));
+  const [resources, documentResponse] = await Promise.all([
+    Promise.all(Object.keys(files).map(checkFile)), checkDocument(),
+  ]);
   const parentAfter = parentState();
   report = {
-    probeVersion: 1, referenceRelease: release, time: new Date().toISOString(),
+    probeVersion: 2, referenceRelease: release, time: new Date().toISOString(),
     origin: location.origin, userAgent: navigator.userAgent,
-    parentBefore, resources, parentAfter,
+    parentBefore, resources, documentResponse, parentAfter,
   };
   const failures = resources.filter((resource) => resource.error || resource.status !== 200 || !resource.javascript);
   const count = parentAfter.available ? Object.values(parentAfter.definitions).filter(Boolean).length : null;
@@ -142,7 +230,9 @@ async function run() {
     byId("files").append(row);
   }
   byId("note").textContent = parentBefore.available
-    ? "Rejestracja została odczytana przed pobraniem plików przez test. Inna suma pliku wymaga sprawdzenia treści lub zmian po drodze; sama suma nie ustala przyczyny."
+    ? `Wpisy startowe Hubinet w otwartej stronie: ${parentBefore.bootstrap.hubinetLaunchers.length}.`
+      + ` W kolejnej odpowiedzi HTML: ${documentResponse.bootstrap?.hubinetLaunchers.length ?? "brak odczytu"}.`
+      + " Pełny wynik zawiera typy skryptów i wykrycie Rocket Loader. Test nie wykonuje odczytanego kodu."
     : parentBefore.reason;
   byId("report").textContent = JSON.stringify(report, null, 2);
   byId("run").disabled = false;
