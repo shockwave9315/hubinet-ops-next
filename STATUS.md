@@ -101,8 +101,11 @@ Status date: 2026-10-04
   stage. The planned version remains .21 through A/B/C/D; no tag, release,
   or merge is authorized.
 - A: **DONE**, HEAD after A `49a12c1`, validation recorded above.
-- B: **NOT STARTED**; Snapshot Create running implementation is authorized next,
-  after its pre-runtime documentation acceptance checkpoint.
+- B architecture: **ACCEPTED BY OWNER BEFORE RUNTIME IMPLEMENTATION**; see
+  [the accepted contract](ARCHITECTURE.md#checkpoint-b-native-snapshot-create-running).
+  Implementation: **IN PROGRESS**. The existing native Create entity owns the
+  existing observation task; Restore/Delete read it through native HA entity
+  ownership. This documentation checkpoint precedes runtime edits.
 - C/D: **NOT STARTED** and outside the current implementation.
 - PR #25 Lovelace Resources mechanism remains unchanged.
 
@@ -698,6 +701,5 @@ create a release. Tag `2026.9.1.16` (main `0409d76`) if still wanted.
 ## Explicitly not started
 
 - Checkpoints C/D, including the frontend "without snapshot" button.
-- Checkpoint B runtime (authorized next).
 - Tag of `2026.9.1.16`.
 - Pause and Resume in the VM card, and reading `qmpstatus`.

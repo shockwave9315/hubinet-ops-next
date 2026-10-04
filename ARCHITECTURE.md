@@ -49,6 +49,44 @@ snapshot work is `PLAN_FAILED`; after mutation starts, an interrupted or
 unexpected result remains `MUTATION_UNCERTAIN`. Normal snapshot-work failures
 remain `SNAPSHOT_FAILED`, with the existing retention/uncertainty facts.
 
+### Checkpoint B: native Snapshot Create running
+
+On 2026-10-04 the owner explicitly authorized Checkpoint B on the existing
+A/B/C/D feature branch and Draft PR. The whole stage now targets development
+release `2026.9.1.21`; this supersedes A's earlier task-local prohibition on a
+version bump and PR creation. A stays implemented; C/D are not started.
+PR #25's Lovelace Resources mechanism remains unchanged.
+
+`start_snapshot_create_observation()` returns the exact config-entry-tracked
+background task it already creates. The existing native Create button owns
+that handle and derives `snapshot_create_running` solely from a non-null task
+that is not done. It publishes the transient fact on that same button after
+launch and from a done callback on that same task. No lifecycle enum, state
+machine, second observer, poller, timer, persistence, new entity/coordinator,
+or custom registry is introduced.
+
+Create checks its own handle before another submission. Restore and Delete
+resolve the existing Create entity by its stable entry/VMID unique ID through
+HA's entity registry and button EntityComponent, then read that entity's
+running property. Both check before acceptance and again after fresh native
+snapshot validation, before mutation or LXC package-truth invalidation. The
+check concerns only the same guest; native power behavior stays unchanged.
+
+The task remains the existing `async_observe_task()` path with native POST,
+returned UPID ownership, localized success/failure/uncertain notifications,
+and confirmed-success-only refresh of the exact snapshot selector. Success,
+failure, uncertainty, and cancellation all end running when that observation
+task ends; uncertainty does not claim PVE success. Immediate completion, POST
+failure, and observation-launch failure cannot leave a running fact stuck.
+
+Full guest cards read the backend button fact, show a spinner and localized
+"Creating..." / "Tworzenie...", and disable Create/Restore/Delete during
+running. Reload/remount reconstructs it from entity state. Local service-call
+`_busy` keeps its existing short request behavior and never owns PVE task
+duration. C's skip button/responsive layout and D's mini width/RAM changes
+are outside B. Existing transient ownership still ends on HA reload/restart;
+no persistent task recovery or new PVE authority is added.
+
 ### Native Lovelace card resources (2026.9.1.20)
 
 On 2026-10-04, before implementation, the owner explicitly decided to replace
