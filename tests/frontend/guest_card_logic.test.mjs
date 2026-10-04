@@ -377,3 +377,31 @@ test("a network tile with only the upload sensor is bound to that sensor", () =>
   assert.equal(net.entity, "sensor.out");
   assert.equal(net.history, "sensor.out");
 });
+
+for (const kind of ["lxc", "vm"]) {
+  test(`${kind}: backend Create running blocks only snapshot actions`, () => {
+    const states = baseStates();
+    states["select.n"].attributes.selected_snapshot = "manual";
+    const entities = Object.fromEntries(Object.entries(ENTITIES).map(([id, item]) => [
+      id, { ...item, translation_key: kind === "vm" ? item.translation_key?.replace("container_", "vm_") : item.translation_key },
+    ]));
+    const derive = () => deriveGuestView({ states, entities, devices: DEVICES, config: { device_id: DEVICE }, lang: "pl", kind });
+    const normal = derive();
+    for (const value of [false, undefined, "true", true]) {
+      states["button.k"].attributes.snapshot_create_running = value;
+      const current = derive();
+      assert.equal(current.snapshotCreateRunning, value === true);
+      for (const action of ["create", "restore", "delete"]) {
+        assert.equal(current.actions[action].available, value !== true);
+      }
+      for (const action of ["start", "stop", "restart", ...(kind === "vm" ? ["shutdown", "reset", "hibernate"] : [])]) {
+        assert.deepEqual(current.actions[action], normal.actions[action]);
+      }
+    }
+    // Unavailability must not erase the independently published running fact.
+    states["button.k"].state = "unavailable";
+    assert.equal(derive().snapshotCreateRunning, true);
+    states["sensor.a"].state = "stopped";
+    assert.equal(derive().actions.start.available, true);
+  });
+}

@@ -580,3 +580,80 @@ test("a network tile with only the upload sensor opens its history", async () =>
 });
 
 mock.reset();
+
+const snapshotHass = (kind, running, language = "pl", status = "running") => {
+  const hass = kind === "vm" ? vmHass(status) : makeHass("A");
+  const device = kind === "vm" ? VM : DEVICE;
+  const item = (entity_id, translation_key) => ({ entity_id, translation_key, device_id: device, platform: "hubinet_ops" });
+  hass.locale.language = language;
+  hass.states[kind === "vm" ? "sensor.vs" : "sensor.status"].state = status;
+  hass.entities = { ...hass.entities };
+  delete hass.entities["select.vsnap"];
+  for (const [action, key] of [["create", "snapshot_create"], ["restore", "snapshot_restore"], ["delete", "snapshot_delete"]]) {
+    const id = `button.${action}`;
+    hass.entities[id] = item(id, key);
+    hass.states[id] = { state: "unknown", attributes: action === "create" ? { snapshot_create_running: running } : {} };
+  }
+  hass.entities["select.snap"] = item("select.snap", "snapshot_to_restore");
+  hass.states["select.snap"] = { state: "A", attributes: { options: ["A"], selected_snapshot: "A" } };
+  if (kind === "lxc") {
+    hass.entities["button.start"] = item("button.start", "start");
+    hass.states["button.start"] = { state: "unknown", attributes: {} };
+  }
+  return hass;
+};
+const snapshotButton = (html, action) => html.match(new RegExp(`<button data-action="${action}"[^>]*>.*?</button>`, "s"))?.[0];
+
+for (const kind of ["lxc", "vm"]) {
+  for (const lang of ["pl", "en"]) {
+    test(`${kind}/${lang}: remount restores backend spinner and snapshot blocking, with power intact`, async () => {
+      const device = kind === "vm" ? VM : DEVICE;
+      const hass = snapshotHass(kind, true, lang);
+      let m = mount(`hubinet-ops-${kind}-card`, hass, { device_id: device });
+      assert.equal(Boolean(m.card._busy), false, "no local request owns running");
+      const creating = snapshotButton(m.html(), "create");
+      assert.match(creating, /ha-circular-progress[^>]*indeterminate/);
+      assert.match(creating, lang === "pl" ? /Tworzenie\.\.\./ : /Creating\.\.\./);
+      for (const action of ["create", "restore", "delete"]) {
+        assert.match(snapshotButton(m.html(), action), /\sdisabled[\s>]/);
+        await m.press(`data-action="${action}"`);
+        await m.press(`data-action="${action}"`);
+      }
+      assert.deepEqual(m.calls, []);
+      for (const action of ["stop", "restart"]) {
+        assert.doesNotMatch(snapshotButton(m.html(), action), /\sdisabled[\s>]/);
+      }
+      await m.press('data-action="stop"');
+      await m.press('data-action="stop"');
+      assert.equal(m.calls.length, 1, "power retains normal confirmation and submission");
+      assert.match(snapshotButton(m.html(), "create"), /ha-circular-progress/);
+      m.card.disconnectedCallback();
+      m = mount(`hubinet-ops-${kind}-card`, snapshotHass(kind, true, lang), { device_id: device });
+      assert.match(snapshotButton(m.html(), "create"), /ha-circular-progress/);
+      const finished = snapshotHass(kind, false, lang);
+      finished.callWS = async () => ({});
+      m.card.hass = finished;
+      assert.doesNotMatch(snapshotButton(m.html(), "create"), /ha-circular-progress|\sdisabled[\s>]/);
+      assert.match(snapshotButton(m.html(), "create"), lang === "pl" ? /Utwórz/ : /Create/);
+      const stopped = mount(`hubinet-ops-${kind}-card`, snapshotHass(kind, true, lang, "stopped"), { device_id: device });
+      assert.doesNotMatch(snapshotButton(stopped.html(), "start"), /\sdisabled[\s>]/);
+    });
+  }
+  test(`${kind}: accepted Create request clears local busy while backend running remains`, async () => {
+    const device = kind === "vm" ? VM : DEVICE;
+    const hass = snapshotHass(kind, false);
+    const m = mount(`hubinet-ops-${kind}-card`, hass, { device_id: device });
+    const nativeService = hass.callService;
+    hass.callService = async (...args) => {
+      await nativeService(...args);
+      hass.states["button.create"].attributes.snapshot_create_running = true;
+      m.card.hass = hass;
+    };
+    await m.press('data-action="create"');
+    assert.equal(m.card._busy, false);
+    assert.equal(m.calls.length, 1);
+    assert.match(snapshotButton(m.html(), "create"), /Tworzenie\.\.\./);
+    assert.match(snapshotButton(m.html(), "create"), /ha-circular-progress/);
+    assert.doesNotMatch(snapshotButton(m.html(), "restart"), /\sdisabled[\s>]/);
+  });
+}

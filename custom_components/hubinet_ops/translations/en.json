@@ -733,6 +733,9 @@
     },
     "package_update_snapshot_skipped_detail": {
       "message": "The safety snapshot was explicitly skipped for this operation only; no snapshot was created or deleted."
+    },
+    "snapshot_create_running": {
+      "message": "Snapshot creation is still being observed for this guest. Wait for that observation to finish before creating, restoring, or deleting a snapshot."
     }
   },
   "issues": {

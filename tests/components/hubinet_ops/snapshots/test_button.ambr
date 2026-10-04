@@ -5,7 +5,9 @@
       None,
     ]),
     'area_id': None,
-    'capabilities': None,
+    'capabilities': dict({
+      'snapshot_create_running': False,
+    }),
     'config_entry_id': <ANY>,
     'config_subentry_id': <ANY>,
     'device_class': None,
@@ -40,6 +42,7 @@
   StateSnapshot({
     'attributes': ReadOnlyDict({
       <EntityStateAttribute.FRIENDLY_NAME: 'friendly_name'>: 'ct-backup Create snapshot',
+      'snapshot_create_running': False,
     }),
     'context': <ANY>,
     'entity_id': 'button.ct_backup_create_snapshot',
@@ -306,7 +309,9 @@
       None,
     ]),
     'area_id': None,
-    'capabilities': None,
+    'capabilities': dict({
+      'snapshot_create_running': False,
+    }),
     'config_entry_id': <ANY>,
     'config_subentry_id': <ANY>,
     'device_class': None,
@@ -341,6 +346,7 @@
   StateSnapshot({
     'attributes': ReadOnlyDict({
       <EntityStateAttribute.FRIENDLY_NAME: 'friendly_name'>: 'ct-nginx Create snapshot',
+      'snapshot_create_running': False,
     }),
     'context': <ANY>,
     'entity_id': 'button.ct_nginx_create_snapshot',
@@ -858,7 +864,9 @@
       None,
     ]),
     'area_id': None,
-    'capabilities': None,
+    'capabilities': dict({
+      'snapshot_create_running': False,
+    }),
     'config_entry_id': <ANY>,
     'config_subentry_id': <ANY>,
     'device_class': None,
@@ -893,6 +901,7 @@
   StateSnapshot({
     'attributes': ReadOnlyDict({
       <EntityStateAttribute.FRIENDLY_NAME: 'friendly_name'>: 'vm-web Create snapshot',
+      'snapshot_create_running': False,
     }),
     'context': <ANY>,
     'entity_id': 'button.vm_web_create_snapshot',

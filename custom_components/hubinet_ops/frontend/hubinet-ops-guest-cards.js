@@ -425,9 +425,10 @@ class HubinetOpsGuestCard extends HTMLElement {
     const s = guest.guestStrings(this._lang());
     const armed = this._isArmed(action);
     const tone = TONES[ACTION_TONES[action]];
+    const creating = action === "create" && this._view?.snapshotCreateRunning;
     return `<button data-action="${action}" data-key="${key}" style="--tone:${tone}" class="${armed ? "armed" : ""} ${extra}"
       ${info && info.available && !this._busy ? "" : "disabled"}>
-      <ha-icon icon="${ICONS[action]}"></ha-icon>${esc(armed ? s.confirm : label)}</button>`;
+      ${creating ? '<ha-circular-progress size="small" indeterminate></ha-circular-progress>' : `<ha-icon icon="${ICONS[action]}"></ha-icon>`}${esc(creating ? s.creating : armed ? s.confirm : label)}</button>`;
   }
 
   // Stat tiles; a tile with a sensor opens its native history when tapped.

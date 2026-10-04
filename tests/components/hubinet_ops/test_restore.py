@@ -30,6 +30,7 @@ from homeassistant.components.select import ATTR_OPTION, SERVICE_SELECT_OPTION
 from homeassistant.const import ATTR_ENTITY_ID, STATE_UNAVAILABLE
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
+from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.translation import async_get_translations
 
 from . import setup_integration
@@ -574,3 +575,159 @@ async def test_polish_restore_notification_path_is_localized(
     ]
     assert "wycofanie do snapshota" in message
     assert "ręcznego uruchomienia Skanuj" in message
+
+
+@pytest.mark.parametrize("during_validation", [False, True])
+@pytest.mark.parametrize(
+    ("kind", "vmid", "selector", "button", "create"),
+    [
+        (
+            SnapshotKind.QEMU,
+            100,
+            SELECT_VM,
+            RESTORE_VM,
+            "button.vm_web_create_snapshot",
+        ),
+        (
+            SnapshotKind.LXC,
+            200,
+            SELECT_LXC,
+            RESTORE_LXC,
+            "button.ct_nginx_create_snapshot",
+        ),
+    ],
+)
+async def test_restore_blocks_same_guest_create_before_acceptance_and_mutation(
+    hass: HomeAssistant,
+    mock_proxmox_client: MagicMock,
+    mock_config_entry: MockConfigEntry,
+    during_validation: bool,
+    kind: SnapshotKind,
+    vmid: int,
+    selector: str,
+    button: str,
+    create: str,
+) -> None:
+    """Recheck real Create task ownership after fresh validation, before invalidation."""
+    _prepare_snapshot_rows(mock_proxmox_client)
+    await setup_integration(hass, mock_config_entry)
+    await _select(hass, selector)
+    if not during_validation:
+        er.async_get(hass).async_update_entity(
+            create, new_entity_id="button.renamed_create"
+        )
+        create = "button.renamed_create"
+        await hass.async_block_till_done()
+    manager = mock_config_entry.runtime_data.package_manager
+    manager.invalidate_restore_target = MagicMock()
+    create_entered = asyncio.Event()
+    create_release = asyncio.Event()
+    validation_entered = asyncio.Event()
+    validation_release = asyncio.Event()
+
+    async def observe(*_args, **_kwargs) -> RestoreResult:
+        create_entered.set()
+        await create_release.wait()
+        return RestoreResult(RestoreOutcome.UNCERTAIN)
+
+    async def validate(*_args, **_kwargs) -> bool:
+        validation_entered.set()
+        await validation_release.wait()
+        return True
+
+    with (
+        patch(
+            "custom_components.hubinet_ops.snapshot_restore.async_observe_task",
+            side_effect=observe,
+        ),
+        patch(
+            "custom_components.hubinet_ops.snapshot_restore.async_validate_snapshot",
+            side_effect=validate,
+        ) as validation,
+        patch(
+            "custom_components.hubinet_ops.snapshot_restore.async_rollback_snapshot"
+        ) as rollback,
+    ):
+        if during_validation:
+            await hass.services.async_call(
+                "button", SERVICE_PRESS, {ATTR_ENTITY_ID: button}, blocking=True
+            )
+            await asyncio.wait_for(validation_entered.wait(), 1)
+        await hass.services.async_call(
+            "button", SERVICE_PRESS, {ATTR_ENTITY_ID: create}, blocking=True
+        )
+        await asyncio.wait_for(create_entered.wait(), 1)
+        assert hass.states.get(create).attributes["snapshot_create_running"] is True
+        if during_validation:
+            validation_release.set()
+            await hass.async_block_till_done()
+            message = pn._async_get_or_create_notifications(hass)[  # noqa: SLF001
+                snapshot_restore_notification_id(
+                    mock_config_entry.entry_id, kind, "pve1", vmid
+                )
+            ]["message"]
+            assert "still being observed" in message
+            assert "completed successfully" not in message
+        else:
+            # Even a stale state projection cannot override the live entity's task.
+            state = hass.states.get(create)
+            hass.states.async_set(
+                create,
+                state.state,
+                {**state.attributes, "snapshot_create_running": False},
+            )
+            with pytest.raises(HomeAssistantError, match="still being observed"):
+                await hass.services.async_call(
+                    "button", SERVICE_PRESS, {ATTR_ENTITY_ID: button}, blocking=True
+                )
+            assert (
+                hass.states.get(selector).attributes[ATTR_SELECTED_SNAPSHOT] == "wanted"
+            )
+            validation.assert_not_called()
+        rollback.assert_not_called()
+        manager.invalidate_restore_target.assert_not_called()
+        assert not manager.restore_reserved("pve1", vmid)
+        create_release.set()
+        await hass.async_block_till_done()
+
+
+@pytest.mark.parametrize(
+    "create", ["button.vm_web_create_snapshot", "button.ct_backup_create_snapshot"]
+)
+async def test_restore_other_guest_remains_available_during_create(
+    hass: HomeAssistant,
+    mock_proxmox_client: MagicMock,
+    mock_config_entry: MockConfigEntry,
+    create: str,
+) -> None:
+    """An LXC Restore remains independent of another guest's Create observation."""
+    _prepare_snapshot_rows(mock_proxmox_client)
+    await setup_integration(hass, mock_config_entry)
+    await _select(hass, SELECT_LXC)
+    release = asyncio.Event()
+
+    async def observe(*_args, **_kwargs) -> RestoreResult:
+        await release.wait()
+        return RestoreResult(RestoreOutcome.UNCERTAIN)
+
+    with (
+        patch(
+            "custom_components.hubinet_ops.snapshot_restore.async_observe_task",
+            side_effect=observe,
+        ),
+        patch(
+            "custom_components.hubinet_ops.snapshot_restore.async_rollback_snapshot",
+            AsyncMock(return_value=RestoreResult(RestoreOutcome.SUCCESS)),
+        ) as rollback,
+    ):
+        await hass.services.async_call(
+            "button",
+            SERVICE_PRESS,
+            {ATTR_ENTITY_ID: create},
+            blocking=True,
+        )
+        await _press(hass, RESTORE_LXC)
+        rollback.assert_awaited_once()
+        assert hass.states.get(create).attributes["snapshot_create_running"] is True
+        release.set()
+        await hass.async_block_till_done()

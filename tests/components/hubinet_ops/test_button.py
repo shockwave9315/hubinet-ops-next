@@ -16,7 +16,7 @@ from custom_components.hubinet_ops.snapshots import (
     RestoreResult,
     SnapshotKind,
 )
-from homeassistant.components.button import SERVICE_PRESS
+from homeassistant.components.button import DATA_COMPONENT, SERVICE_PRESS
 from homeassistant.const import ATTR_ENTITY_ID, Platform
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
@@ -181,7 +181,8 @@ async def test_snapshot_button(
     method_mock.return_value = UPID
 
     with patch(
-        "custom_components.hubinet_ops.button.start_snapshot_create_observation"
+        "custom_components.hubinet_ops.button.start_snapshot_create_observation",
+        return_value=None,
     ) as start_observation:
         await hass.services.async_call(
             BUTTON_DOMAIN,
@@ -249,22 +250,49 @@ async def test_create_button_returns_while_observation_remains_blocked(
             1,
         )
         await asyncio.wait_for(observation_entered.wait(), 1)
-
-        start = mock_proxmox_client._qemu_mocks[100].status.start.post  # noqa: SLF001
-        prior_calls = start.call_count
-        await asyncio.wait_for(
-            hass.services.async_call(
+        assert hass.states.get(entity_id).attributes["snapshot_create_running"] is True
+        post = getattr(mock_proxmox_client._node_mock, guest_resource)(  # noqa: SLF001
+            vmid
+        ).snapshot.post
+        with pytest.raises(HomeAssistantError, match="still being observed"):
+            await hass.services.async_call(
                 BUTTON_DOMAIN,
                 SERVICE_PRESS,
-                {ATTR_ENTITY_ID: "button.vm_web_start"},
+                {ATTR_ENTITY_ID: entity_id},
                 blocking=True,
-            ),
-            1,
+            )
+        assert post.call_count == 1
+
+        prefix = "vm_web" if guest_resource == "qemu" else "ct_nginx"
+        guest = getattr(mock_proxmox_client._node_mock, guest_resource)(  # noqa: SLF001
+            vmid
         )
-        assert start.call_count == prior_calls + 1
+        for label, native in (
+            ("start", "start"),
+            ("stop", "stop"),
+            ("restart", "reboot"),
+        ):
+            action = getattr(guest.status, native).post
+            prior_calls = action.call_count
+            await asyncio.wait_for(
+                hass.services.async_call(
+                    BUTTON_DOMAIN,
+                    SERVICE_PRESS,
+                    {ATTR_ENTITY_ID: f"button.{prefix}_{label}"},
+                    blocking=True,
+                ),
+                1,
+            )
+            assert action.call_count == prior_calls + 1
+            assert (
+                hass.states.get(entity_id).attributes["snapshot_create_running"] is True
+            )
 
         observation_release.set()
+        entity = hass.data[DATA_COMPONENT].get_entity(entity_id)
+        await entity._snapshot_create_task  # noqa: SLF001
         await hass.async_block_till_done()
+        assert hass.states.get(entity_id).attributes["snapshot_create_running"] is False
 
 
 async def test_non_snapshot_native_buttons_never_start_create_observation(
@@ -287,6 +315,7 @@ async def test_non_snapshot_native_buttons_never_start_create_observation(
             )
 
     start_observation.assert_not_called()
+    assert "snapshot_create_running" not in hass.states.get(entity_id).attributes
 
 
 @pytest.mark.parametrize(
@@ -325,6 +354,8 @@ async def test_create_post_error_keeps_upstream_mapping_and_starts_no_observer(
 
     start_observation.assert_not_called()
 
+    assert hass.states.get(entity_id).attributes["snapshot_create_running"] is False
+
 
 async def test_create_observer_start_failure_does_not_recast_accepted_post(
     hass: HomeAssistant,
@@ -349,6 +380,12 @@ async def test_create_observer_start_failure_does_not_recast_accepted_post(
         )
 
     post.assert_called_once_with(snapname=ANY)
+    assert (
+        hass.states.get("button.vm_web_create_snapshot").attributes[
+            "snapshot_create_running"
+        ]
+        is False
+    )
 
 
 @pytest.mark.parametrize(

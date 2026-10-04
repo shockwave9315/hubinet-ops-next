@@ -100,6 +100,7 @@ const STRINGS = {
     scan: "Scan",
     details: "Details",
     create: "Create",
+    creating: "Creating...",
     restore: "Restore",
     delete: "Delete",
     start: "Start",
@@ -153,6 +154,7 @@ const STRINGS = {
     scan: "Skanuj",
     details: "Szczegóły",
     create: "Utwórz",
+    creating: "Tworzenie...",
     restore: "Przywróć",
     delete: "Usuń",
     start: "Start",
@@ -392,6 +394,7 @@ export const deriveGuestView = ({
     entity_id: ids[role],
     available: Boolean(ids[role]) && available(st(role)) && !noData,
   });
+  const snapshotCreateRunning = st("create")?.attributes?.snapshot_create_running === true;
   const select = st("snapshot");
   const options =
     select && Array.isArray(select.attributes && select.attributes.options)
@@ -413,6 +416,7 @@ export const deriveGuestView = ({
     status,
     running,
     noData,
+    snapshotCreateRunning,
     uptime: running ? fill(s.uptime, { value: formatDuration(st("uptime"), lang) }) : "",
     stats,
     package: packageView || null,
@@ -425,9 +429,9 @@ export const deriveGuestView = ({
         }
       : null,
     actions: {
-      create: button("create"),
-      restore: { ...button("restore"), available: button("restore").available && Boolean(selected) },
-      delete: { ...button("delete"), available: button("delete").available && Boolean(selected) },
+      create: { ...button("create"), available: button("create").available && !snapshotCreateRunning },
+      restore: { ...button("restore"), available: button("restore").available && Boolean(selected) && !snapshotCreateRunning },
+      delete: { ...button("delete"), available: button("delete").available && Boolean(selected) && !snapshotCreateRunning },
       start: { ...button("start"), available: button("start").available && !running },
       stop: whenRunning("stop"),
       restart: whenRunning("restart"),

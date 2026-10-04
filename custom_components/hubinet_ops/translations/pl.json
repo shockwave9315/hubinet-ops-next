@@ -733,6 +733,9 @@
     },
     "package_update_snapshot_skipped_detail": {
       "message": "Snapshot bezpieczeństwa pominięto na jawne żądanie tylko dla tej operacji; nie utworzono ani nie usunięto snapshota."
+    },
+    "snapshot_create_running": {
+      "message": "Tworzenie migawki tego gościa jest nadal obserwowane. Poczekaj na zakończenie obserwacji przed utworzeniem, przywróceniem lub usunięciem migawki."
     }
   },
   "issues": {
