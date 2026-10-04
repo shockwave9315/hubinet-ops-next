@@ -479,6 +479,8 @@ Scan All remains.
   four module requests as scripts with HTTP 200. This narrows the investigation
   to automatic startup/import delivery or execution; successful diagnostic
   fetches do not establish the earlier startup responses or their cause.
+  Resource timing has a bounded buffer, so the empty external history alone
+  is not proof that no module request occurred.
 - Investigation: **IN PROGRESS** on `fix/cards-external-mtls`. No further
   runtime fix has been implemented, and the slow-start race must not be
   presented as an explanation of this remaining failure.
@@ -499,8 +501,8 @@ Scan All remains.
   the actual parent app's element registry, picker types, and existing resource
   timing entries, and fetches the four card modules through the selected HA
   origin. It reports HTTP/MIME, redirects, Cloudflare Ray ID when present, and
-  SHA-256 against 2026.9.1.19; it never imports those modules or reads auth
-  storage. [Usage](tools/FRONTEND_CARD_PROBE.md) describes the external/local
+  SHA-256 against 2026.9.1.19; this initial phase never imports those modules
+  or reads auth storage. [Usage](tools/FRONTEND_CARD_PROBE.md) describes the external/local
   comparison. This is a manual test artifact, not a production delivery change.
 - Diagnostic version 2 also reads the active document's Hubinet import entries,
   script types, frontend entrypoint paths, modern/legacy flags, and service-worker
@@ -508,6 +510,15 @@ Scan All remains.
   panel path and detects Rocket Loader markers. It never executes fetched HTML
   or reports raw script bodies, nonce values, or CSP text. Intermediaries can
   affect this GET too; it is not guaranteed origin-server evidence.
+- At the owner's explicit request, version 2 also offers a separate force-load
+  button: it appends the existing versioned module with a unique probe query
+  to the parent HA document after HA is defined. It records the original
+  state, current-registry readiness, subsequent definitions/picker types,
+  relevant JS errors, script events, and a bounded 20-second observation.
+  A `load` event alone does not prove module evaluation completed. One
+  in-memory parent-window report survives iframe recreation; a full reload
+  clears it. This changes only the open page's registrations, not HA config,
+  backend, release code, or permanent frontend delivery.
 - All four diagnostic runtime cases passed in the isolated HA 2026.9.4 mTLS
   lab: healthy registration, a denied root module, a denied guest module, and
   readable release-matching source with registration deliberately suppressed.
@@ -521,6 +532,15 @@ Scan All remains.
   remain readable. The diagnostic correctly distinguishes the missing and
   present-but-inactive launchers, preserves the registry, and copies the report
   without lab auth material, including an injected nonce containing a lab token.
+- All nine force-enabled diagnostic cases passed on the same HA/mTLS/V2 lab.
+  Force-loading restores five definitions when the launcher is absent/inert,
+  initial registration was suppressed, or an initial await is deliberately
+  stalled. Root/guest denials remain visible; a deliberately thrown module
+  error is captured, and a forced pending await reaches the observation timeout.
+  Tests verify parent-only registration, no duplicate picker entries, full
+  JSON copying, retained pre-force evidence, and recovery when HA recreates
+  the iframe. These controlled faults validate the diagnostic and do not
+  demonstrate an Android registry-promise defect.
 - The latest stable official Android GitHub release checked on 2026-10-04 is
   [2026.8.4](https://github.com/home-assistant/android/releases/tag/2026.8.4).
   It includes [#7284](https://github.com/home-assistant/android/pull/7284),
@@ -531,6 +551,13 @@ Scan All remains.
   reasons to compare the official full APK with 2026.6.5, not proof of the
   owner's card-only cause. The owner reports no newer Play Store build offered;
   that distribution state has not been independently verified.
+- The owner updated to **Companion 2026.8.4-24228** and supplied another
+  external v1 report at 06:06:15 UTC on 2026-10-04. The same WebView 153 and
+  HA 2026.9.4 still have zero definitions/picker types and no recorded Hubinet
+  requests. All four diagnostic responses are HTTP 200 JavaScript, now CF
+  cache hits, with the same correct 2026.9.1.19 hashes. The app update did
+  **NOT** resolve the reported missing cards. Version-2 HTML/force results
+  from the owner's actual WebView are pending.
 - Native Android testing was attempted with the official
   **2026.6.5-full** APK on an isolated Android 15 emulator. Its bundled
   WebView is **124.0.6367.219**, so it does not match the owner's WebView 153.
@@ -544,8 +571,8 @@ Scan All remains.
 
 ## Next
 
-Compare the owner's external startup after the official Companion update,
-and obtain version-2 HTML diagnostics if the missing cards persist. Reproduce
+Obtain the owner's version-2 HTML and parent force-load diagnostics; the
+Companion update did not resolve the missing cards. Reproduce
 the observed startup/import failure and verify the same saved dashboard and
 Add card picker across the external/local URL transition before publishing
 a further correction. Tag

@@ -20,10 +20,12 @@
 <h1>Hubinet — test ładowania kart</h1>
 <p>Test 2 dla wersji 2026.9.1.19. Otwórz tę stronę jako kartę „Strona internetowa”
   pod adresem <code>/local/hubinet-card-probe-v2.html</code>.</p>
-<p>Test odczytuje stan kart, wpisy startowe HTML i pobiera cztery pliki JavaScript. Nie uruchamia ich,
-  nie zmienia konfiguracji i nie odczytuje tokenów ani certyfikatów.</p>
+<p>Pierwszy test odczytuje stan kart, wpisy startowe HTML i pobiera cztery pliki JavaScript.
+  Przycisk „Uruchom moduł w HA” wykonuje osobną próbę w otwartej stronie HA.
+  Test nie zmienia konfiguracji i nie odczytuje tokenów ani certyfikatów.</p>
 <button id="run" type="button">Powtórz test</button>
 <button id="copy" type="button" disabled>Skopiuj wynik</button>
+<button id="force" type="button" disabled>Uruchom moduł w HA</button>
 <p id="summary" role="status">Sprawdzanie…</p>
 <div id="metadata"></div>
 <table>
@@ -102,26 +104,28 @@ function htmlScripts(html) {
   });
 }
 
-function parentState() {
-  if (parent === window) return { available: false, reason: "Otwórz test w karcie HA, aby sprawdzić rejestrację elementów." };
+function parentState(host = parent) {
+  if (host === window) return { available: false, reason: "Otwórz test w karcie HA, aby sprawdzić rejestrację elementów." };
   try {
-    const ha = parent.document.querySelector("home-assistant");
+    const ha = host.document.querySelector("home-assistant");
     return {
       available: true,
-      origin: parent.location.origin,
+      origin: host.location.origin,
       coreVersion: ha?.hass?.config?.version ?? null,
       hassPresent: Boolean(ha?.hass),
       integrationLoaded: ha?.hass?.config?.components?.includes("hubinet_ops") ?? null,
       safeMode: ha?.hass?.config?.safe_mode ?? null,
-      homeAssistantDefined: Boolean(parent.customElements.get("home-assistant")),
-      isModern: typeof parent.isModern === "boolean" ? parent.isModern : null,
-      latestJS: typeof parent.latestJS === "boolean" ? parent.latestJS : null,
-      serviceWorkerControlled: Boolean(parent.navigator.serviceWorker?.controller),
-      resourceTimingEntriesTotal: parent.performance.getEntriesByType("resource").length,
-      bootstrap: bootstrapState(liveScripts(parent.document), parent.location.origin),
-      definitions: Object.fromEntries(types.map((type) => [type, Boolean(parent.customElements.get(type))])),
-      pickerTypes: (parent.customCards || []).filter((card) => types.includes(card.type)).map((card) => card.type),
-      resourceRequestsBeforeProbe: parent.performance.getEntriesByType("resource")
+      homeAssistantDefined: Boolean(host.customElements.get("home-assistant")),
+      isModern: typeof host.isModern === "boolean" ? host.isModern : null,
+      latestJS: typeof host.latestJS === "boolean" ? host.latestJS : null,
+      serviceWorkerControlled: Boolean(host.navigator.serviceWorker?.controller),
+      resourceTimingEntriesTotal: host.performance.getEntriesByType("resource").length,
+      bootstrap: bootstrapState(liveScripts(host.document), host.location.origin),
+      documentContainsHubinetModule: host.document.documentElement.innerHTML
+        .includes("/hubinet_ops_static/hubinet-ops-cards.js"),
+      definitions: Object.fromEntries(types.map((type) => [type, Boolean(host.customElements.get(type))])),
+      pickerTypes: (host.customCards || []).filter((card) => types.includes(card.type)).map((card) => card.type),
+      resourceRequestsBeforeProbe: host.performance.getEntriesByType("resource")
         .filter((entry) => new URL(entry.name).pathname.startsWith("/hubinet_ops_static/"))
         .map((entry) => ({
           path: new URL(entry.name).pathname,
@@ -158,6 +162,7 @@ async function checkDocument() {
       csp: { present: Boolean(csp), usesNonce: /'nonce-/.test(csp), usesHash: /'sha(?:256|384|512)-/.test(csp),
         allowsInline: /'unsafe-inline'/.test(csp), strictDynamic: /'strict-dynamic'/.test(csp) },
       bootstrap: bootstrapState(htmlScripts(html), response.url),
+      documentContainsHubinetModule: html.includes("/hubinet_ops_static/hubinet-ops-cards.js"),
     };
   } catch (error) {
     return { error: error.name === "AbortError" ? "Brak odpowiedzi HTML w ciągu 12 sekund" : String(error.message) };
@@ -196,8 +201,12 @@ async function checkFile(name) {
 }
 
 async function run() {
+  if (parent !== window) { try { delete parent.__hubinetCardProbeReportV2; } catch {} }
   byId("run").disabled = true;
   byId("copy").disabled = true;
+  byId("copy").textContent = "Skopiuj wynik";
+  byId("force").disabled = true;
+  byId("fallback").hidden = true;
   byId("summary").textContent = "Sprawdzanie…";
   byId("summary").className = "";
   byId("files").replaceChildren();
@@ -237,8 +246,96 @@ async function run() {
   byId("report").textContent = JSON.stringify(report, null, 2);
   byId("run").disabled = false;
   byId("copy").disabled = false;
+  byId("force").disabled = !parentAfter.available || !parentAfter.hassPresent || !parentAfter.homeAssistantDefined;
+}
+
+function errorText(value) {
+  return String(value || "").replace(/https?:\/\/[^\s"'<>]+/g, (value) => {
+    const url = safeUrl(value); return url ? url.origin + url.path : "[URL]";
+  }).replace(/nonce-[\w+/=-]+/g, "nonce-[ukryto]")
+    .replace(/Bearer\s+\S+/gi, "Bearer [ukryto]").slice(0, 2000);
+}
+
+async function monitorForce(result, host) {
+  while (!result.after && Date.now() - result.startedEpochMs < 20000) {
+    await new Promise((resolve) => host.setTimeout(resolve, 100));
+    const count = types.filter((type) => host.customElements.get(type)).length;
+    if (Date.now() - result.startedEpochMs >= 1000 && (count === 5 || result.scriptEvent === "error" || result.errors.length)) break;
+  }
+}
+
+function completeForce(result, host, registry = null) {
+  if (result.after) return;
+  result.elapsedMs = Date.now() - result.startedEpochMs;
+  result.registryChanged = registry ? host.customElements !== registry : null;
+  result.after = parentState(host);
+  const count = result.after.available ? Object.values(result.after.definitions).filter(Boolean).length : 0;
+  result.timedOut = result.elapsedMs >= 20000 && count !== 5 && result.scriptEvent !== "error" && !result.errors.length;
+}
+
+async function forceLoad() {
+  const host = parent;
+  const before = parentState(host);
+  if (!before.available || !before.hassPresent || !before.homeAssistantDefined) return;
+  byId("force").disabled = true;
+  byId("run").disabled = true;
+  byId("copy").disabled = true;
+  byId("fallback").hidden = true;
+  byId("summary").textContent = "Uruchamianie modułu w HA…";
+  const registry = host.customElements;
+  const result = { before, startedEpochMs: Date.now(), scriptEvent: "pending", currentWhenDefinedResolved: false, errors: [] };
+  const script = host.document.createElement("script");
+  script.type = "module";
+  script.src = `/hubinet_ops_static/hubinet-ops-cards.js?v=${release}&probe=${Date.now()}`;
+  result.moduleUrl = safeUrl(script.src);
+  report.forceLoad = result;
+  host.__hubinetCardProbeReportV2 = report;
+  const onLoad = () => { result.scriptEvent = "load"; };
+  const onScriptError = () => { result.scriptEvent = "error"; };
+  const onError = (event) => {
+    const error = event.error || event.reason;
+    const stack = String(error?.stack || "");
+    const filename = String(event.filename || "");
+    const message = String(error?.message || event.message || "");
+    if (![filename, stack, message].some((value) => value.includes("/hubinet_ops_static/"))) return;
+    result.errors.push({ event: event.type, name: error?.name || null,
+      message: errorText(error?.message || event.message), stack: errorText(stack),
+      file: filename ? safeUrl(filename) : null, line: event.lineno || null, column: event.colno || null });
+  };
+  script.addEventListener("load", onLoad);
+  script.addEventListener("error", onScriptError);
+  host.addEventListener("error", onError);
+  host.addEventListener("unhandledrejection", onError);
+  try {
+    registry.whenDefined("home-assistant").then(() => { result.currentWhenDefinedResolved = true; },
+      (error) => result.errors.push({ event: "whenDefined", message: errorText(error.message) }));
+    host.document.head.append(script);
+    await monitorForce(result, host);
+  } catch (error) { result.errors.push({ event: "probe", message: errorText(error.message) }); }
+  finally {
+    script.removeEventListener("load", onLoad);
+    script.removeEventListener("error", onScriptError);
+    host.removeEventListener("error", onError);
+    host.removeEventListener("unhandledrejection", onError);
+    script.remove();
+  }
+  completeForce(result, host, registry);
+  showForceResult(result);
+}
+
+function showForceResult(result) {
+  const count = result.after.available ? Object.values(result.after.definitions).filter(Boolean).length : 0;
+  byId("metadata").textContent = `Adres: ${report.origin} · HA ${report.parentBefore.coreVersion}`;
+  byId("report").textContent = JSON.stringify(report, null, 2);
+  byId("summary").textContent = `Po uruchomieniu modułu w HA: ${count}/5 zarejestrowanych kart.`;
+  byId("summary").className = count === 5 ? "good" : "bad";
+  byId("note").textContent = "Pierwotny wynik pozostał w raporcie. Próba zmienia rejestr kart w tej otwartej stronie; przeładowanie HA rozpoczyna nową sesję. Błędy i stan oczekiwania są w sekcji forceLoad.";
+  byId("copy").textContent = "Skopiuj wynik";
+  byId("copy").disabled = false;
+  byId("run").disabled = false;
 }
 byId("run").addEventListener("click", run);
+byId("force").addEventListener("click", forceLoad);
 byId("copy").addEventListener("click", async () => {
   const text = JSON.stringify(report, null, 2);
   try {
@@ -251,6 +348,21 @@ byId("copy").addEventListener("click", async () => {
     byId("fallback").select();
   }
 });
-run();
+async function start() {
+  let previous;
+  try { previous = parent.__hubinetCardProbeReportV2; } catch {}
+  if (previous?.origin === location.origin && previous.forceLoad) {
+    report = previous;
+    byId("run").disabled = true;
+    byId("force").disabled = true;
+    byId("summary").textContent = "Odczytywanie wyniku próby w HA…";
+    if (!report.forceLoad.after) {
+      await monitorForce(report.forceLoad, parent);
+      completeForce(report.forceLoad, parent);
+    }
+    showForceResult(report.forceLoad);
+  } else await run();
+}
+start();
 </script>
 </html>
