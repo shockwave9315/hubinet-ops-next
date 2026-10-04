@@ -8,6 +8,34 @@ provenance in [UPSTREAM.md](UPSTREAM.md).
 
 ## Accepted architecture today
 
+### Native Lovelace card resources (2026.9.1.20)
+
+On 2026-10-04, before implementation, the owner explicitly decided to replace
+`frontend.add_extra_js_url` with Home Assistant's native Lovelace Resources
+`module` delivery. This supersedes the index-HTML extra-module delivery and
+the prohibition on writing Lovelace resource storage in the original Easy
+Update card decision below. It changes card delivery only.
+
+The integration still serves its shipped frontend directory through Home
+Assistant's native static-path API. In native resource storage mode, setup
+uses Home Assistant's resource collection to create or update one versioned,
+relative module URL for the existing root card module. Existing entries for
+that exact integration-served relative path are consolidated; other resources
+and dashboard configuration are untouched. Home Assistant retrieves the
+resource list and loads the module when Lovelace starts, after its frontend
+and element registry are available. There is no extra-module registration,
+custom loader, polling, retry, or new backend.
+
+The manifest adds `lovelace` to the existing soft `after_dependencies` ordering.
+Without the frontend, HTTP, or Lovelace, delivery is skipped and the integration
+still operates. Registration errors are logged without disabling native PVE
+or package functionality. The resource is global, registered once per HA
+start, and is not removed on a Proxmox entry unload. In YAML resource mode,
+the operator uses the normal native resource declaration; the integration
+does not rewrite YAML or add an in-memory resource overlay. A frontend reload
+is required after installing or updating. The current readiness guard and
+five card implementations are preserved.
+
 ### VM card, mini cards, and stat history (2026.9.1.17)
 
 On 2026-10-03, before implementation, the owner accepted the mockup for these

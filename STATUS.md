@@ -458,6 +458,11 @@ Scan All remains.
 
 ## Android external-URL card investigation
 
+- Native Lovelace resource delivery architecture: **ACCEPTED BY OWNER on
+  2026-10-04**, before implementation. The owner explicitly requested replacing
+  `add_extra_js_url` with native Lovelace Resources of type `module`, loaded
+  when the dashboard starts. See [ARCHITECTURE.md](ARCHITECTURE.md).
+  Implementation: **IN PROGRESS**; release target `2026.9.1.20`.
 - Owner report after installing 2026.9.1.19: the Android app uses an external
   HA URL through Cloudflare Tunnel with client-certificate authentication
   (mTLS). HA itself works, but the saved VM card still reports
@@ -481,9 +486,9 @@ Scan All remains.
   fetches do not establish the earlier startup responses or their cause.
   Resource timing has a bounded buffer, so the empty external history alone
   is not proof that no module request occurred.
-- Investigation: **IN PROGRESS** on `fix/cards-external-mtls`. No further
-  runtime fix has been implemented, and the slow-start race must not be
-  presented as an explanation of this remaining failure.
+- Investigation: **IN PROGRESS** on `fix/cards-external-mtls`. Native resource
+  delivery is being implemented after the owner's decision; the slow-start
+  race must not be presented as an explanation of this remaining failure.
 - Isolated HA Container 2026.9.4 lab: a loopback-only HTTPS reverse proxy
   rejects requests without a valid test client certificate. All four card
   modules returned HTTP 200 and JavaScript MIME types with the certificate;
@@ -556,8 +561,17 @@ Scan All remains.
   HA 2026.9.4 still have zero definitions/picker types and no recorded Hubinet
   requests. All four diagnostic responses are HTTP 200 JavaScript, now CF
   cache hits, with the same correct 2026.9.1.19 hashes. The app update did
-  **NOT** resolve the reported missing cards. Version-2 HTML/force results
-  from the owner's actual WebView are pending.
+  **NOT** resolve the reported missing cards.
+- The owner reports that the v2 force-load button restored the cards in the
+  external app. The supplied follow-up snapshot at 06:44:33 UTC already has
+  five definitions/picker types and two batches of module script requests;
+  it lacks `forceLoad`, so it does not preserve the failed pre-force state.
+  The active document has no Hubinet launcher or literal module path, whereas
+  the separate HTTP 200 HTML response contains the normal version-19 import.
+  Service-worker control is true; no Rocket Loader marker was detected.
+  This proves that the current app can render the registered cards and shows
+  differing active/fetched bootstrap documents. It does not establish which
+  intermediary supplied the original document or an old-registry await defect.
 - Native Android testing was attempted with the official
   **2026.6.5-full** APK on an isolated Android 15 emulator. Its bundled
   WebView is **124.0.6367.219**, so it does not match the owner's WebView 153.
@@ -571,11 +585,11 @@ Scan All remains.
 
 ## Next
 
-Obtain the owner's version-2 HTML and parent force-load diagnostics; the
-Companion update did not resolve the missing cards. Reproduce
-the observed startup/import failure and verify the same saved dashboard and
-Add card picker across the external/local URL transition before publishing
-a further correction. Tag
+Implement the owner-accepted native Lovelace resource delivery, reproduce
+the missing HTML import with native dashboard resource loading, and verify
+the same saved dashboard and Add card picker across the external/local URL
+transition before publishing 2026.9.1.20. Live Android/Cloudflare confirmation
+remains required after the local lab checks. Tag
 `2026.9.1.16` (main `0409d76`) if still wanted.
 
 ## Explicitly not started
