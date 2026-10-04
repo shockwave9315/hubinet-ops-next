@@ -19,6 +19,7 @@ from homeassistant.components.button import (
 from homeassistant.const import EntityCategory
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.exceptions import HomeAssistantError
+from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 from homeassistant.util import dt as dt_util
 
@@ -429,6 +430,23 @@ class ProxmoxBaseButton(ButtonEntity):
         """Publish completion of the same task, including eager completion."""
         if task is self._snapshot_create_task:
             self.async_write_ha_state()
+
+    @override
+    async def async_will_remove_from_hass(self) -> None:
+        """Never leave a running Create fact behind in the restored state."""
+        await super().async_will_remove_from_hass()
+        registry = er.async_get(self.hass)
+        entry = registry.async_get(self.entity_id)
+        if entry is None or not (entry.capabilities or {}).get(
+            "snapshot_create_running"
+        ):
+            return
+        # A removed entity no longer writes state, so the later done callback
+        # cannot publish completion; clear the stored transient fact now.
+        self.registry_entry = registry.async_update_entity(
+            self.entity_id,
+            capabilities={**entry.capabilities, "snapshot_create_running": False},
+        )
 
     @abstractmethod
     async def _async_press_call(self) -> None:

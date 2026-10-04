@@ -1,10 +1,11 @@
 """Tests for native snapshot Create task observation and presentation."""
 
 import asyncio
+import logging
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from tests.common import MockConfigEntry  # noqa: TID251
+from tests.common import MockConfigEntry, async_capture_events  # noqa: TID251
 
 from custom_components.hubinet_ops.const import DOMAIN
 from custom_components.hubinet_ops.snapshot_restore import (
@@ -18,8 +19,14 @@ from custom_components.hubinet_ops.snapshots import (
 from homeassistant.components import persistent_notification as pn
 from homeassistant.components.button import DATA_COMPONENT, SERVICE_PRESS
 from homeassistant.components.select import ATTR_OPTION, SERVICE_SELECT_OPTION
-from homeassistant.const import ATTR_ENTITY_ID
+from homeassistant.const import (
+    ATTR_ENTITY_ID,
+    EVENT_STATE_CHANGED,
+    STATE_UNAVAILABLE,
+    EntityStateAttribute,
+)
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.translation import async_get_translations
 
 from . import setup_integration
@@ -466,3 +473,169 @@ async def test_eagerly_finished_create_has_no_stuck_running(
             hass.states.get(entity.entity_id).attributes["snapshot_create_running"]
             is False
         )
+
+
+async def _start_blocked_create(
+    hass: HomeAssistant,
+    mock_proxmox_client: MagicMock,
+    family: str,
+    vmid: int,
+    button: str,
+) -> asyncio.Task[None]:
+    """Press Create and return its task, held open by the caller's patch."""
+    getattr(mock_proxmox_client._node_mock, family)(  # noqa: SLF001
+        vmid
+    ).snapshot.post.return_value = UPID
+    await hass.services.async_call(
+        "button", SERVICE_PRESS, {ATTR_ENTITY_ID: button}, blocking=True
+    )
+    entity = hass.data[DATA_COMPONENT].get_entity(button)
+    assert entity.snapshot_create_running is True
+    return entity._snapshot_create_task  # noqa: SLF001
+
+
+def _no_warnings(caplog: pytest.LogCaptureFixture) -> bool:
+    return not [
+        record for record in caplog.records if record.levelno >= logging.WARNING
+    ]
+
+
+@pytest.mark.parametrize(
+    ("family", "vmid", "button"),
+    [
+        ("qemu", 100, "button.vm_web_create_snapshot"),
+        ("lxc", 200, "button.ct_nginx_create_snapshot"),
+    ],
+)
+async def test_unload_during_create_leaves_no_stale_running_fact(
+    hass: HomeAssistant,
+    mock_proxmox_client: MagicMock,
+    mock_config_entry: MockConfigEntry,
+    entity_registry: er.EntityRegistry,
+    caplog: pytest.LogCaptureFixture,
+    family: str,
+    vmid: int,
+    button: str,
+) -> None:
+    """A removed entity cannot publish completion, so removal clears the fact."""
+    for resource, guest_id in (("qemu", 100), ("lxc", 200), ("lxc", 201)):
+        _snapshot_get(mock_proxmox_client, resource, guest_id).return_value = []
+    await setup_integration(hass, mock_config_entry)
+    kind = SnapshotKind.QEMU if family == "qemu" else SnapshotKind.LXC
+
+    async def blocked_observation(*_args, **_kwargs) -> RestoreResult:
+        await asyncio.Event().wait()
+        raise AssertionError("unreachable")
+
+    with patch(
+        "custom_components.hubinet_ops.snapshot_restore.async_observe_task",
+        side_effect=blocked_observation,
+    ):
+        task = await _start_blocked_create(
+            hass, mock_proxmox_client, family, vmid, button
+        )
+        old_entity = hass.data[DATA_COMPONENT].get_entity(button)
+        assert hass.states.get(button).attributes["snapshot_create_running"] is True
+        assert (
+            entity_registry.async_get(button).capabilities["snapshot_create_running"]
+            is True
+        )
+        caplog.clear()
+        assert await hass.config_entries.async_unload(mock_config_entry.entry_id)
+        await hass.async_block_till_done()
+
+    # The restored placeholder state and the stored capability are not running.
+    restored = hass.states.get(button)
+    assert restored.state == STATE_UNAVAILABLE
+    assert restored.attributes[EntityStateAttribute.RESTORED] is True
+    assert restored.attributes["snapshot_create_running"] is False
+    assert (
+        entity_registry.async_get(button).capabilities["snapshot_create_running"]
+        is False
+    )
+    # The observation still ends through its unchanged cancellation flow.
+    assert task.cancelled()
+    notification = pn._async_get_or_create_notifications(hass)[  # noqa: SLF001
+        snapshot_create_notification_id(
+            mock_config_entry.entry_id, kind, "pve1", vmid, UPID
+        )
+    ]
+    assert "observation was interrupted" in notification["message"]
+    assert _no_warnings(caplog), caplog.text
+
+    # A normal setup creates a new entity that starts with the fact false.
+    assert await hass.config_entries.async_setup(mock_config_entry.entry_id)
+    await hass.async_block_till_done()
+    fresh = hass.data[DATA_COMPONENT].get_entity(button)
+    assert fresh is not old_entity
+    assert fresh._snapshot_create_task is None  # noqa: SLF001
+    assert fresh.snapshot_create_running is False
+    assert hass.states.get(button).attributes["snapshot_create_running"] is False
+    assert EntityStateAttribute.RESTORED not in hass.states.get(button).attributes
+    assert (
+        entity_registry.async_get(button).capabilities["snapshot_create_running"]
+        is False
+    )
+    assert _no_warnings(caplog), caplog.text
+
+
+async def test_reload_during_create_never_publishes_stale_running(
+    hass: HomeAssistant,
+    mock_proxmox_client: MagicMock,
+    mock_config_entry: MockConfigEntry,
+    entity_registry: er.EntityRegistry,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Across a reload every published state of the button is not running."""
+    button = "button.ct_nginx_create_snapshot"
+    for resource, guest_id in (("qemu", 100), ("lxc", 200), ("lxc", 201)):
+        _snapshot_get(mock_proxmox_client, resource, guest_id).return_value = []
+    await setup_integration(hass, mock_config_entry)
+
+    async def blocked_observation(*_args, **_kwargs) -> RestoreResult:
+        await asyncio.Event().wait()
+        raise AssertionError("unreachable")
+
+    with patch(
+        "custom_components.hubinet_ops.snapshot_restore.async_observe_task",
+        side_effect=blocked_observation,
+    ):
+        task = await _start_blocked_create(
+            hass, mock_proxmox_client, "lxc", 200, button
+        )
+        caplog.clear()
+        events = async_capture_events(hass, EVENT_STATE_CHANGED)
+        assert await hass.config_entries.async_reload(mock_config_entry.entry_id)
+        await hass.async_block_till_done()
+
+    published = [
+        event.data["new_state"]
+        for event in events
+        if event.data["entity_id"] == button and event.data["new_state"] is not None
+    ]
+    assert [state.state for state in published][0] == STATE_UNAVAILABLE
+    assert published[0].attributes[EntityStateAttribute.RESTORED] is True
+    assert [state.attributes["snapshot_create_running"] for state in published] == [
+        False
+    ] * len(published)
+    assert len(published) >= 2
+    assert task.cancelled()
+    fresh = hass.data[DATA_COMPONENT].get_entity(button)
+    assert fresh.snapshot_create_running is False
+    assert hass.states.get(button).attributes["snapshot_create_running"] is False
+    assert (
+        entity_registry.async_get(button).capabilities["snapshot_create_running"]
+        is False
+    )
+    assert _no_warnings(caplog), caplog.text
+    # The new entity accepts a new Create.
+    with patch(
+        "custom_components.hubinet_ops.snapshot_restore.async_observe_task",
+        AsyncMock(return_value=RestoreResult(RestoreOutcome.SUCCESS, UPID)),
+    ):
+        await hass.services.async_call(
+            "button", SERVICE_PRESS, {ATTR_ENTITY_ID: button}, blocking=True
+        )
+        await hass.async_block_till_done()
+    assert mock_proxmox_client._lxc_mocks[200].snapshot.post.call_count == 2  # noqa: SLF001
+    assert hass.states.get(button).attributes["snapshot_create_running"] is False
