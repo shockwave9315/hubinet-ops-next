@@ -8,6 +8,269 @@ provenance in [UPSTREAM.md](UPSTREAM.md).
 
 ## Accepted architecture today
 
+### Checkpoint A: explicit one-shot Package Update without a snapshot
+
+On 2026-10-04, before runtime implementation, the owner accepted execution
+plan A/B/C/D and authorized **Checkpoint A only**, based on main after PR #25
+and release line `2026.9.1.20`. This decision adds `skip_snapshot: bool = False`
+to the existing `hubinet_ops.easy_update` -> `async_start_easy_update()` ->
+`PackageManager.async_start_update()` -> existing Update execution path.
+It is an explicit choice for one Update attempt, never a saved mode or a
+fallback after snapshot failure.
+
+The default/native path remains snapshot-required: missing `VM.Snapshot`,
+snapshot failure, or unconfirmed creation prevents package mutation. Native
+Package Update explicitly passes `skip_snapshot=False`; its availability
+continues to require snapshot permission. The button may exist without that
+permission, so button existence no longer proves it. Its bounded
+`snapshot_permission` attribute supplies that fact to normal Easy Update
+eligibility.
+
+Only `skip_snapshot=True` omits the snapshot permission gate, native listing,
+retained-snapshot warning, name generation, creation/confirmation, and cleanup.
+It rejoins the same mutation path. Current successful non-empty Scan, expected
+scan attempt, token/review truth, fresh exact-plan equality, running LXC,
+current coordinator truth, CONTROL authorization, Scan/Restore/Update/
+Autoremove/Health exclusion, mutation/dpkg/liveness, Health hand-off,
+invalidation, and fail-closed execution remain mandatory.
+
+`PackageUpdateRecord.snapshot_skipped` reports the choice on that attempt.
+Sensors and notifications must not imply a created/deleted snapshot when it
+was skipped, or classify a pre-mutation failure/cancellation as snapshot failure
+when no snapshot work failed. Autoremove remains snapshot-required and never
+inherits this flag, including the existing opt-in Easy Update continuation.
+There is no frontend "without snapshot" button in A. Checkpoints B/C/D,
+version changes, and PR creation were outside the original A checkpoint;
+the subsequent stage/B authorization is recorded below. Changes to PR #25's
+Lovelace Resources mechanism remain outside the stage. The pre-runtime acceptance
+checkpoint is commit `1988eaa`; A is implemented in the existing modules.
+Permission is a native button capability attribute, available even while
+approval makes that button unavailable. Failure/cancellation before any
+snapshot work is `PLAN_FAILED`; after mutation starts, an interrupted or
+unexpected result remains `MUTATION_UNCERTAIN`. Normal snapshot-work failures
+remain `SNAPSHOT_FAILED`, with the existing retention/uncertainty facts.
+
+### Checkpoint B: native Snapshot Create running
+
+On 2026-10-04 the owner explicitly authorized Checkpoint B on the existing
+A/B/C/D feature branch and Draft PR. The whole stage now targets development
+release `2026.9.1.21`; this supersedes A's earlier task-local prohibition on a
+version bump and PR creation. A stays implemented; C/D are not started.
+PR #25's Lovelace Resources mechanism remains unchanged.
+
+`start_snapshot_create_observation()` returns the exact config-entry-tracked
+background task it already creates. The existing native Create button owns
+that handle and derives `snapshot_create_running` solely from a non-null task
+that is not done. It publishes the transient fact on that same button after
+launch and from a done callback on that same task. No lifecycle enum, state
+machine, second observer, poller, timer, persistence, new entity/coordinator,
+or custom registry is introduced.
+
+Create checks its own handle before another submission. Restore and Delete
+resolve the existing Create entity by its stable entry/VMID unique ID through
+HA's entity registry and button EntityComponent, then read that entity's
+running property. Both check before acceptance and again after fresh native
+snapshot validation, before mutation or LXC package-truth invalidation. The
+check concerns only the same guest; native power behavior stays unchanged.
+
+The task remains the existing `async_observe_task()` path with native POST,
+returned UPID ownership, localized success/failure/uncertain notifications,
+and confirmed-success-only refresh of the exact snapshot selector. Success,
+failure, uncertainty, and cancellation all end running when that observation
+task ends; uncertainty does not claim PVE success. Immediate completion, POST
+failure, and observation-launch failure cannot leave a running fact stuck.
+
+Full guest cards read the backend button fact, show a spinner and localized
+"Creating..." / "Tworzenie...", and disable Create/Restore/Delete during
+running. Reload/remount reconstructs it from entity state. Local service-call
+`_busy` keeps its existing short request behavior and never owns PVE task
+duration. C's skip button/responsive layout and D's mini width/RAM changes
+are outside B. Existing transient ownership still ends on HA reload/restart;
+no persistent task recovery or new PVE authority is added.
+
+The pre-runtime acceptance checkpoint is `35a82ac`. B is implemented in the
+existing button, orchestration, and guest-card modules. Running is a native
+Create button capability attribute, retained even when coordinator failure
+makes that entity unavailable. Restore/Delete read the live entity property,
+not a potentially stale state projection; stable unique-ID resolution also
+survives an entity rename. Their fresh-validation rejection publishes the
+existing `NOT_STARTED` result and releases the ordinary LXC reservation without
+invalidating package truth or submitting a mutation.
+
+### Checkpoint C: full LXC skip action and responsive guest cards
+
+On 2026-10-04, before runtime implementation, the owner explicitly authorized
+Checkpoints C and D as one joint stage on the existing A/B/C/D branch and
+Draft PR, still release line `2026.9.1.21`. A and B are owner-reviewed and stay
+as implemented; this supersedes their statements that C/D are outside the
+stage. PR #25's Lovelace Resources mechanism remains unchanged.
+
+**One-shot Update without a snapshot, full LXC card only.** The full LXC card's
+package row offers a second action beside the normal one when the shared Easy
+Update view presents a current successful Scan with pending packages. It calls
+the existing `hubinet_ops.easy_update` action with `skip_snapshot: true`,
+`autoremove: false`, and the displayed `expected_scan_attempt`. The normal
+Update action is unchanged: snapshot-required and gated by the native button's
+`snapshot_permission` attribute. The skip action does not need that permission.
+It is absent for VMs, both mini cards, and the standalone Easy Update card,
+disabled while a card request is in flight or `snapshot_create_running` is
+true, and never changes card configuration, the YOLO choice, or any setting.
+There is no saved "always without snapshot" mode and no fallback from a failed
+snapshot to skip. The backend stays the final authority and re-validates every
+request exactly as Checkpoint A defines.
+
+**Confirmation.** The skip action uses the existing arm/confirm mechanism: the
+first tap arms, the second tap within the existing timeout submits. The armed
+target is bound to the device, the action type, the displayed scan attempt,
+and the displayed pending count. A changed device, scan attempt, pending
+state, lost readiness, expiry, card disconnect/remount, or the submission
+itself cancels it, so an arm for an older Scan can never run for a newer one.
+No new confirmation framework, state machine, or store is added.
+
+**Responsive layout inside the card.** All four guest cards keep every
+control, chip, label, tile, select, and bar inside their own `ha-card` at
+narrow widths through CSS only: the existing `container-type: inline-size`,
+container queries, wrapping, `min-width: 0`, and `minmax(0, 1fr)` tracks, with
+later actions moving to the next row. No `ResizeObserver`, resize listener, JS
+width calculation, library, or `overflow: hidden` on the whole card is used.
+Checkpoint B's semantics are preserved: the backend running fact drives the
+spinner and blocks only Create/Restore/Delete; power controls stay independent.
+
+The pre-runtime acceptance checkpoint is commit `e4d741d`; C is implemented in
+the existing card and logic modules (`58cddce`). The shared Easy Update view
+adds `skipSnapshot` only for a caller that passes `offerSkipSnapshot`, which
+only the full LXC card does. It needs the package Update button, a parsable
+displayed scan attempt, and the same "updates available" state as the normal
+action. The armed target is
+`JSON.stringify([device_id, "skip_snapshot", expected_scan_attempt, pending])`.
+Every button of an action group keeps one fixed flex slot, so a longer armed
+label wraps inside its own button and never moves a neighbour: arming skip
+cannot put it under a tap aimed at the normal Update. A skip tap is also
+refused while a card request is in flight, even from a not yet rebuilt button.
+
+Real-browser validation found that the Home Assistant 2026.9.4 frontend no
+longer ships `<ha-circular-progress>`, so B's Create spinner drew nothing there
+while its label and blocking worked. B's markup and semantics are unchanged; a
+CSS rule in the card draws the spinner on that element while it is undefined.
+
+### Checkpoint D: mini width and optional VM guest memory
+
+Accepted by the owner on 2026-10-04 together with Checkpoint C, before runtime
+implementation.
+
+**Mini grid default.** LXC mini, VM mini, and a saved legacy `compact` card
+default to `{ columns: 9, min_columns: 6 }`. This is only the card's own
+default: Home Assistant keeps applying a user's explicit `grid_options`, and no
+dashboard is migrated or rewritten.
+
+**Opt-in full QEMU listing.** The existing per-entry options flow gains one
+boolean, `vm_guest_memory` (default off), alongside the unchanged automatic
+Scan options and reload-on-save behavior; there is no per-VM setting. Off keeps
+the lightweight `qemu.get()` without a `full` parameter. On requests
+`qemu.get(full=1)`: still exactly one listing per online node per refresh under
+the existing one-retry rule, never a request per VM and never
+`/status/current`. No coordinator, poller, timer, interval, or cache is added.
+The owner measured both listings at about 0.492 s on the owner node; that
+evidence accepts the opt-in and does not make it the default.
+
+**Memory semantics.** Off: host memory is the existing `mem` and guest memory
+is unknown. On: host memory is `memhost`; guest memory is published only from
+consistent balloon data of a running VM (positive `max_mem`, numeric finite
+`total_mem` and `free_mem`, `0 <= free <= total`, and `mem == total - free`).
+Incomplete, malformed, or contradictory balloon data makes guest memory
+unknown, never a copied number. Failed guest validation does not make `mem` a
+host value: `mem` is used as host memory only when the payload carries no
+guest-override or full-memory evidence at all.
+
+**Entities.** Two stable VM sensors, `vm_guest_memory` and
+`vm_guest_memory_percentage`, are added through the existing `VM_SENSORS` and
+exist regardless of the option (unknown when off or invalid). The existing
+host memory sensors keep their unique IDs, history, and host meaning; guest
+values are never written to them. Percentages divide by a positive `maxmem`;
+telemetry is not clamped, so host memory may legitimately exceed 100%.
+
+**Cards.** The existing RAM tile is extended, not duplicated: with guest data
+the full VM card shows Guest and Host, each with percentage, amount, and a
+thin bar; VM mini shows both percentages with two thin bars. Without guest
+data only Host is shown as before. The tile's tap/history and its sparkline
+stay the host sensor's; there is no guest sparkline, guest history, new tile,
+or new dashboard section. A current amount derived from the host percentage
+and maximum is presentation only and is never stored as telemetry.
+
+The pre-runtime acceptance checkpoint is commit `e4d741d`; D is implemented in
+`364719f` (backend) and `58cddce` (cards). `CONF_VM_GUEST_MEMORY` lives in
+`const.py`; the coordinator reads the entry option once at construction and
+`OptionsFlowWithReload` rebuilds it on save. `ProxmoxVMSensorEntityDescription`
+gains an optional `full_value_fn` that replaces `value_fn` only while the
+option is on, so with the option off every existing reader, including the raw
+`mem` host values, runs unchanged. The pure readers live in the fork-owned
+`vm_memory.py`.
+
+A usable number is a JSON number: finite, non-negative, and not a boolean;
+numeric text counts as malformed. Guest-override evidence is a `freemem` key, a
+`ballooninfo` carrying `total_mem` or `free_mem`, or a `ballooninfo` that is
+not an object. A present but unusable `memhost` is unknown rather than replaced
+by `mem`, and a `freemem` that contradicts `free_mem` fails guest validation.
+Accepted consequence: on a PVE that reports no `memhost`, turning the option on
+leaves host memory unknown for VMs whose `mem` may be guest-side; turning it
+off restores the previous value.
+
+`vm_guest_memory_percentage` is enabled by default and `vm_guest_memory`
+(bytes) is disabled by default, like the existing host bytes sensor. In the VM
+cards the used amount comes from the bytes sensor when it is enabled and is
+otherwise computed for display from the unrounded percentage state and the
+maximum sensor. LXC tiles are unchanged.
+
+### A/B/C/D final-review fix set
+
+On 2026-10-04, after the owner's live validation of prerelease
+`2026.9.1.21rc1` (review HEAD `0ec4ea9`) and a final deep review that found no
+P1/P2 issue, the owner accepted this small fix set before the final review. It
+adds no feature, changes no frontend file, and keeps release line
+`2026.9.1.21`.
+
+**F1: no stale running fact after unload.** A config-entry unload removes the
+Create entity before the entry's observation task is cancelled. A removed
+entity no longer writes state, so the task's done callback cannot publish
+completion, and Home Assistant restores the entity from its stored
+capabilities with `snapshot_create_running` still true. The existing Create
+entity therefore clears that stored transient fact in its own removal hook,
+before Home Assistant writes the restored state. Task ownership, the observer,
+and the success, failure, uncertainty, and cancellation flow are unchanged; no
+store, registry, or state machine is added. A newly set up entity starts with
+the fact false.
+
+**F2: backend guard for skip during Create.** The full LXC card already
+disables the Update without a snapshot while `snapshot_create_running` is
+true, but a stale frontend, another client, or a direct action call could still
+start the package mutation. For `skip_snapshot=True` only, the Easy Update
+action now asks Checkpoint B's existing live-entity truth for the same guest
+before `confirm_review()` and rejects while its Create is running: nothing is
+confirmed, the scan token is not consumed, no Update starts, and no package or
+snapshot operation happens. Another guest's Create does not block, and the same
+valid request is accepted once Create has finished. No lock, manager, or
+registry is added, and the normal snapshot-required Update is not redesigned.
+
+**F3: accepted residual.** Between the start of the native Create POST and
+the moment its UPID and observation task handle exist, no running fact is
+published yet, so Restore, Delete, or the F2 guard cannot see that Create. The
+deep review confirmed that the second Restore/Delete check after fresh
+validation works, that nothing can interleave between that check and the
+native mutation, that the window exists only before the handle is created,
+that the native PVE lock decides such a conflict, and that no destructive
+effect was shown. The owner accepted this limit; no submission state, global
+lock, or further lifecycle is added for it.
+
+The pre-runtime documentation checkpoint is commit `152dc4b`; F1 is
+implemented in `31cf829` and F2 in `02aca84`. F1 uses the Create entity's
+`async_will_remove_from_hass`. Once Home Assistant marks an entity removed it
+ignores that entity's state writes, and it builds the restored placeholder
+state from the capabilities stored in the entity registry, so the hook sets
+the stored `snapshot_create_running` capability to false through that
+registry. F2 calls Checkpoint B's `snapshot_create_is_running()` and raises
+the existing translated `snapshot_create_running` error. No frontend file
+changed: the card modules are byte-identical to `2026.9.1.21rc1`.
+
 ### Native Lovelace card resources (2026.9.1.20)
 
 On 2026-10-04, before implementation, the owner explicitly decided to replace
@@ -205,10 +468,11 @@ artifacts is not required.
   unchanged. The Easy Update card picker now lists Container devices that have
   the package Update button, whose native device class is `update`
   (`ButtonDeviceClass.UPDATE`, used by no other Hubinet-Ops entity); Easy
-  Update needs the same snapshot permission as that button. The same button is
-  the single Easy Update eligibility criterion in the frontend: the picker,
-  the default device of a new card, and whether a card offers the Easy Update
-  action (without it the card shows the count and opens details). The public
+  Update needs snapshot permission by default. Checkpoint A supersedes the
+  former button-existence permission assumption: the picker and default device
+  use the button for package capability, while the normal Easy Update action
+  additionally requires its explicit `snapshot_permission=True` attribute.
+  Without it the card shows the count and opens details. The public
   actions are `easy_update` and `scan_all_packages`.
 - **LXC card confirmation is bound to its target.** An armed tap records the
   action, its exact target (this LXC's button; for Restore and Delete also the
@@ -231,7 +495,8 @@ still stands.
 
 **Action.** One fork-owned domain action, `hubinet_ops.easy_update`, registered
 once in `async_setup` beside Scan All, takes `device_id` (required), `autoremove`
-(default false), and an optional `expected_scan_attempt`. Its target identity is
+(default false), an optional `expected_scan_attempt`, and, since Checkpoint A,
+`skip_snapshot` (default false, scoped to one Update). Its target identity is
 the Home Assistant `device_id` of one Hubinet-Ops Container device. Resolution is
 exact and read-only: device registry entry -> a loaded `hubinet_ops` config entry
 among its config entries -> that entry's existing coordinator `package_node` data
@@ -248,7 +513,8 @@ action requires the current successful non-empty `PackageScanRecord`; when
 `last_attempt`, so a click authorizes only the scan observation it displayed.
 It then calls the existing `PackageManager.confirm_review()` with the record's
 own token and the existing `async_start_update()`. Cheap read-only prechecks of
-running state, `VM.Snapshot` permission, Restore reservation, and same-target
+running state, `VM.Snapshot` permission unless explicitly skipped, Restore
+reservation, and same-target
 running work avoid leaving review state behind on predictable rejections; the
 manager remains authoritative for every check. Accepted work runs as the
 existing background Update, so the action returns immediately after acceptance
@@ -1544,6 +1810,10 @@ row actually changed; that count is reporting, not another safety gate.
 
 ### Native PVE snapshot lifecycle
 
+This lifecycle applies to NORMAL/default and native Update. The explicit
+Checkpoint A one-shot skip omits it entirely, including retained-name warnings
+and cleanup; it never falls back here after a failed snapshot.
+
 `packages/snapshots.py` is small stateless proxmoxer glue used only by this
 operation. It uses the native PVE API to list LXC snapshots, create one
 snapshot, read task status, delete the exact current snapshot, and list again.
@@ -1574,8 +1844,9 @@ background operation; it never selects newest, first, last, or a prefix match.
 
 ### Mutation, liveness, and retention
 
-Only after the exact temporary snapshot is confirmed does `update_packages`
-run the fixed mutation and post-mutation dpkg sanity. Generic liveness then
+After a confirmed exact temporary snapshot, or the explicit Checkpoint A
+one-shot skip, `update_packages` runs the same fixed mutation and post-mutation
+dpkg sanity. Generic liveness then
 requires both native PVE LXC status `running` and the existing typed guest
 helper boundary returning PONG for fixed `/bin/true`, with one bounded retry.
 It checks no DNS, HTTP, port, network service, process, container runtime,

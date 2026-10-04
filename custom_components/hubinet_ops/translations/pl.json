@@ -420,6 +420,12 @@
       "vm_disk": {
         "name": "Użycie dysku"
       },
+      "vm_guest_memory": {
+        "name": "Użycie pamięci gościa"
+      },
+      "vm_guest_memory_percentage": {
+        "name": "Procent użycia pamięci gościa"
+      },
       "vm_max_cpu": {
         "name": "Maks. CPU"
       },
@@ -727,6 +733,15 @@
     },
     "api_read_failed": {
       "message": "Zapytanie do API Proxmox VE nie powiodło się: {error}"
+    },
+    "package_update_success_without_snapshot_notification": {
+      "message": "Aktualizacja pakietów dla {node}/{vmid} zakończyła się pomyślnie. Faktycznie zmieniono {changed} zainstalowanych pakietów i potwierdzono działanie LXC. Snapshot bezpieczeństwa pominięto na jawne żądanie tylko dla tej operacji; nie utworzono ani nie usunięto snapshota."
+    },
+    "package_update_snapshot_skipped_detail": {
+      "message": "Snapshot bezpieczeństwa pominięto na jawne żądanie tylko dla tej operacji; nie utworzono ani nie usunięto snapshota."
+    },
+    "snapshot_create_running": {
+      "message": "Tworzenie migawki tego gościa jest nadal obserwowane. Poczekaj na zakończenie obserwacji przed utworzeniem, przywróceniem lub usunięciem migawki."
     }
   },
   "issues": {
@@ -764,6 +779,10 @@
         "expected_scan_attempt": {
           "name": "Oczekiwany skan",
           "description": "Opcjonalny last_attempt skanu widzianego przez użytkownika; aktualizacja zostanie odrzucona, jeśli bieżący jest inny skan."
+        },
+        "skip_snapshot": {
+          "name": "Pomiń snapshot dla tej aktualizacji",
+          "description": "Jawnie pomija snapshot bezpieczeństwa tylko dla tej jednej operacji Update. Domyślnie wyłączone; pozostałe kontrole obowiązują. Autoremove nadal wymaga snapshota."
         }
       }
     }
@@ -771,14 +790,17 @@
   "options": {
     "step": {
       "init": {
-        "title": "Automatyczny skan pakietów",
-        "description": "Raz dziennie sprawdza dostępne aktualizacje pakietów we wszystkich obsługiwanych LXC na tym hoście Proxmox. Skan niczego nie aktualizuje ani nie usuwa.",
+        "title": "Opcje Hubinet-Ops",
+        "description": "Opcje tego hosta Proxmox. Zapisanie przeładowuje integrację.",
         "data": {
           "auto_scan": "Skanuj automatycznie codziennie",
-          "auto_scan_time": "Godzina"
+          "auto_scan_time": "Godzina",
+          "vm_guest_memory": "Rozszerzone dane pamięci VM"
         },
         "data_description": {
-          "auto_scan_time": "Czas lokalny Home Assistanta. Zatrzymane lub zajęte LXC zostaną pominięte do następnego dnia."
+          "auto_scan": "Raz dziennie sprawdza dostępne aktualizacje pakietów we wszystkich obsługiwanych LXC na tym hoście Proxmox. Skan niczego nie aktualizuje ani nie usuwa.",
+          "auto_scan_time": "Czas lokalny Home Assistanta. Zatrzymane lub zajęte LXC zostaną pominięte do następnego dnia.",
+          "vm_guest_memory": "Wyłączone: pamięć VM pokazuje dotychczasowe zużycie po stronie hosta. Włączone: integracja używa pełnego listingu QEMU i może pokazać osobno pamięć Gość/Host. Na większych instalacjach może to zwiększyć koszt odczytu."
         }
       }
     }

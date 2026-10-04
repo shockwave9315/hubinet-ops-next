@@ -25,11 +25,13 @@ SERVICE_SCAN_ALL_PACKAGES = "scan_all_packages"
 SERVICE_EASY_UPDATE = "easy_update"
 ATTR_DEVICE_ID = "device_id"
 ATTR_AUTOREMOVE = "autoremove"
+ATTR_SKIP_SNAPSHOT = "skip_snapshot"
 ATTR_EXPECTED_SCAN_ATTEMPT = "expected_scan_attempt"
 EASY_UPDATE_SCHEMA = vol.Schema(
     {
         vol.Required(ATTR_DEVICE_ID): cv.string,
         vol.Optional(ATTR_AUTOREMOVE, default=False): cv.boolean,
+        vol.Optional(ATTR_SKIP_SNAPSHOT, default=False): cv.boolean,
         vol.Optional(ATTR_EXPECTED_SCAN_ATTEMPT): cv.string,
     }
 )
@@ -93,6 +95,7 @@ def async_register_services(hass: HomeAssistant) -> None:
             hass,
             call.data[ATTR_DEVICE_ID],
             expected_scan_attempt=call.data.get(ATTR_EXPECTED_SCAN_ATTEMPT),
+            skip_snapshot=call.data[ATTR_SKIP_SNAPSHOT],
         )
         if call.data[ATTR_AUTOREMOVE]:
             async_start_post_update_autoremove(hass, target, update)

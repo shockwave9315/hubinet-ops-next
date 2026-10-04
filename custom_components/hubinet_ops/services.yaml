@@ -16,6 +16,11 @@ easy_update:
       default: false
       selector:
         boolean:
+    skip_snapshot:
+      required: false
+      default: false
+      selector:
+        boolean:
     expected_scan_attempt:
       required: false
       selector:

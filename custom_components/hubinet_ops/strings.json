@@ -420,6 +420,12 @@
       "vm_disk": {
         "name": "Disk usage"
       },
+      "vm_guest_memory": {
+        "name": "Guest memory usage"
+      },
+      "vm_guest_memory_percentage": {
+        "name": "Guest memory usage percentage"
+      },
       "vm_max_cpu": {
         "name": "Max CPU"
       },
@@ -727,6 +733,15 @@
     },
     "api_read_failed": {
       "message": "A Proxmox VE API request failed: {error}"
+    },
+    "package_update_success_without_snapshot_notification": {
+      "message": "Package update for {node}/{vmid} succeeded. {changed} installed package row(s) actually changed and LXC liveness was confirmed. The safety snapshot was explicitly skipped for this operation only; no snapshot was created or deleted."
+    },
+    "package_update_snapshot_skipped_detail": {
+      "message": "The safety snapshot was explicitly skipped for this operation only; no snapshot was created or deleted."
+    },
+    "snapshot_create_running": {
+      "message": "Snapshot creation is still being observed for this guest. Wait for that observation to finish before creating, restoring, or deleting a snapshot."
     }
   },
   "issues": {
@@ -764,6 +779,10 @@
         "expected_scan_attempt": {
           "name": "Expected scan",
           "description": "Optional last_attempt of the scan the user saw; the update is refused if a different scan is current."
+        },
+        "skip_snapshot": {
+          "name": "Skip snapshot for this update",
+          "description": "Explicitly omit the safety snapshot for this one Update operation. Off by default; all other guards apply. Autoremove still requires a snapshot."
         }
       }
     }
@@ -771,14 +790,17 @@
   "options": {
     "step": {
       "init": {
-        "title": "Automatic package scan",
-        "description": "Scan every supported LXC on this Proxmox host for pending package updates once a day. Scanning never updates or removes packages.",
+        "title": "Hubinet-Ops options",
+        "description": "Options for this Proxmox host. Saving reloads the integration.",
         "data": {
           "auto_scan": "Scan automatically every day",
-          "auto_scan_time": "Time"
+          "auto_scan_time": "Time",
+          "vm_guest_memory": "Extended VM memory data"
         },
         "data_description": {
-          "auto_scan_time": "Local Home Assistant time. Stopped or busy LXCs are skipped until the next day."
+          "auto_scan": "Scan every supported LXC on this Proxmox host for pending package updates once a day. Scanning never updates or removes packages.",
+          "auto_scan_time": "Local Home Assistant time. Stopped or busy LXCs are skipped until the next day.",
+          "vm_guest_memory": "Off: VM memory shows the existing host-side usage. On: the integration uses the full QEMU listing and can show guest and host memory separately. On larger installations this may make each read more expensive."
         }
       }
     }

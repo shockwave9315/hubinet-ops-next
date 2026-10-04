@@ -14,6 +14,8 @@ CONF_CONTAINERS = "containers"
 CONF_SSH_PRIVATE_KEY = "ssh_private_key"
 CONF_SSH_HOST_KEY = "ssh_host_key"
 CONF_PACKAGE_NODE = "package_node"
+# Entry option: request the full QEMU listing to tell guest and host memory apart.
+CONF_VM_GUEST_MEMORY = "vm_guest_memory"
 
 CONF_USER = "user"
 
@@ -44,7 +46,7 @@ PACKAGE_SCAN_KNOWN_HOSTS = ".ssh/known_hosts"
 
 GUIDED_USERNAME = "hubinetnext@pve"
 GUIDED_TOKEN_ID = "ha"
-INTEGRATION_VERSION = "2026.9.1.20"
+INTEGRATION_VERSION = "2026.9.1.21"
 # Operator-facing full-functionality expectation only; protocol remains the
 # wire compatibility authority and supported old-helper operations stay usable.
 EXPECTED_HELPER_VERSION = 5

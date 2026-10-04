@@ -1,6 +1,7 @@
 """Button platform for Proxmox VE."""
 
 from abc import abstractmethod
+import asyncio
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any, override
@@ -16,8 +17,9 @@ from homeassistant.components.button import (
     ButtonEntityDescription,
 )
 from homeassistant.const import EntityCategory
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, callback
 from homeassistant.exceptions import HomeAssistantError
+from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 from homeassistant.util import dt as dt_util
 
@@ -334,6 +336,7 @@ async def async_setup_entry(
                         PackageReviewButtonEntity(coordinator, container, node_data),
                         PackageApproveButtonEntity(coordinator, container, node_data),
                         PackageHealthButtonEntity(coordinator, container, node_data),
+                        PackageUpdateButtonEntity(coordinator, container, node_data),
                     )
                 )
                 if is_granted(
@@ -342,9 +345,6 @@ async def async_setup_entry(
                     p_id=container["vmid"],
                     permission=ProxmoxPermission.SNAPSHOT,
                 ):
-                    entities.append(
-                        PackageUpdateButtonEntity(coordinator, container, node_data)
-                    )
                     entities.append(
                         PackageAutoremoveButtonEntity(
                             coordinator, container, node_data
@@ -389,6 +389,64 @@ class ProxmoxBaseButton(ButtonEntity):
 
     entity_description: ButtonEntityDescription
     coordinator: ProxmoxCoordinator
+    _snapshot_create_task: asyncio.Task[None] | None = None
+
+    @property
+    def snapshot_create_running(self) -> bool:
+        """Read completion of this button's exact native Create observation."""
+        return (
+            self._snapshot_create_task is not None
+            and not self._snapshot_create_task.done()
+        )
+
+    @property
+    @override
+    def capability_attributes(self) -> dict[str, Any] | None:
+        """Keep Create task truth visible even if the guest is unavailable."""
+        attributes = super().capability_attributes
+        if self.entity_description.key == "snapshot_create":
+            return {
+                **(attributes or {}),
+                "snapshot_create_running": self.snapshot_create_running,
+            }
+        return attributes
+
+    def _start_create_observation(self, kind: SnapshotKind, raw_upid: object) -> None:
+        """Keep the handle returned by the existing observation launcher."""
+        self._snapshot_create_task = start_snapshot_create_observation(
+            self.hass,
+            self.coordinator,
+            kind,
+            self._node_name,
+            self.device_id,
+            raw_upid,
+        )
+        if self._snapshot_create_task is not None:
+            self._snapshot_create_task.add_done_callback(self._create_observation_done)
+        self.async_write_ha_state()
+
+    @callback
+    def _create_observation_done(self, task: asyncio.Task[None]) -> None:
+        """Publish completion of the same task, including eager completion."""
+        if task is self._snapshot_create_task:
+            self.async_write_ha_state()
+
+    @override
+    async def async_will_remove_from_hass(self) -> None:
+        """Never leave a running Create fact behind in the restored state."""
+        await super().async_will_remove_from_hass()
+        registry = er.async_get(self.hass)
+        entry = registry.async_get(self.entity_id)
+        if entry is None or not (entry.capabilities or {}).get(
+            "snapshot_create_running"
+        ):
+            return
+        # A removed entity no longer writes state, so the later done callback
+        # cannot publish completion; clear the stored transient fact now.
+        self.registry_entry = registry.async_update_entity(
+            self.entity_id,
+            capabilities={**entry.capabilities, "snapshot_create_running": False},
+        )
 
     @abstractmethod
     async def _async_press_call(self) -> None:
@@ -397,6 +455,14 @@ class ProxmoxBaseButton(ButtonEntity):
     @override
     async def async_press(self) -> None:
         """Trigger the Proxmox button press service."""
+        if (
+            self.entity_description.key == "snapshot_create"
+            and self.snapshot_create_running
+        ):
+            raise HomeAssistantError(
+                translation_domain=DOMAIN,
+                translation_key="snapshot_create_running",
+            )
         try:
             await self._async_press_call()
         except AuthenticationError as err:
@@ -451,14 +517,7 @@ class ProxmoxVMButtonEntity(ProxmoxVMEntity, ProxmoxBaseButton):
             self.device_id,
         )
         if self.entity_description.key == "snapshot_create":
-            start_snapshot_create_observation(
-                self.hass,
-                self.coordinator,
-                SnapshotKind.QEMU,
-                self._node_name,
-                self.device_id,
-                result,
-            )
+            self._start_create_observation(SnapshotKind.QEMU, result)
 
 
 class ProxmoxContainerButtonEntity(ProxmoxContainerEntity, ProxmoxBaseButton):
@@ -476,14 +535,7 @@ class ProxmoxContainerButtonEntity(ProxmoxContainerEntity, ProxmoxBaseButton):
             self.device_id,
         )
         if self.entity_description.key == "snapshot_create":
-            start_snapshot_create_observation(
-                self.hass,
-                self.coordinator,
-                SnapshotKind.LXC,
-                self._node_name,
-                self.device_id,
-                result,
-            )
+            self._start_create_observation(SnapshotKind.LXC, result)
 
 
 class PackageScanButtonEntity(ProxmoxContainerEntity, ProxmoxBaseButton):
@@ -675,7 +727,8 @@ class PackageUpdateButtonEntity(ProxmoxContainerEntity, ButtonEntity):
                 self._node_name,
                 self.device_id,
                 target_is_running=(
-                    container is not None
+                    self.coordinator.last_update_success
+                    and container is not None
                     and container.get("status") == VM_CONTAINER_RUNNING
                 ),
                 snapshot_permission=is_granted(
@@ -684,6 +737,7 @@ class PackageUpdateButtonEntity(ProxmoxContainerEntity, ButtonEntity):
                     p_id=self.device_id,
                     permission=ProxmoxPermission.SNAPSHOT,
                 ),
+                skip_snapshot=False,
             )
         except PackageUpdateError as err:
             raise HomeAssistantError(
@@ -691,6 +745,19 @@ class PackageUpdateButtonEntity(ProxmoxContainerEntity, ButtonEntity):
                 translation_key="package_update_failed",
                 translation_placeholders={"reason": str(err)},
             ) from err
+
+    @property
+    @override
+    def capability_attributes(self) -> dict[str, Any]:
+        """Expose permission independently of button existence/approval state."""
+        return {
+            "snapshot_permission": is_granted(
+                self.coordinator.permissions,
+                p_type="vms",
+                p_id=self.device_id,
+                permission=ProxmoxPermission.SNAPSHOT,
+            )
+        }
 
     @property
     @override

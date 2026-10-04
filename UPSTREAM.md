@@ -41,6 +41,31 @@ UPID to fork-owned background task observation, terminal notification, and a
 confirmed-success signal for the exact guest's snapshot selector. This adds no
 snapshot inventory or main-coordinator refresh.
 
+Planned release 2026.9.1.21 Checkpoint B minimally extends that hook: the
+launcher returns the same existing observation task, and the native Create
+entity keeps its handle and publishes task-derived running truth. Restore and
+Delete resolve that existing entity through HA's entity registry and button
+component, checking the same guest before acceptance and after fresh native
+validation. Native POST shape, UPID observation, terminal notifications,
+success-only selector refresh, power controls, and coordinator ownership remain
+unchanged; no second observer or custom task registry is added. The
+final-review fix set adds one removal hook to the same upstream-derived button
+base: it clears the stored running capability before Home Assistant writes the
+restored state of a removed Create entity.
+
+Planned release 2026.9.1.21 Checkpoint D (owner decision on 2026-10-04) adds
+one opt-in to the upstream-derived coordinator and sensor platform. With the
+`vm_guest_memory` entry option on, the per-node QEMU listing is requested as
+`qemu.get(full=1)` instead of upstream's `qemu.get()`; it remains one listing
+per online node under the unchanged one-retry rule, and the LXC, storage, and
+task reads are untouched. The VM sensor description gains an optional reader
+used only while the option is on: the existing VM memory sensors then report
+`memhost`, and two added sensors report guest memory from validated balloon
+data through the fork-owned `vm_memory.py`. With the option off (the default)
+the request, every existing sensor reader, unique ID, and entity is upstream's.
+The option itself lives in the fork-owned options flow in `auto_scan.py`.
+Checkpoint C and the card part of D change only fork-owned frontend modules.
+
 Release 2026.9.1.11 extends the existing fork-owned snapshot adapter and
 orchestration with explicit QEMU/LXC Delete through the ordinary native PVE
 DELETE endpoint, without force. Delete shares the existing selector and

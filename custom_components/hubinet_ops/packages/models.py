@@ -200,6 +200,7 @@ class PackageUpdateRecord:
     status: PackageUpdateStatus = PackageUpdateStatus.NEVER
     last_attempt: datetime | None = None
     outcome: PackageUpdateOutcome | None = None
+    snapshot_skipped: bool = False
     snapshot_retained: bool = False
     snapshot_uncertain: bool = False
     snapshot_cleanup_failed: bool = False

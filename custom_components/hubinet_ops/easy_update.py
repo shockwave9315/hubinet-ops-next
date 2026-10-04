@@ -25,6 +25,7 @@ from .packages.models import (
     PackageUpdateRecord,
     PackageUpdateStatus,
 )
+from .snapshot_restore import snapshot_create_is_running
 
 _LOGGER = logging.getLogger(__name__)
 # How long YOLO waits for the Update and Health to finish.
@@ -90,6 +91,7 @@ def async_start_easy_update(
     device_id: str,
     *,
     expected_scan_attempt: str | None = None,
+    skip_snapshot: bool = False,
 ) -> tuple[EasyUpdateTarget, PackageUpdateRecord]:
     """Confirm the exact current plan and start the existing Update.
 
@@ -130,8 +132,14 @@ def async_start_easy_update(
         p_id=vmid,
         permission=ProxmoxPermission.SNAPSHOT,
     )
-    if not snapshot_permission:
+    if not skip_snapshot and not snapshot_permission:
         raise _rejected("VM.Snapshot permission is required for package updates")
+    # Skip takes no snapshot of its own, so nothing else would make it wait
+    # for this guest's running native Create; refuse before confirming.
+    if skip_snapshot and snapshot_create_is_running(hass, coordinator, vmid):
+        raise HomeAssistantError(
+            translation_domain=DOMAIN, translation_key="snapshot_create_running"
+        )
     if (
         manager.restore_reserved(node, vmid)
         or manager.update_record(node, vmid).status is PackageUpdateStatus.RUNNING
@@ -148,6 +156,7 @@ def async_start_easy_update(
             vmid,
             target_is_running=True,
             snapshot_permission=snapshot_permission,
+            skip_snapshot=skip_snapshot,
         )
     except PackageUpdateError as err:
         raise _rejected(str(err)) from err

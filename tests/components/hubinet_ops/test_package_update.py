@@ -5,8 +5,10 @@ from copy import deepcopy
 from dataclasses import replace
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import pytest
 from tests.common import MockConfigEntry  # noqa: TID251
 
+from custom_components.hubinet_ops.button import PackageUpdateButtonEntity
 from custom_components.hubinet_ops.packages.models import (
     PackageMutationResult,
     PackageScanRecord,
@@ -35,9 +37,12 @@ from homeassistant.components import persistent_notification as pn
 from homeassistant.components.button import SERVICE_PRESS
 from homeassistant.const import ATTR_ENTITY_ID, STATE_UNAVAILABLE, STATE_UNKNOWN
 from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import HomeAssistantError
+from homeassistant.helpers.translation import async_get_translations
 
 from . import setup_integration
-from .test_packages import RESULT, GateTransport
+from .test_easy_update_action import _device_id, _easy_update
+from .test_packages import RESULT, GateTransport, _forbid_snapshot_operations
 
 SCAN = "button.ct_nginx_scan_pending_packages"
 REVIEW = "button.ct_nginx_review_package_update"
@@ -95,6 +100,7 @@ async def test_review_approve_update_button_availability_and_exact_view_token(
     assert hass.states.get(REVIEW).state != STATE_UNAVAILABLE
     assert hass.states.get(APPROVE).state == STATE_UNAVAILABLE
     assert hass.states.get(UPDATE).state == STATE_UNAVAILABLE
+    assert hass.states.get(UPDATE).attributes["snapshot_permission"] is True
 
     await _press(hass, REVIEW)
     assert manager.viewed_token("pve1", 200) == token
@@ -102,12 +108,15 @@ async def test_review_approve_update_button_availability_and_exact_view_token(
     notification = pn._async_get_or_create_notifications(hass)[  # noqa: SLF001
         "hubinet_ops_package_review_pve1_200"
     ]
-    assert "| openssl | amd64 | 1.0 | 1.1 | Debian-Security | yes |" in (
-        notification["message"]
+    assert (
+        "| openssl | amd64 | 1.0 | 1.1 | Debian-Security | yes |"
+        in (notification["message"])
     )
     assert "Approve reviewed plan" in notification["message"]
 
-    with patch.object(manager, "confirm_review", wraps=manager.confirm_review) as confirm:
+    with patch.object(
+        manager, "confirm_review", wraps=manager.confirm_review
+    ) as confirm:
         await _press(hass, APPROVE)
     confirm.assert_called_once_with("pve1", 200, token)
     assert manager.viewed_token("pve1", 200) is None
@@ -123,20 +132,32 @@ async def test_update_button_requires_native_snapshot_permission(
     package_transport_material: None,
 ) -> None:
     """Only the mutating control requires native PVE VM.Snapshot permission."""
-    permissions = deepcopy(
-        mock_proxmox_client.access.permissions.get.return_value
-    )
+    permissions = deepcopy(mock_proxmox_client.access.permissions.get.return_value)
     for grants in permissions.values():
         grants.pop("VM.Snapshot", None)
     mock_proxmox_client.access.permissions.get.return_value = permissions
 
-    await setup_integration(hass, mock_config_entry)
+    await _setup_scanned(hass, mock_config_entry)
 
     assert hass.states.get(SCAN) is not None
     assert hass.states.get(REVIEW) is not None
     assert hass.states.get(APPROVE) is not None
-    assert hass.states.get(UPDATE) is None
+    assert hass.states.get(UPDATE).state == STATE_UNAVAILABLE
+    assert hass.states.get(UPDATE).attributes["snapshot_permission"] is False
     assert hass.states.get("button.ct_nginx_autoremove_unused_packages") is None
+    await _press(hass, REVIEW)
+    await _press(hass, APPROVE)
+    assert mock_config_entry.runtime_data.package_manager.record("pve1", 200).reviewed
+    assert hass.states.get(UPDATE).state == STATE_UNAVAILABLE
+    coordinator = mock_config_entry.runtime_data
+    node_data = coordinator.data["pve1"]
+    button = PackageUpdateButtonEntity(coordinator, node_data.containers[200], node_data)
+    with pytest.raises(HomeAssistantError):
+        await button.async_press()
+    assert (
+        mock_config_entry.runtime_data.package_manager.update_record("pve1", 200).status
+        is PackageUpdateStatus.NEVER
+    )
 
 
 async def test_new_scan_invalidates_viewed_token_and_stale_approval(
@@ -677,3 +698,191 @@ async def test_uncertain_snapshot_notification_never_claims_confirmed_retention(
     ]["message"]
     assert f"snapshot named {snapshot_name} may exist" in message
     assert "snapshot was retained" not in message
+
+
+async def test_native_press_explicitly_requires_snapshot_after_skipped_history(
+    hass: HomeAssistant,
+    mock_config_entry: MockConfigEntry,
+    mock_proxmox_client: MagicMock,
+    package_transport_material: None,
+) -> None:
+    """A native press cannot inherit skip from the previous Update record."""
+    await _setup_scanned(hass, mock_config_entry)
+    manager = mock_config_entry.runtime_data.package_manager
+    manager._update_records["pve1", 200] = PackageUpdateRecord(  # noqa: SLF001
+        status=PackageUpdateStatus.SUCCESS,
+        snapshot_skipped=True,
+    )
+    await _press(hass, REVIEW)
+    await _press(hass, APPROVE)
+    with patch.object(manager, "async_start_update") as start:
+        await _press(hass, UPDATE)
+    start.assert_called_once_with(
+        "pve1",
+        200,
+        target_is_running=True,
+        snapshot_permission=True,
+        skip_snapshot=False,
+    )
+
+
+@pytest.mark.parametrize("lang", ["en", "pl"])
+@pytest.mark.parametrize(
+    ("end", "expected"),
+    [
+        ("success", PackageUpdateOutcome.SUCCESS),
+        ("mutation_failed", PackageUpdateOutcome.MUTATION_FAILED),
+        ("mutation_uncertain", PackageUpdateOutcome.MUTATION_UNCERTAIN),
+        ("plan_failed", PackageUpdateOutcome.PLAN_FAILED),
+        ("unexpected_plan", PackageUpdateOutcome.PLAN_FAILED),
+        ("cancel_plan", PackageUpdateOutcome.PLAN_FAILED),
+        ("cancel_mutation", PackageUpdateOutcome.MUTATION_UNCERTAIN),
+        ("cancel_after_success", PackageUpdateOutcome.SUCCESS),
+    ],
+)
+async def test_real_skip_update_sensor_and_notifications_are_truthful(
+    hass: HomeAssistant,
+    mock_config_entry: MockConfigEntry,
+    mock_proxmox_client: MagicMock,
+    package_transport_material: None,
+    lang: str,
+    end: str,
+    expected: PackageUpdateOutcome,
+) -> None:
+    """Actual service execution reports skip through success, failure and unload."""
+    permissions = deepcopy(mock_proxmox_client.access.permissions.get.return_value)
+    for grants in permissions.values():
+        grants.pop("VM.Snapshot", None)
+    mock_proxmox_client.access.permissions.get.return_value = permissions
+    await _setup_scanned(hass, mock_config_entry)
+    await async_get_translations(hass, lang, "exceptions", ["hubinet_ops"])
+    hass.config.language = lang
+    manager = mock_config_entry.runtime_data.package_manager
+    entered = asyncio.Event()
+
+    async def plan(_self, _node, _vmid):
+        if end == "cancel_plan":
+            entered.set()
+            await asyncio.Event().wait()
+        if end == "plan_failed":
+            raise PackageUpdateError(PackageUpdateOutcome.PLAN_FAILED, "test plan")
+        if end == "unexpected_plan":
+            raise RuntimeError("test unexpected plan failure")
+        return ParsedAptSimulation(RESULT.packages, RESULT.not_upgraded_count)
+
+    async def mutation(_self, _node, _vmid):
+        if end == "cancel_mutation":
+            entered.set()
+            await asyncio.Event().wait()
+        if end in {"mutation_failed", "mutation_uncertain"}:
+            raise PackageUpdateError(expected, "test mutation")
+        return PackageMutationResult(
+            before={("openssl", "amd64"): "1.0"},
+            after={("openssl", "amd64"): "1.1"},
+        )
+
+    async def cleanup(_self, _node, _vmid):
+        if end == "cancel_after_success":
+            entered.set()
+            await asyncio.Event().wait()
+        return ParsedAutoremoveSimulation((), 0)
+
+    with (
+        patch(
+            "custom_components.hubinet_ops.packages.transport.AsyncSSHPackageTransport.async_plan",
+            new=plan,
+        ),
+        patch(
+            "custom_components.hubinet_ops.packages.transport.AsyncSSHPackageTransport.async_update",
+            new=mutation,
+        ),
+        patch(
+            "custom_components.hubinet_ops.packages.transport.AsyncSSHPackageTransport.async_ping",
+            new=AsyncMock(return_value=True),
+        ),
+        patch(
+            "custom_components.hubinet_ops.packages.transport.AsyncSSHPackageTransport.async_plan_autoremove",
+            new=cleanup,
+        ),
+        _forbid_snapshot_operations(),
+        patch.object(manager, "_notify_retained_snapshots") as retained,
+    ):
+        await _easy_update(
+            hass, _device_id(hass, "1234_container_200"), skip_snapshot=True
+        )
+        if end.startswith("cancel"):
+            await entered.wait()
+            running = hass.states.get(UPDATE_SENSOR)
+            assert running.state == "running"
+            assert running.attributes["snapshot_skipped"] is True
+            task = manager._update_tasks["pve1", 200]  # noqa: SLF001
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await task
+        await hass.async_block_till_done(wait_background_tasks=True)
+        retained.assert_not_called()
+    record = manager.update_record("pve1", 200)
+    assert record.outcome is expected
+    state = hass.states.get(UPDATE_SENSOR)
+    assert state.state == (
+        "success" if expected is PackageUpdateOutcome.SUCCESS else "failed"
+    )
+    assert state.attributes["snapshot_skipped"] is True
+    assert state.attributes["retained_snapshot"] is False
+    assert state.attributes["snapshot_uncertain"] is False
+    assert state.attributes["snapshot_cleanup_failed"] is False
+    assert "retained_snapshot_name" not in state.attributes
+    assert "uncertain_snapshot_name" not in state.attributes
+    assert record.snapshot_name is None
+    assert hass.states.get(SCAN_SENSOR).state == STATE_UNKNOWN
+    assert manager.record("pve1", 200) == PackageScanRecord()
+    message = pn._async_get_or_create_notifications(hass)[  # noqa: SLF001
+        "hubinet_ops_package_update_pve1_200"
+    ]["message"]
+    if lang == "en":
+        assert "explicitly skipped for this operation only" in message
+        assert "no snapshot was created or deleted" in message
+        assert "temporary snapshot was removed" not in message
+        assert (
+            "complete native PVE safety snapshot could not be confirmed" not in message
+        )
+        if end == "cancel_plan":
+            assert "execution-time package plan could not be established" in message
+    else:
+        assert "pominięto na jawne żądanie tylko dla tej operacji" in message
+        assert "nie utworzono ani nie usunięto snapshota" in message
+        assert "usunięto tymczasowy snapshot" not in message
+        assert (
+            "nie udało się potwierdzić kompletnego natywnego snapshota" not in message
+        )
+    if end == "cancel_after_success":
+        # Preserve mutation success, but never start new Health from cancellation.
+        assert manager.health_record("pve1", 200).check_status == "never"
+
+
+async def test_native_press_rechecks_current_coordinator_truth(
+    hass: HomeAssistant,
+    mock_config_entry: MockConfigEntry,
+    mock_proxmox_client: MagicMock,
+    package_transport_material: None,
+) -> None:
+    """Even a direct native press cannot use stale running data."""
+    await _setup_scanned(hass, mock_config_entry)
+    await _press(hass, REVIEW)
+    await _press(hass, APPROVE)
+    coordinator = mock_config_entry.runtime_data
+    manager = coordinator.package_manager
+    node_data = coordinator.data["pve1"]
+    original = manager.record("pve1", 200)
+    coordinator.last_update_success = False
+    button = PackageUpdateButtonEntity(
+        coordinator, node_data.containers[200], node_data
+    )
+    assert button.available is False
+    with _forbid_snapshot_operations(), pytest.raises(HomeAssistantError) as err:
+        await button.async_press()
+    assert err.value.translation_placeholders == {
+        "reason": "LXC is not present and running in current Proxmox data"
+    }
+    assert manager.record("pve1", 200) is original
+    assert manager.update_record("pve1", 200) == PackageUpdateRecord()

@@ -3,7 +3,8 @@
 # ruff: noqa: SLF001 -- drive the shared Proxmox client mock per endpoint
 
 from datetime import timedelta
-from unittest.mock import MagicMock, patch
+from types import MappingProxyType
+from unittest.mock import MagicMock, call, patch
 
 from freezegun.api import FrozenDateTimeFactory
 from proxmoxer.core import ResourceException
@@ -11,9 +12,9 @@ import pytest
 import requests
 from tests.common import MockConfigEntry, async_fire_time_changed  # noqa: TID251
 
-from custom_components.hubinet_ops.const import DOMAIN
+from custom_components.hubinet_ops.const import CONF_VM_GUEST_MEMORY, DOMAIN
 from custom_components.hubinet_ops.coordinator import DEFAULT_UPDATE_INTERVAL
-from homeassistant.const import STATE_UNAVAILABLE
+from homeassistant.const import STATE_UNAVAILABLE, Platform
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import device_registry as dr
 
@@ -148,3 +149,152 @@ async def test_informational_read_failure_keeps_the_host_online(
         config_entry_id=mock_config_entry.entry_id,
     )
     assert storage_device is not None
+
+
+# --- Checkpoint D: opt-in full QEMU listing, still one listing per node -----
+
+FULL = call(full=1)
+LIGHT = call()
+
+
+def _enable_guest_memory(entry: MockConfigEntry) -> None:
+    object.__setattr__(entry, "options", MappingProxyType({CONF_VM_GUEST_MEMORY: True}))
+
+
+def _vms(count: int, first: int = 100) -> list[dict]:
+    """Return `count` running VMs with distinct IDs."""
+    return [
+        {
+            "vmid": first + index,
+            "name": f"vm-{first + index}",
+            "status": "running",
+            "maxmem": 2147483648,
+            "cpus": 2,
+            "mem": 1073741824,
+            "cpu": 0.1,
+            "maxdisk": 34359738368,
+            "disk": 1234567890,
+            "uptime": 60,
+            "netin": 1,
+            "netout": 1,
+        }
+        for index in range(count)
+    ]
+
+
+def _three_nodes(client: MagicMock, vms_per_node: int) -> dict[str, MagicMock]:
+    """Serve pve1 and pve2 (online) and pve3 (offline), each with its own API."""
+    apis: dict[str, MagicMock] = {}
+    for index, name in enumerate(("pve1", "pve2", "pve3")):
+        api = MagicMock()
+        api.qemu.get.return_value = _vms(vms_per_node, first=100 + 1000 * index)
+        api.lxc.get.return_value = []
+        api.storage.get.return_value = []
+        api.tasks.get.return_value = []
+        apis[name] = api
+    client.nodes.get.return_value = client._all_nodes
+    client.nodes.side_effect = lambda name: apis[name]
+    return apis
+
+
+async def _sensors_only(
+    hass: HomeAssistant, entry: MockConfigEntry, freezer: FrozenDateTimeFactory
+) -> None:
+    """Set up only telemetry, so no per-guest snapshot selector is involved."""
+    with patch("custom_components.hubinet_ops.PLATFORMS", [Platform.SENSOR]):
+        await _setup(hass, entry, freezer)
+
+
+@pytest.mark.parametrize(("enabled", "expected"), [(False, LIGHT), (True, FULL)])
+async def test_qemu_listing_parameter_follows_the_option(
+    hass: HomeAssistant,
+    mock_proxmox_client: MagicMock,
+    mock_config_entry: MockConfigEntry,
+    freezer: FrozenDateTimeFactory,
+    enabled: bool,
+    expected: object,
+) -> None:
+    """Off sends no `full` parameter at all; on sends exactly full=1."""
+    if enabled:
+        _enable_guest_memory(mock_config_entry)
+    await _sensors_only(hass, mock_config_entry, freezer)
+    listing = mock_proxmox_client._node_mock.qemu.get
+    assert mock_config_entry.runtime_data.vm_guest_memory is enabled
+    assert listing.call_args_list
+    assert all(used == expected for used in listing.call_args_list)
+    before = listing.call_count
+    await _refresh(hass, freezer)
+    assert listing.call_args_list[before:] == [expected]
+    # The LXC listing is not affected by the option.
+    lxc = mock_proxmox_client._node_mock.lxc.get
+    assert all(used == LIGHT for used in lxc.call_args_list)
+
+
+@pytest.mark.parametrize("enabled", [False, True])
+@pytest.mark.parametrize("vms_per_node", [1, 30])
+async def test_one_qemu_listing_per_online_node_and_no_per_vm_request(
+    hass: HomeAssistant,
+    mock_proxmox_client: MagicMock,
+    mock_config_entry: MockConfigEntry,
+    freezer: FrozenDateTimeFactory,
+    enabled: bool,
+    vms_per_node: int,
+) -> None:
+    """Request count depends on online nodes only, never on the VM count."""
+    if enabled:
+        _enable_guest_memory(mock_config_entry)
+    apis = _three_nodes(mock_proxmox_client, vms_per_node)
+    await _sensors_only(hass, mock_config_entry, freezer)
+    coordinator = mock_config_entry.runtime_data
+    assert {name: len(node.vms) for name, node in coordinator.data.items()} == {
+        "pve1": vms_per_node,
+        "pve2": vms_per_node,
+        "pve3": 0,
+    }
+
+    before = {name: api.qemu.get.call_count for name, api in apis.items()}
+    await _refresh(hass, freezer)
+    assert coordinator.last_update_success is True
+    expected = FULL if enabled else LIGHT
+    for name in ("pve1", "pve2"):
+        listing = apis[name].qemu.get
+        assert listing.call_args_list[before[name] :] == [expected]
+    for name, api in apis.items():
+        # `api.qemu(vmid)` would be a per-VM resource such as /status/current.
+        api.qemu.assert_not_called()
+        api.lxc.assert_not_called()
+        assert name != "pve3" or api.mock_calls == []
+    # An offline node is never asked for its guests.
+    assert apis["pve3"].qemu.get.call_count == 0
+
+
+async def test_full_listing_keeps_the_single_retry(
+    hass: HomeAssistant,
+    mock_proxmox_client: MagicMock,
+    mock_config_entry: MockConfigEntry,
+    freezer: FrozenDateTimeFactory,
+) -> None:
+    """A transient failure repeats the same full listing once, nothing more."""
+    _enable_guest_memory(mock_config_entry)
+    await _sensors_only(hass, mock_config_entry, freezer)
+    listing = mock_proxmox_client._node_mock.qemu.get
+    error = ResourceException(500, "Internal Server Error", "got timeout")
+    listing.side_effect = _fail_then(listing.return_value, error)
+    before = listing.call_count
+    await _refresh(hass, freezer)
+    assert listing.call_args_list[before:] == [FULL, FULL]
+    assert mock_config_entry.runtime_data.last_update_success is True
+
+    listing.side_effect = error
+    before = listing.call_count
+    await _refresh(hass, freezer)
+    assert listing.call_args_list[before:] == [FULL, FULL]
+    coordinator = mock_config_entry.runtime_data
+    assert coordinator.last_update_success is False
+    assert coordinator.last_exception.translation_key == "api_read_failed"
+
+    listing.side_effect = ResourceException(403, "Forbidden", "")
+    before = listing.call_count
+    await _refresh(hass, freezer)
+    assert listing.call_args_list[before:] == [FULL]
+    mock_proxmox_client._node_mock.qemu.assert_not_called()

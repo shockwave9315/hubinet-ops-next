@@ -38,6 +38,7 @@ const ICONS = {
   shutdown: "mdi:power",
   reset: "mdi:flash",
   hibernate: "mdi:power-sleep",
+  [guest.SKIP_UPDATE]: "mdi:alert",
 };
 const GUEST_ICONS = { lxc: "mdi:cube-outline", vm: "mdi:monitor" };
 const ACTION_TONES = {
@@ -53,6 +54,7 @@ const ACTION_TONES = {
   shutdown: "orange",
   reset: "red",
   hibernate: "purple",
+  [guest.SKIP_UPDATE]: "red",
 };
 
 const esc = (value) =>
@@ -63,62 +65,99 @@ const esc = (value) =>
 
 const STYLE = `
   :host { display: block; }
-  ha-card { padding: 16px; display: grid; gap: 14px; box-sizing: border-box; height: 100%; }
-  .head { display: flex; gap: 12px; align-items: center; min-width: 0; cursor: pointer; }
+  /* Every grid has minmax(0, 1fr) tracks: content never widens the card. */
+  ha-card { padding: 16px; display: grid; grid-template-columns: minmax(0, 1fr); gap: 14px;
+    box-sizing: border-box; height: 100%; container-type: inline-size; }
+  .head { display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: center; min-width: 0;
+    cursor: pointer; }
   .shape { flex: none; width: 42px; height: 42px; border-radius: 50%; display: grid;
     place-items: center; color: var(--tone);
     background: color-mix(in srgb, var(--tone) 18%, transparent); }
-  .titles { min-width: 0; flex: 1; }
+  .titles { min-width: 0; flex: 1 1 72px; }
   .name { font-weight: 700; font-size: 16px; color: var(--primary-text-color);
     white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .sub { color: var(--secondary-text-color); font-size: 12px; }
+  .sub { color: var(--secondary-text-color); font-size: 12px; overflow-wrap: anywhere; }
   .chip { display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px;
     border-radius: 999px; font-size: 12px; font-weight: 600; color: var(--tone);
-    background: color-mix(in srgb, var(--tone) 15%, transparent); white-space: nowrap; }
-  .chip i { width: 7px; height: 7px; border-radius: 50%; background: var(--tone); }
-  .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(110px, 1fr)); gap: 8px; }
+    background: color-mix(in srgb, var(--tone) 15%, transparent);
+    box-sizing: border-box; min-width: 0; max-width: 100%; }
+  .chip i { flex: none; width: 7px; height: 7px; border-radius: 50%; background: var(--tone); }
+  .chip span { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .stats { display: grid; gap: 8px;
+    grid-template-columns: repeat(auto-fit, minmax(min(110px, 100%), 1fr)); }
   .stat { background: var(--secondary-background-color, rgba(127,127,127,.1));
     border-radius: 10px; padding: 8px 10px; display: grid; gap: 2px; min-width: 0;
+    grid-template-columns: minmax(0, 1fr);
     align-content: start; justify-content: stretch; align-items: stretch;
     text-align: start; font-weight: 400; color: var(--primary-text-color); }
   button.stat:hover { background: color-mix(in srgb, var(--primary-text-color) 8%,
     var(--secondary-background-color, rgba(127,127,127,.1))); }
   .stat small { color: var(--secondary-text-color); font-size: 11px;
-    text-transform: uppercase; letter-spacing: .05em; }
+    text-transform: uppercase; letter-spacing: .05em; overflow-wrap: anywhere; }
   .stat b { font-size: 15px; font-weight: 600; color: var(--primary-text-color);
     font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .stat em { font-style: normal; font-size: 11px; color: var(--secondary-text-color); }
+  .stat em { font-style: normal; font-size: 11px; color: var(--secondary-text-color);
+    overflow-wrap: anywhere; }
   .stat svg { width: 100%; height: 26px; display: block; }
   .meter { height: 8px; border-radius: 999px; overflow: hidden; margin-top: 6px;
     background: color-mix(in srgb, var(--tone) 16%, transparent); }
   .meter span { display: block; height: 100%; border-radius: inherit; background: var(--tone); }
+  /* RAM with guest data: Guest and Host, each with its own thin bar. */
+  .lines { display: grid; grid-template-columns: minmax(0, 1fr); gap: 6px; }
+  .line { display: grid; grid-template-columns: minmax(0, 1fr); gap: 1px; }
+  .line span { font-size: 11px; color: var(--secondary-text-color); overflow-wrap: anywhere; }
+  .line .meter { height: 4px; margin-top: 3px; }
+  .mini .line { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0 6px; }
+  .mini .line b { font-size: 13px; }
+  .mini .line .meter { flex: 1 1 100%; }
   .dim { opacity: .45; }
   .section { border-top: 1px solid var(--divider-color, rgba(127,127,127,.25));
-    padding-top: 12px; display: grid; gap: 10px; }
+    padding-top: 12px; display: grid; grid-template-columns: minmax(0, 1fr); gap: 10px; }
   .section h3 { margin: 0; font-size: 12px; font-weight: 600; color: var(--secondary-text-color);
-    text-transform: uppercase; letter-spacing: .06em; display: flex;
-    justify-content: space-between; align-items: center; gap: 8px; }
+    text-transform: uppercase; letter-spacing: .06em; display: flex; flex-wrap: wrap;
+    justify-content: space-between; align-items: center; gap: 4px 8px; overflow-wrap: anywhere; }
   button.more { padding: 2px 6px; font-size: 12px; text-transform: none; letter-spacing: 0;
     background: none; color: var(--primary-color); }
   .legend { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 11.5px;
-    color: var(--secondary-text-color); }
+    color: var(--secondary-text-color); overflow-wrap: anywhere; }
   .legend b { color: var(--primary-text-color); font-weight: 600; }
-  .pkg { display: flex; gap: 12px; align-items: center; min-width: 0; }
-  .pkg .t { min-width: 0; flex: 1; }
-  .pkg .p { font-weight: 700; color: var(--primary-text-color); }
-  .pkg .s { color: var(--secondary-text-color); font-size: 12px; }
-  .row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
-  select { font: inherit; flex: 1 1 200px; min-width: 0; padding: 8px 10px; border-radius: 10px;
+  /* The text takes the free space on a shared line; when the actions do not
+     fit beside it they wrap below and fill the row. */
+  .pkg { display: flex; flex-wrap: wrap; gap: 10px 12px; align-items: center; min-width: 0; }
+  .pkg .t { min-width: 0; flex: 999 1 180px; }
+  @container (max-width: 300px) { .pkg .t { flex-basis: 88px; } }
+  .pkg .p { font-weight: 700; color: var(--primary-text-color); overflow-wrap: anywhere; }
+  .pkg .s { color: var(--secondary-text-color); font-size: 12px; overflow-wrap: anywhere; }
+  .pkg .acts { --slot: 126px; flex: 1 1 var(--slot); }
+  .pkg .acts.two { flex-basis: calc(2 * var(--slot) + 8px); }
+  /* Action groups: every button keeps one fixed slot, so a longer armed
+     label wraps inside its button and never moves a neighbour. Buttons that
+     do not fit go to the next row and share it. */
+  .acts { --slot: 116px; display: flex; flex-wrap: wrap; gap: 8px; min-width: 0; }
+  .acts > button { flex: 1 1 var(--slot); }
+  .row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; min-width: 0; }
+  select { font: inherit; flex: 1 1 200px; min-width: 0; max-width: 100%; box-sizing: border-box;
+    padding: 8px 10px; border-radius: 10px;
     border: 1px solid var(--divider-color, rgba(127,127,127,.35));
     background: var(--secondary-background-color, transparent); color: var(--primary-text-color); }
-  .power { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
   .power4 { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; }
-  @container (max-width: 420px) { .power4 { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
-  ha-card { container-type: inline-size; }
+  .power4 > button { padding-inline: 8px; }
+  @container (max-width: 440px) { .power4 { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+  @container (max-width: 215px) { .power4 { grid-template-columns: minmax(0, 1fr); } }
   button { font: inherit; font-size: 13px; font-weight: 600; display: inline-flex;
     align-items: center; justify-content: center; gap: 6px; padding: 8px 12px;
     border-radius: 10px; border: 0; cursor: pointer; color: var(--tone);
-    background: color-mix(in srgb, var(--tone) 14%, transparent); }
+    background: color-mix(in srgb, var(--tone) 14%, transparent);
+    box-sizing: border-box; min-width: 0; max-width: 100%; text-align: center; }
+  button > span { min-width: 0; overflow-wrap: break-word; }
+  button > ha-icon, button > ha-circular-progress { flex: none; }
+  /* A frontend that no longer ships <ha-circular-progress> still shows the
+     running spinner. */
+  ha-circular-progress:not(:defined) { display: inline-block; box-sizing: border-box;
+    width: 16px; height: 16px; border: 2px solid currentColor;
+    border-inline-end-color: transparent; border-radius: 50%;
+    animation: spin .8s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
   button:hover { background: color-mix(in srgb, var(--tone) 22%, transparent); }
   button:focus-visible, select:focus-visible, .head:focus-visible, .stat:focus-visible {
     outline: 2px solid var(--primary-color); outline-offset: 2px; }
@@ -126,13 +165,16 @@ const STYLE = `
   button.armed { background: var(--tone); color: #fff; }
   button.primary { background: var(--tone); color: #111; }
   ha-icon { --mdc-icon-size: 20px; }
-  .error { color: var(--secondary-text-color); }
+  .error { color: var(--secondary-text-color); overflow-wrap: anywhere; }
   ha-card.mini { padding: 12px; gap: 10px; }
   .mini .stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  @container (max-width: 199px) { .mini .stats { grid-template-columns: minmax(0, 1fr); } }
   .mini .stat { padding: 6px 9px; }
   .mini .stat svg { height: 18px; }
-  .mline { display: flex; gap: 10px; align-items: center; min-width: 0; }
-  .mline .t { flex: 1; min-width: 0; }
+  .mline { --slot: 116px; display: flex; flex-wrap: wrap; gap: 8px 10px; align-items: center;
+    min-width: 0; }
+  .mline .t { flex: 999 1 96px; min-width: 0; }
+  .mline > button { flex: 1 1 var(--slot); }
   .mline .p, .mline .s { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .mline .p { font-weight: 700; color: var(--primary-text-color); }
   .mline .s { font-size: 12px; color: var(--secondary-text-color); }
@@ -221,8 +263,9 @@ class HubinetOpsGuestCard extends HTMLElement {
     return this._isMini ? 3 : 7;
   }
 
+  // Defaults only: Home Assistant applies a saved grid_options over them.
   getGridOptions() {
-    return this._isMini ? { columns: 6, min_columns: 6 } : { columns: 12, min_columns: 6 };
+    return this._isMini ? { columns: 9, min_columns: 6 } : { columns: 12, min_columns: 6 };
   }
 
   disconnectedCallback() {
@@ -274,6 +317,8 @@ class HubinetOpsGuestCard extends HTMLElement {
           config: { device_id: this._config.device_id, autoremove: Boolean(this._config.autoremove) },
           now: Date.now(),
           lang,
+          // Update without a snapshot exists in the full LXC card only.
+          offerSkipSnapshot: !this._isMini,
         })
       : null;
     return guest.deriveGuestView({
@@ -421,13 +466,14 @@ class HubinetOpsGuestCard extends HTMLElement {
     this._click({ target });
   }
 
-  _button(action, info, label, extra = "", key = action) {
+  _button(action, info, label, extra = "", key = action, hint = "") {
     const s = guest.guestStrings(this._lang());
     const armed = this._isArmed(action);
     const tone = TONES[ACTION_TONES[action]];
-    return `<button data-action="${action}" data-key="${key}" style="--tone:${tone}" class="${armed ? "armed" : ""} ${extra}"
+    const creating = action === "create" && this._view?.snapshotCreateRunning;
+    return `<button data-action="${action}" data-key="${key}" style="--tone:${tone}" class="${armed ? "armed" : ""} ${extra}"${hint ? ` title="${esc(hint)}"` : ""}
       ${info && info.available && !this._busy ? "" : "disabled"}>
-      <ha-icon icon="${ICONS[action]}"></ha-icon>${esc(armed ? s.confirm : label)}</button>`;
+      ${creating ? '<ha-circular-progress size="small" indeterminate></ha-circular-progress>' : `<ha-icon icon="${ICONS[action]}"></ha-icon>`}<span>${esc(creating ? s.creating : armed ? s.confirm : label)}</span></button>`;
   }
 
   // Stat tiles; a tile with a sensor opens its native history when tapped.
@@ -438,13 +484,23 @@ class HubinetOpsGuestCard extends HTMLElement {
       .map((stat) => {
         const tone = TONES[stat.tone];
         const history = stat.history ? this._history[stat.history] : null;
-        const meter =
-          stat.pct !== undefined && stat.pct !== null
-            ? `<div class="meter" style="--tone:${tone}"><span style="width:${Math.max(0, Math.min(100, stat.pct))}%"></span></div>`
+        // Only the bar width is clamped; the shown value never is.
+        const meter = (pct) =>
+          pct !== undefined && pct !== null
+            ? `<div class="meter" style="--tone:${tone}"><span style="width:${Math.max(0, Math.min(100, pct))}%"></span></div>`
             : "";
+        const values = stat.lines
+          ? `<div class="lines">${stat.lines
+              .map(
+                (line) => `<div class="line" data-line="${line.key}"><span>${esc(line.label)}</span>
+                  <b>${esc(line.value)}</b>${!this._isMini && line.detail ? `<em>${esc(line.detail)}</em>` : ""}
+                  ${meter(line.pct)}</div>`
+              )
+              .join("")}</div>`
+          : `<b>${esc(stat.value)}</b>${stat.detail ? `<em>${esc(stat.detail)}</em>` : ""}
+          ${meter(stat.pct)}`;
         const body = `<small>${esc(stat.label)}</small>
-          <b>${esc(stat.value)}</b>${stat.detail ? `<em>${esc(stat.detail)}</em>` : ""}
-          ${meter}${spark(history, tone, stat.max)}`;
+          ${values}${spark(history, tone, stat.max)}`;
         const cls = `stat${view.running ? "" : " dim"}`;
         return stat.entity
           ? `<button class="${cls}" data-action="history" data-stat="${stat.key}" data-key="stat-${stat.key}"
@@ -458,7 +514,7 @@ class HubinetOpsGuestCard extends HTMLElement {
     return `<div class="head" tabindex="0" role="button" data-action="details">
         <div class="shape" style="--tone:${TONES[view.status.tone]}"><ha-icon icon="${GUEST_ICONS[view.kind]}"></ha-icon></div>
         <div class="titles"><div class="name">${esc(view.name)}</div><div class="sub">${esc(view.uptime)}</div></div>
-        <span class="chip" style="--tone:${TONES[view.status.tone]}"><i></i>${esc(view.status.label)}</span>
+        <span class="chip" style="--tone:${TONES[view.status.tone]}"><i></i><span>${esc(view.status.label)}</span></span>
       </div>`;
   }
 
@@ -475,11 +531,19 @@ class HubinetOpsGuestCard extends HTMLElement {
           : "";
   }
 
+  // The Update without a snapshot, beside the package action of a full LXC card.
+  _skipButton(view) {
+    const s = guest.guestStrings(this._lang());
+    return view.skipUpdate
+      ? this._button(guest.SKIP_UPDATE, view.skipUpdate, s.skip_update, "", guest.SKIP_UPDATE, s.skip_update_hint)
+      : "";
+  }
+
   _power(view) {
     const s = guest.guestStrings(this._lang());
     const a = view.actions;
     if (view.kind !== "vm") {
-      return `<div class="section"><h3>${esc(s.power)}</h3><div class="power">
+      return `<div class="section"><h3>${esc(s.power)}</h3><div class="acts">
         ${this._button("start", a.start, s.start)}${this._button("stop", a.stop, s.stop)}${this._button("restart", a.restart, s.restart)}
       </div></div>`;
     }
@@ -487,7 +551,7 @@ class HubinetOpsGuestCard extends HTMLElement {
     return `<div class="section"><h3>${esc(s.power)}<button class="more" data-action="more"
         aria-expanded="${more}" style="--tone:var(--primary-color)">${esc(more ? `${s.less} ▴` : `${s.more} ▾`)}</button></h3>
       <div class="power4">${this._button("start", a.start, s.start)}${this._button("shutdown", a.shutdown, s.shutdown)}${this._button("stop", a.stop, s.stop)}${this._button("restart", a.restart, s.restart)}</div>
-      ${more ? `<div class="power">${this._button("reset", a.reset, s.reset)}${this._button("hibernate", a.hibernate, s.hibernate)}</div>` : ""}
+      ${more ? `<div class="acts">${this._button("reset", a.reset, s.reset)}${this._button("hibernate", a.hibernate, s.hibernate)}</div>` : ""}
       <div class="legend"><span><b>${esc(s.shutdown)}</b> ${esc(s.legend_shutdown)}</span><span><b>${esc(s.stop)}</b> ${esc(s.legend_stop)}</span>${more ? `<span><b>${esc(s.reset)}</b> ${esc(s.legend_reset)}</span>` : ""}</div>
     </div>`;
   }
@@ -519,6 +583,7 @@ class HubinetOpsGuestCard extends HTMLElement {
     const stats = this._stats(view);
     const pkg = view.package;
     const pkgButton = this._pkgButton(view);
+    const skipButton = this._skipButton(view);
     const snap = view.snapshots;
     const options = snap
       ? snap.options.length
@@ -539,14 +604,14 @@ class HubinetOpsGuestCard extends HTMLElement {
           ? `<div class="section"><h3>${esc(s.packages)}</h3><div class="pkg">
           <div class="shape" style="--tone:${TONES[pkg.tone] || TONES.grey}"><ha-icon icon="${esc(pkg.icon)}"></ha-icon></div>
           <div class="t"><div class="p">${esc(pkg.primary)}</div><div class="s">${esc(pkg.secondary)}</div></div>
-          ${pkgButton}</div></div>`
+          ${pkgButton || skipButton ? `<div class="acts${pkgButton && skipButton ? " two" : ""}">${pkgButton}${skipButton}</div>` : ""}</div></div>`
           : ""
       }
       ${
         snap
           ? `<div class="section"><h3>${esc(s.snapshots)}</h3>
           <div class="row"><select data-role="snapshot" ${snap.available && snap.options.length ? "" : "disabled"}>${options}</select></div>
-          <div class="row">${this._button("create", view.actions.create, s.create)}${this._button("restore", view.actions.restore, s.restore)}${this._button("delete", view.actions.delete, s.delete)}</div></div>`
+          <div class="acts">${this._button("create", view.actions.create, s.create)}${this._button("restore", view.actions.restore, s.restore)}${this._button("delete", view.actions.delete, s.delete)}</div></div>`
           : ""
       }
       ${this._power(view)}`;
@@ -634,6 +699,10 @@ class HubinetOpsGuestCard extends HTMLElement {
       this._render();
       return;
     }
+    // Never during a request in flight, even from a not yet rebuilt button.
+    if (action === guest.SKIP_UPDATE && this._busy) {
+      return;
+    }
     if (guest.CONFIRM.has(action)) {
       const target = guest.confirmTarget(action, view, this._config.device_id);
       if (!target) {
@@ -650,6 +719,9 @@ class HubinetOpsGuestCard extends HTMLElement {
     this._disarm();
     if (action === "update") {
       await this._call(guest.DOMAIN, "easy_update", view.package.action.data);
+    } else if (action === guest.SKIP_UPDATE) {
+      // One request for exactly the shown scan; nothing is saved in the card.
+      await this._call(guest.DOMAIN, "easy_update", view.skipUpdate.data);
     } else if (action === "scan") {
       await this._call("button", "press", { entity_id: view.package.action.entity_id });
     } else {

@@ -139,6 +139,12 @@
       "vm_disk": {
         "default": "mdi:harddisk"
       },
+      "vm_guest_memory": {
+        "default": "mdi:memory"
+      },
+      "vm_guest_memory_percentage": {
+        "default": "mdi:memory"
+      },
       "vm_max_cpu": {
         "default": "mdi:cpu-64-bit"
       },

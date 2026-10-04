@@ -8,7 +8,11 @@ import re
 from typing import Any, override
 
 from homeassistant.components import persistent_notification
-from homeassistant.components.button import ButtonEntity, ButtonEntityDescription
+from homeassistant.components.button import (
+    DATA_COMPONENT,
+    ButtonEntity,
+    ButtonEntityDescription,
+)
 from homeassistant.const import EntityCategory
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
@@ -291,13 +295,13 @@ def start_snapshot_create_observation(
     node: str,
     vmid: int,
     raw_upid: object,
-) -> None:
-    """Start config-entry-tracked observation without holding button service."""
+) -> asyncio.Task[None] | None:
+    """Return the existing tracked observation without holding button service."""
     operation = _async_observe_snapshot_create(
         hass, coordinator, kind, node, vmid, raw_upid
     )
     try:
-        coordinator.config_entry.async_create_background_task(
+        return coordinator.config_entry.async_create_background_task(
             hass,
             operation,
             f"snapshot Create observation {node}/{vmid}",
@@ -307,6 +311,26 @@ def start_snapshot_create_observation(
         _LOGGER.exception(
             "Could not start snapshot Create observation for %s/%s", node, vmid
         )
+        return None
+
+
+def snapshot_create_is_running(
+    hass: HomeAssistant, coordinator: ProxmoxCoordinator, vmid: int
+) -> bool:
+    """Read the existing native Create entity, without another task registry."""
+    entity_id = er.async_get(hass).async_get_entity_id(
+        "button", DOMAIN, f"{coordinator.config_entry.entry_id}_{vmid}_snapshot_create"
+    )
+    component = hass.data.get(DATA_COMPONENT)
+    entity = (
+        component.get_entity(entity_id)
+        if component is not None and entity_id is not None
+        else None
+    )
+    return (
+        getattr(entity, "coordinator", None) is coordinator
+        and getattr(entity, "snapshot_create_running", False) is True
+    )
 
 
 def _notify_snapshot_restore(
@@ -377,6 +401,10 @@ class SelectedSnapshotButtonMixin(ButtonEntity):
     _kind: SnapshotKind
     _node_name: str
 
+    def _create_running(self) -> bool:
+        """Share the native Create entity's exact task-completion truth."""
+        return snapshot_create_is_running(self.hass, self.coordinator, self.device_id)
+
     def _selected_snapshot(self) -> str | None:
         """Read only the selector's explicit collision-safe identity attribute."""
         unique_id = snapshot_select_unique_id(
@@ -411,6 +439,11 @@ class SnapshotRestoreButtonMixin(SelectedSnapshotButtonMixin):
     @override
     async def async_press(self) -> None:
         """Synchronously accept Restore, then release the button semaphore."""
+        if self._create_running():
+            raise HomeAssistantError(
+                translation_domain=DOMAIN,
+                translation_key="snapshot_create_running",
+            )
         snapshot_name = self._selected_snapshot()
         if snapshot_name is None:
             raise HomeAssistantError(
@@ -498,6 +531,11 @@ class SnapshotRestoreButtonMixin(SelectedSnapshotButtonMixin):
                     result = RestoreResult(
                         RestoreOutcome.NOT_STARTED,
                         reason="the selected snapshot is no longer eligible or present",
+                    )
+                elif self._create_running():
+                    result = RestoreResult(
+                        RestoreOutcome.NOT_STARTED,
+                        reason=_translate_restore(self.hass, "snapshot_create_running"),
                     )
                 else:
                     if self._kind is SnapshotKind.LXC:
@@ -687,6 +725,11 @@ class SnapshotDeleteButtonMixin(SelectedSnapshotButtonMixin):
     @override
     async def async_press(self) -> None:
         """Consume the choice and start config-entry-tracked background work."""
+        if self._create_running():
+            raise HomeAssistantError(
+                translation_domain=DOMAIN,
+                translation_key="snapshot_create_running",
+            )
         snapshot_name = self._selected_snapshot()
         if snapshot_name is None:
             raise HomeAssistantError(
@@ -745,6 +788,11 @@ class SnapshotDeleteButtonMixin(SelectedSnapshotButtonMixin):
                 result = RestoreResult(
                     RestoreOutcome.NOT_STARTED,
                     reason="the selected snapshot is no longer eligible or present",
+                )
+            elif self._create_running():
+                result = RestoreResult(
+                    RestoreOutcome.NOT_STARTED,
+                    reason=_translate_restore(self.hass, "snapshot_create_running"),
                 )
             elif self._package_snapshot_conflict(snapshot_name):
                 result = RestoreResult(

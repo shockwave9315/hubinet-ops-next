@@ -114,7 +114,7 @@ YAML files:
 ```yaml
 lovelace:
   resources:
-    - url: /hubinet_ops_static/hubinet-ops-cards.js?v=2026.9.1.20
+    - url: /hubinet_ops_static/hubinet-ops-cards.js?v=2026.9.1.21
       type: module
 ```
 
@@ -135,7 +135,7 @@ resource declarations must be removed from your own resource list.
 | Card | Meaning | Tap |
 | --- | --- | --- |
 | Amber "7 aktualizacji" | Current scan found updates (security count, scan time) | Easy Update |
-| Amber "Aktualizacja niedostępna dla tego LXC" | Updates found, but this LXC has no package Update button (no VM.Snapshot permission) | Open details |
+| Amber "Aktualizacja niedostępna dla tego LXC" | Updates found, but the normal Update is not available (no VM.Snapshot permission, or no package Update button) | Open details |
 | Green "System aktualny" | Current scan found none; shows last scan | Scan again |
 | Orange "Wymagany restart" | Health reports reboot required | Scan again |
 | Blue | Update, Autoremove, Scan, or Health is running | Nothing (no duplicates) |
@@ -154,8 +154,9 @@ Assistant, not in the browser. The Health result does not block YOLO; Health
 only has to finish first.
 
 Automations may call `hubinet_ops.easy_update` with `device_id`, optional
-`autoremove`, and optional `expected_scan_attempt`; updates are still never
-automatic unless you build such an automation yourself.
+`autoremove`, optional `expected_scan_attempt`, and optional `skip_snapshot`
+(default false, one Update only); updates are still never automatic unless you
+build such an automation yourself.
 
 ### LXC card
 
@@ -178,6 +179,23 @@ snapshot is selected. When the latest Proxmox refresh failed, the card shows
 the orange no-data state and disables every action. Hold the card, or tap its
 header, to open the LXC device page (administrators) or the status details.
 
+**Update without a snapshot ("Bez migawki").** When a current scan found
+updates, the full LXC card shows a second, red button beside **Aktualizuj**.
+**Aktualizuj** is unchanged: it creates the safety snapshot first and needs
+the VM.Snapshot permission. **Bez migawki** runs the same update once without
+any snapshot, so there is nothing to restore afterwards; it works without that
+permission and never runs Autoremove, whatever the YOLO setting. It needs a
+second tap, and the confirmation covers only the scan shown: a newer scan, a
+changed count, another LXC, leaving the dashboard, or waiting longer cancels
+it. It is disabled while a snapshot is being created ("Tworzenie...") and is
+not offered in the mini cards or the Easy Update card. Nothing is saved: the
+next update needs a snapshot again unless you choose this button again. The
+integration itself also refuses `skip_snapshot` for an LXC whose snapshot is
+being created, whichever card, client, or automation asks.
+
+On a narrow dashboard column the cards rearrange instead of overflowing:
+buttons move to the next row and long names are shortened.
+
 **Tap a CPU, RAM, disk, or network tile** (or press Enter on it) to open Home
 Assistant's own details dialog for that sensor with its history. This only
 opens the dialog; it never starts anything.
@@ -193,13 +211,21 @@ Restart, Reset, Hibernate, Restore, and Delete need a second tap; Start and
 Create run on the first tap. Package updates exist only for LXC, so the VM card
 has no package section. Pause and Resume are not offered yet.
 
+With **Extended VM memory data** turned on for the host (see below), the RAM
+tile shows two values when the VM reports them: **Gość** (memory used inside
+the guest) and **Host** (memory the VM occupies on the Proxmox host), each
+with its own thin bar. Otherwise it shows the host value only. Tapping the
+tile always opens the host memory history.
+
 ### Mini cards
 
 **Hubinet-Ops LXC mini** and **Hubinet-Ops VM mini** show less: status, CPU and
 RAM (tap for history), and one action. LXC mini offers the package action
 (Update, Scan, or Details, as on the Easy Update card); VM mini offers Start when
 the VM is stopped, or Shut down (second tap) when it runs. An LXC card saved
-earlier with the compact layout now shows as LXC mini.
+earlier with the compact layout now shows as LXC mini. A new mini card is 9
+of 12 columns wide in a sections dashboard; a width you set yourself in the
+card's **Layout** tab is kept.
 
 ### Automatic package scan
 
@@ -211,6 +237,20 @@ Scan never updates or removes packages; it is off until you turn it on.
 
 `hubinet_ops.scan_all_packages` requests the same read-only Scan for every
 supported LXC on every host at once; it takes no target or input.
+
+### Extended VM memory data
+
+The same **Configure** dialog has **Extended VM memory data** (off by
+default). Off, VM memory is the host-side usage as before. On, Hubinet-Ops
+asks Proxmox for the full VM list, still once per node and never once per VM,
+and can then show guest and host memory separately: two extra sensors per VM,
+**Guest memory usage percentage** and **Guest memory usage** (the latter
+disabled until you enable it), and the two-value RAM tile in the VM cards. The
+guest value needs a running VM whose balloon driver reports memory statistics;
+otherwise it stays unknown. On larger installations the full list can make each
+read more expensive. On Proxmox versions that do not report host memory
+separately, host memory can become unknown for such VMs while the option is on;
+turn it off to get the previous value back. Saving reloads the integration.
 
 See [PRODUCT.md](PRODUCT.md) for product scope,
 [DEVELOPMENT.md](DEVELOPMENT.md) for the local development workflow, and
