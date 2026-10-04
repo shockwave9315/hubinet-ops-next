@@ -132,7 +132,13 @@ Status date: 2026-10-04
   limits; there is no PVE-success claim on UNCERTAIN. Optional test-file Ruff
   still reports the same 13 pre-existing diagnostics in upstream-derived
   `test_button.py`; mandatory repository Ruff passes and B adds none.
-- C/D: **NOT STARTED** and outside the current implementation.
+- C/D architecture: **ACCEPTED BY OWNER BEFORE RUNTIME IMPLEMENTATION on
+  2026-10-04**, as one joint stage after owner review and acceptance of A and
+  B; see the accepted contracts for
+  [C](ARCHITECTURE.md#checkpoint-c-full-lxc-skip-action-and-responsive-guest-cards)
+  and
+  [D](ARCHITECTURE.md#checkpoint-d-mini-width-and-optional-vm-guest-memory).
+  Implementation: **IN PROGRESS**.
 - PR #25 Lovelace Resources mechanism remains unchanged.
 
 ## Guided enrollment
@@ -719,13 +725,11 @@ Scan All remains.
 
 ## Next
 
-Owner review and live validation of completed A/B on the existing A/B/C/D
-Draft PR; keep C/D unimplemented. The whole stage uses planned release .21.
-Owner review and live validation remain outstanding; do not merge, tag, or
-create a release. Tag `2026.9.1.16` (main `0409d76`) if still wanted.
+Implement the accepted Checkpoints C and D on the existing A/B/C/D Draft PR.
+The whole stage uses planned release .21. Do not merge, tag, or create a
+release. Tag `2026.9.1.16` (main `0409d76`) if still wanted.
 
 ## Explicitly not started
 
-- Checkpoints C/D, including the frontend "without snapshot" button.
 - Tag of `2026.9.1.16`.
 - Pause and Resume in the VM card, and reading `qmpstatus`.

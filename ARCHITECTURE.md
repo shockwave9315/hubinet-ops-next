@@ -97,6 +97,89 @@ survives an entity rename. Their fresh-validation rejection publishes the
 existing `NOT_STARTED` result and releases the ordinary LXC reservation without
 invalidating package truth or submitting a mutation.
 
+### Checkpoint C: full LXC skip action and responsive guest cards
+
+On 2026-10-04, before runtime implementation, the owner explicitly authorized
+Checkpoints C and D as one joint stage on the existing A/B/C/D branch and
+Draft PR, still release line `2026.9.1.21`. A and B are owner-reviewed and stay
+as implemented; this supersedes their statements that C/D are outside the
+stage. PR #25's Lovelace Resources mechanism remains unchanged.
+
+**One-shot Update without a snapshot, full LXC card only.** The full LXC card's
+package row offers a second action beside the normal one when the shared Easy
+Update view presents a current successful Scan with pending packages. It calls
+the existing `hubinet_ops.easy_update` action with `skip_snapshot: true`,
+`autoremove: false`, and the displayed `expected_scan_attempt`. The normal
+Update action is unchanged: snapshot-required and gated by the native button's
+`snapshot_permission` attribute. The skip action does not need that permission.
+It is absent for VMs, both mini cards, and the standalone Easy Update card,
+disabled while a card request is in flight or `snapshot_create_running` is
+true, and never changes card configuration, the YOLO choice, or any setting.
+There is no saved "always without snapshot" mode and no fallback from a failed
+snapshot to skip. The backend stays the final authority and re-validates every
+request exactly as Checkpoint A defines.
+
+**Confirmation.** The skip action uses the existing arm/confirm mechanism: the
+first tap arms, the second tap within the existing timeout submits. The armed
+target is bound to the device, the action type, the displayed scan attempt,
+and the displayed pending count. A changed device, scan attempt, pending
+state, lost readiness, expiry, card disconnect/remount, or the submission
+itself cancels it, so an arm for an older Scan can never run for a newer one.
+No new confirmation framework, state machine, or store is added.
+
+**Responsive layout inside the card.** All four guest cards keep every
+control, chip, label, tile, select, and bar inside their own `ha-card` at
+narrow widths through CSS only: the existing `container-type: inline-size`,
+container queries, wrapping, `min-width: 0`, and `minmax(0, 1fr)` tracks, with
+later actions moving to the next row. No `ResizeObserver`, resize listener, JS
+width calculation, library, or `overflow: hidden` on the whole card is used.
+Checkpoint B's semantics are preserved: the backend running fact drives the
+spinner and blocks only Create/Restore/Delete; power controls stay independent.
+
+### Checkpoint D: mini width and optional VM guest memory
+
+Accepted by the owner on 2026-10-04 together with Checkpoint C, before runtime
+implementation.
+
+**Mini grid default.** LXC mini, VM mini, and a saved legacy `compact` card
+default to `{ columns: 9, min_columns: 6 }`. This is only the card's own
+default: Home Assistant keeps applying a user's explicit `grid_options`, and no
+dashboard is migrated or rewritten.
+
+**Opt-in full QEMU listing.** The existing per-entry options flow gains one
+boolean, `vm_guest_memory` (default off), alongside the unchanged automatic
+Scan options and reload-on-save behavior; there is no per-VM setting. Off keeps
+the lightweight `qemu.get()` without a `full` parameter. On requests
+`qemu.get(full=1)`: still exactly one listing per online node per refresh under
+the existing one-retry rule, never a request per VM and never
+`/status/current`. No coordinator, poller, timer, interval, or cache is added.
+The owner measured both listings at about 0.492 s on the owner node; that
+evidence accepts the opt-in and does not make it the default.
+
+**Memory semantics.** Off: host memory is the existing `mem` and guest memory
+is unknown. On: host memory is `memhost`; guest memory is published only from
+consistent balloon data of a running VM (positive `max_mem`, numeric finite
+`total_mem` and `free_mem`, `0 <= free <= total`, and `mem == total - free`).
+Incomplete, malformed, or contradictory balloon data makes guest memory
+unknown, never a copied number. Failed guest validation does not make `mem` a
+host value: `mem` is used as host memory only when the payload carries no
+guest-override or full-memory evidence at all.
+
+**Entities.** Two stable VM sensors, `vm_guest_memory` and
+`vm_guest_memory_percentage`, are added through the existing `VM_SENSORS` and
+exist regardless of the option (unknown when off or invalid). The existing
+host memory sensors keep their unique IDs, history, and host meaning; guest
+values are never written to them. Percentages divide by a positive `maxmem`;
+telemetry is not clamped, so host memory may legitimately exceed 100%.
+
+**Cards.** The existing RAM tile is extended, not duplicated: with guest data
+the full VM card shows Guest and Host, each with percentage, amount, and a
+thin bar; VM mini shows both percentages with two thin bars. Without guest
+data only Host is shown as before. The tile's tap/history and its sparkline
+stay the host sensor's; there is no guest sparkline, guest history, new tile,
+or new dashboard section. A current amount derived from the host percentage
+and maximum is presentation only and is never stored as telemetry.
+
 ### Native Lovelace card resources (2026.9.1.20)
 
 On 2026-10-04, before implementation, the owner explicitly decided to replace
