@@ -412,8 +412,8 @@ Scan All remains.
 - The 2026.9.1.18 fallback reproduced the same race when the app started after
   ten seconds: all five cards were defined in the native registry before the
   app installed its polyfill, leaving none visible to Home Assistant.
-- Implementation: **IMPLEMENTED IN THIS DRAFT / OWNER LIVE TESTING PENDING** on
-  `fix/cards-slow-mobile-start`, within the existing frontend
+- Implementation: **MERGED IN PR #24 / RELEASED AS 2026.9.1.19**, within the
+  existing frontend
   delivery. The module waits for `home-assistant` with no timeout fallback;
   the polyfill's native stand-in resolves an already-pending native wait.
   No delivery, card configuration, backend, helper, or protocol change.
@@ -430,7 +430,7 @@ Scan All remains.
   versioned frontend delivery remain consistent.
 - The restarted Docker instance served all four card modules with
   `?v=2026.9.1.19` and HTTP 200; the saved VM and all five picker previews
-  passed the 14-second startup/V2 bridge case again with this draft version.
+  passed the 14-second startup/V2 bridge case again with this version.
 - Runtime validation: official Home Assistant Container **2026.9.4**, frontend
   **20260826.7**, with the integration mounted read-only and one saved VM tile
   opened by fresh Chromium contexts. Unchanged 2026.9.1.18 worked at normal
@@ -445,25 +445,83 @@ Scan All remains.
   All six runtime comparisons met their expected results, with no console or
   page errors. The lab has no Proxmox host: card creation is verified with its
   native choose-device state, not live guest data or power operations.
-- Live confirmation of the correction on owner/tester Android apps:
-  **PENDING**. The runtime lab uses Chromium mobile emulation and HA's actual
+- Live confirmation on the owner's Android app: **EXTERNAL-URL FAILURE
+  PERSISTS ON 2026.9.1.19**. The runtime lab used Chromium mobile emulation and
+  HA's actual
   external-app frontend path, not an Android WebView. The reproduction proves
   the timeout defect, not the tester's exact cause. The isolated container and
   evidence are under ignored `.dev/frontend-lab-2026.9.4`; the standard test
   environment remains pinned to Core 2026.9.1.
 - Release metadata is `2026.9.1.19` in the manifest, integration constant, and
   bootstrap pin. The native extra-module URL and its dependency queries change
-  to `?v=2026.9.1.19` so clients fetch the corrected code. This is a draft test
-  build; no merge, tag, or published release is part of this handoff.
+  to `?v=2026.9.1.19` so clients fetch the corrected code. The owner merged
+  PR #24, tagged the version, and published the release on 2026-10-03.
+
+## Android external-URL card investigation
+
+- Owner report after installing 2026.9.1.19: the Android app uses an external
+  HA URL through Cloudflare Tunnel with client-certificate authentication
+  (mTLS). HA itself works, but the saved VM card still reports
+  `Custom element doesn't exist: hubinet-ops-vm-card` and Hubinet cards are
+  missing from the picker. Connecting the home VPN makes the app switch to
+  a local IP, reload, and display the cards. Desktop and phone browsers work;
+  the owner's browser Cloudflare access uses a login. The owner confirmed
+  that the browser and app use **different domains**. A successful browser
+  request therefore does not establish delivery on the app's domain.
+- The reported app is **2026.6.5-full**, with Android WebView
+  **153.0.8010.36**. App reinstall, token reset, and phone cache clearing have
+  already been tried. None establishes the external failure's cause.
+- Investigation: **IN PROGRESS** on `fix/cards-external-mtls`. No further
+  runtime fix has been implemented, and the slow-start race must not be
+  presented as an explanation of this remaining failure.
+- Isolated HA Container 2026.9.4 lab: a loopback-only HTTPS reverse proxy
+  rejects requests without a valid test client certificate. All four card
+  modules returned HTTP 200 and JavaScript MIME types with the certificate;
+  the saved VM and all five picker previews passed in a browser and HA's
+  V1/V2 external-app frontend paths. The V2 path also passed
+  HTTPS -> local HTTP -> HTTPS in one context. These are Chromium tests with
+  simulated native bridges, not Cloudflare or Android WebView tests.
+- Three controlled lab denials reproduce the missing VM element while HA
+  remains usable: denying the root module or Easy Update logic prevents all
+  five definitions; denying the guest module leaves only Easy Update
+  defined. These injected HTTP 403 responses show a possible failure
+  mechanism, not evidence of a Cloudflare denial on the owner's server.
+- A standalone read-only diagnostic, [frontend-card-probe.html](tools/frontend-card-probe.html),
+  can run in HA's built-in Webpage card with a relative `/local` URL. It reads
+  the actual parent app's element registry, picker types, and existing resource
+  timing entries, and fetches the four card modules through the selected HA
+  origin. It reports HTTP/MIME, redirects, Cloudflare Ray ID when present, and
+  SHA-256 against 2026.9.1.19; it never imports those modules or reads auth
+  storage. [Usage](tools/FRONTEND_CARD_PROBE.md) describes the external/local
+  comparison. This is a manual test artifact, not a production delivery change.
+- All four diagnostic runtime cases passed in the isolated HA 2026.9.4 mTLS
+  lab: healthy registration, a denied root module, a denied guest module, and
+  readable release-matching source with registration deliberately suppressed.
+  The reports distinguish 5/0/1/0 registered cards respectively and preserve
+  the parent registry. Copying the complete JSON was checked in each case;
+  none contained the lab's auth tokens or password. These are Chromium tests
+  with a simulated V2 bridge, not native Android or Cloudflare tests. Actual
+  reports from the owner's external and local origins are still pending.
+- Native Android testing was attempted with the official
+  **2026.6.5-full** APK on an isolated Android 15 emulator. Its bundled
+  WebView is **124.0.6367.219**, so it does not match the owner's WebView 153.
+  The stock emulator renderer repeatedly crashed with SIGTRAP while loading
+  HA's OAuth page over local HTTP. This prevented authenticated card assertions
+  or a native mTLS comparison; it is a lab infrastructure failure, not evidence
+  of the owner's card-loading cause. The emulator was stopped after preserving
+  its userdata and logs. Scripts, private
+  test credentials, certificates, and evidence remain under ignored
+  `.dev/frontend-lab-2026.9.4`; the pinned development environment is unchanged.
 
 ## Next
 
-Validate the 2026.9.1.19 draft on owner/tester Android apps, including the same
-saved dashboard before and after disconnecting the home VPN; check the native
-Add card picker as well. Review and release after live validation. Tag
+Obtain the diagnostic reports from the owner's Android app through its
+external mTLS domain and local IP, then reproduce the observed delivery or
+registration failure. Verify the same saved dashboard and Add card picker
+across the external/local URL transition before publishing a further correction. Tag
 `2026.9.1.16` (main `0409d76`) if still wanted.
 
 ## Explicitly not started
 
-- Tag of `2026.9.1.16`; tag/release of `2026.9.1.19`.
+- Tag of `2026.9.1.16`.
 - Pause and Resume in the VM card, and reading `qmpstatus`.

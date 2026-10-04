@@ -1,0 +1,166 @@
+<!doctype html>
+<html lang="pl">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Hubinet — test ładowania kart</title>
+<style>
+  :root { color-scheme: light dark; font: 15px/1.5 system-ui, sans-serif; }
+  body { margin: 0; padding: 16px; }
+  h1 { font-size: 20px; margin: 0 0 8px; }
+  p { margin: 8px 0; }
+  button { font: inherit; padding: 8px 12px; margin: 4px 8px 8px 0; cursor: pointer; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th, td { text-align: left; padding: 8px 4px; border-bottom: 1px solid #8885; overflow-wrap: anywhere; }
+  .good { color: light-dark(#146d34, #7dda99); }
+  .bad { color: light-dark(#a32222, #ff9a9a); }
+  pre { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 12px; }
+  textarea { width: 100%; box-sizing: border-box; min-height: 180px; }
+  #summary { font-weight: 600; }
+</style>
+<h1>Hubinet — test ładowania kart</h1>
+<p>Test dla wersji 2026.9.1.19. Otwórz tę stronę jako kartę „Strona internetowa”
+  pod adresem <code>/local/hubinet-card-probe.html</code>.</p>
+<p>Test odczytuje stan kart i pobiera cztery pliki JavaScript. Nie uruchamia ich,
+  nie zmienia konfiguracji i nie odczytuje tokenów ani certyfikatów.</p>
+<button id="run" type="button">Powtórz test</button>
+<button id="copy" type="button" disabled>Skopiuj wynik</button>
+<p id="summary" role="status">Sprawdzanie…</p>
+<div id="metadata"></div>
+<table>
+  <thead><tr><th>Plik</th><th>Odpowiedź</th><th>Treść względem .19</th></tr></thead>
+  <tbody id="files"></tbody>
+</table>
+<p id="note"></p>
+<details><summary>Pełny wynik</summary><pre id="report"></pre></details>
+<textarea id="fallback" aria-label="Wynik do skopiowania" hidden readonly></textarea>
+<script>
+"use strict";
+// Standalone test artifact, outside the integration's production frontend.
+// All resource requests use this document's own HA origin. Existing WebView
+// TLS authentication applies; no credentials or auth headers are copied.
+const release = "2026.9.1.19";
+const files = {
+  "hubinet-ops-cards.js": "79ce2b362be9556f6b73e4818f291594a0337c20d2567cf7e7ce86ff7e2544f7",
+  "easy-update-logic.js": "8a63697397037ee966857c5f522a61df72c87b0f7ec3c153db470fa521eee84f",
+  "hubinet-ops-guest-cards.js": "feab89d57ba463ff1ae0377e279a05c635d0a4e46af5825420dc3af0ffc6f069",
+  "guest-card-logic.js": "e833538e464cd7f2479720b97efaeaba4e9a5763db869ab5f0cff69762e03285",
+};
+const types = ["hubinet-ops-easy-update-card", "hubinet-ops-lxc-card",
+  "hubinet-ops-lxc-mini-card", "hubinet-ops-vm-card", "hubinet-ops-vm-mini-card"];
+const byId = (id) => document.getElementById(id);
+let report;
+
+function parentState() {
+  if (parent === window) return { available: false, reason: "Otwórz test w karcie HA, aby sprawdzić rejestrację elementów." };
+  try {
+    const ha = parent.document.querySelector("home-assistant");
+    return {
+      available: true,
+      origin: parent.location.origin,
+      coreVersion: ha?.hass?.config?.version ?? null,
+      hassPresent: Boolean(ha?.hass),
+      integrationLoaded: ha?.hass?.config?.components?.includes("hubinet_ops") ?? null,
+      homeAssistantDefined: Boolean(parent.customElements.get("home-assistant")),
+      definitions: Object.fromEntries(types.map((type) => [type, Boolean(parent.customElements.get(type))])),
+      pickerTypes: (parent.customCards || []).filter((card) => types.includes(card.type)).map((card) => card.type),
+      resourceRequestsBeforeProbe: parent.performance.getEntriesByType("resource")
+        .filter((entry) => new URL(entry.name).pathname.startsWith("/hubinet_ops_static/"))
+        .map((entry) => ({
+          path: new URL(entry.name).pathname,
+          version: new URL(entry.name).searchParams.get("v"),
+          initiator: entry.initiatorType,
+          responseStatus: entry.responseStatus ?? null,
+          durationMs: Math.round(entry.duration),
+        })),
+    };
+  } catch (error) {
+    return { available: false, reason: String(error.message) };
+  }
+}
+
+async function checkFile(name) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 12000);
+  try {
+    const response = await fetch(`/hubinet_ops_static/${name}?v=${release}`, {
+      credentials: "same-origin", cache: "no-store", signal: controller.signal,
+    });
+    const bytes = await response.arrayBuffer();
+    const text = new TextDecoder().decode(bytes);
+    const mime = response.headers.get("content-type") || "";
+    const sha256 = crypto.subtle ? [...new Uint8Array(await crypto.subtle.digest("SHA-256", bytes))]
+      .map((byte) => byte.toString(16).padStart(2, "0")).join("") : null;
+    const result = {
+      file: name, status: response.status, contentType: mime,
+      javascript: /(?:java|ecma)script/i.test(mime),
+      bytes: bytes.byteLength, sha256, matchesRelease19: sha256 ? sha256 === files[name] : null,
+      redirected: response.redirected,
+      finalOrigin: new URL(response.url).origin, finalPath: new URL(response.url).pathname,
+      cfRay: response.headers.get("cf-ray"),
+      cfCacheStatus: response.headers.get("cf-cache-status"),
+    };
+    if (name === "hubinet-ops-cards.js" && result.javascript && response.ok) {
+      result.waitsForHomeAssistant = /await\s+customElements\.whenDefined\(["']home-assistant["']\)/.test(text);
+      result.timeoutFallback = /Promise\.race/.test(text.slice(0, 3000));
+    }
+    return result;
+  } catch (error) {
+    return { file: name, error: error.name === "AbortError" ? "Brak odpowiedzi w ciągu 12 sekund" : String(error.message) };
+  } finally { clearTimeout(timeout); }
+}
+
+async function run() {
+  byId("run").disabled = true;
+  byId("copy").disabled = true;
+  byId("summary").textContent = "Sprawdzanie…";
+  byId("summary").className = "";
+  byId("files").replaceChildren();
+  const parentBefore = parentState();
+  const resources = await Promise.all(Object.keys(files).map(checkFile));
+  const parentAfter = parentState();
+  report = {
+    probeVersion: 1, referenceRelease: release, time: new Date().toISOString(),
+    origin: location.origin, userAgent: navigator.userAgent,
+    parentBefore, resources, parentAfter,
+  };
+  const failures = resources.filter((resource) => resource.error || resource.status !== 200 || !resource.javascript);
+  const count = parentAfter.available ? Object.values(parentAfter.definitions).filter(Boolean).length : null;
+  byId("summary").textContent = `Pliki: ${resources.length - failures.length}/4 poprawnych odpowiedzi.`
+    + (count !== null ? ` Zarejestrowane karty: ${count}/5.` : "");
+  byId("summary").className = failures.length || (count !== null && count !== 5) ? "bad" : "good";
+  byId("metadata").textContent = `Adres: ${location.origin}`
+    + (parentBefore.coreVersion ? ` · HA ${parentBefore.coreVersion}` : "");
+  for (const resource of resources) {
+    const row = document.createElement("tr");
+    const values = [resource.file,
+      resource.error || `HTTP ${resource.status} · ${resource.contentType || "brak typu"}`,
+      resource.matchesRelease19 === true ? "zgodna" : resource.matchesRelease19 === false ? "inna" : "nieporównana"];
+    for (const value of values) {
+      const cell = document.createElement("td"); cell.textContent = value; row.append(cell);
+    }
+    row.className = resource.error || resource.status !== 200 || !resource.javascript ? "bad" : "";
+    byId("files").append(row);
+  }
+  byId("note").textContent = parentBefore.available
+    ? "Rejestracja została odczytana przed pobraniem plików przez test. Inna suma pliku wymaga sprawdzenia treści lub zmian po drodze; sama suma nie ustala przyczyny."
+    : parentBefore.reason;
+  byId("report").textContent = JSON.stringify(report, null, 2);
+  byId("run").disabled = false;
+  byId("copy").disabled = false;
+}
+byId("run").addEventListener("click", run);
+byId("copy").addEventListener("click", async () => {
+  const text = JSON.stringify(report, null, 2);
+  try {
+    await navigator.clipboard.writeText(text);
+    byId("copy").textContent = "Skopiowano";
+  } catch {
+    byId("fallback").hidden = false;
+    byId("fallback").value = text;
+    byId("fallback").focus();
+    byId("fallback").select();
+  }
+});
+run();
+</script>
+</html>
