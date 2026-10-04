@@ -4,6 +4,7 @@ import { test } from "node:test";
 
 import {
   CONFIRM,
+  SKIP_UPDATE,
   confirmTarget,
   deriveGuestView,
   firstGuestDevice,
@@ -217,6 +218,7 @@ test("destructive actions need a second tap, Start and Create do not", () => {
     "restart",
     "restore",
     "shutdown",
+    "skip_update",
     "stop",
   ]);
   for (const action of ["start", "create"]) {
@@ -405,3 +407,174 @@ for (const kind of ["lxc", "vm"]) {
     assert.equal(derive().actions.start.available, true);
   });
 }
+
+// --- Checkpoint C: Update without a snapshot --------------------------------
+
+const SCAN_A = "2026-10-04T04:00:00+00:00";
+const SCAN_B = "2026-10-04T05:00:00+00:00";
+const offered = (attempt = SCAN_A, pending = 7, device = DEVICE) => ({
+  pending,
+  data: { device_id: device, autoremove: false, skip_snapshot: true, expected_scan_attempt: attempt },
+});
+const skipView = (packageView, states = baseStates(), kind = "lxc") =>
+  deriveGuestView({
+    states,
+    entities: ENTITIES,
+    devices: DEVICES,
+    config: { device_id: DEVICE },
+    lang: "pl",
+    packageView,
+    kind,
+  });
+
+test("skip exists only when the package view offers it, never for a VM", () => {
+  assert.equal(view().skipUpdate, null);
+  assert.equal(skipView({ action: { kind: "easy_update" } }).skipUpdate, null);
+  const v = skipView({ skipSnapshot: offered() });
+  assert.deepEqual(v.skipUpdate, { ...offered(), available: true });
+  assert.equal(v.actions.skip_update, undefined, "not an entity button");
+  // A VM never has a package view; even a forged one is ignored.
+  assert.equal(vmView().skipUpdate, null);
+  const forged = deriveGuestView({
+    states: vmStates(),
+    entities: VM_ENTITIES,
+    devices: {},
+    config: { device_id: VM },
+    lang: "pl",
+    packageView: { skipSnapshot: offered(SCAN_A, 7, VM) },
+    kind: "vm",
+  });
+  assert.equal(forged.skipUpdate, null);
+  assert.equal(confirmTarget(SKIP_UPDATE, forged, VM), null);
+});
+
+test("a running snapshot Create blocks skip and its confirmation", () => {
+  const states = baseStates();
+  states["button.k"].attributes.snapshot_create_running = true;
+  const v = skipView({ skipSnapshot: offered() }, states);
+  assert.equal(v.skipUpdate.available, false);
+  assert.equal(confirmTarget(SKIP_UPDATE, v, DEVICE), null);
+  // Power controls stay independent of Create.
+  assert.equal(v.actions.stop.available, true);
+  assert.equal(v.actions.restart.available, true);
+});
+
+test("the skip confirmation is the device, the action, the scan and the count", () => {
+  const key = (packageView, device = DEVICE) =>
+    confirmTarget(SKIP_UPDATE, skipView(packageView), device);
+  const a = key({ skipSnapshot: offered() });
+  assert.equal(a, JSON.stringify([DEVICE, "skip_snapshot", SCAN_A, 7]));
+  assert.notEqual(key({ skipSnapshot: offered(SCAN_B) }), a, "another scan attempt");
+  assert.notEqual(key({ skipSnapshot: offered(SCAN_A, 8) }), a, "another pending count");
+  assert.notEqual(key({ skipSnapshot: offered() }, "other-device"), a, "another device");
+  assert.equal(key({ action: { kind: "scan" } }), null, "readiness lost");
+  assert.equal(key(null), null);
+  assert.equal(key({ skipSnapshot: offered() }, ""), null);
+  // It never equals a power or snapshot confirmation of the same device.
+  const states = baseStates();
+  states["select.n"].attributes.selected_snapshot = "manual";
+  const v = skipView({ skipSnapshot: offered() }, states);
+  for (const action of ["stop", "restart", "restore", "delete"]) {
+    assert.notEqual(confirmTarget(action, v, DEVICE), confirmTarget(SKIP_UPDATE, v, DEVICE));
+  }
+});
+
+// --- Checkpoint D: host-only and dual RAM ------------------------------------
+
+const VM_RAM_ENTITIES = {
+  ...VM_ENTITIES,
+  "sensor.max": vmEntry("sensor.max", "vm_max_memory"),
+  "sensor.gp": vmEntry("sensor.gp", "vm_guest_memory_percentage"),
+};
+const ram = ({ guest, host = "99", status = "running", lang = "pl", extra = {}, entities = VM_RAM_ENTITIES } = {}) => {
+  const states = {
+    ...vmStates(status),
+    "sensor.v3": { state: host, attributes: { unit_of_measurement: "%" } },
+    "sensor.max": { state: "6", attributes: { unit_of_measurement: "GiB" } },
+    "sensor.gp": { state: guest ?? "unknown", attributes: { unit_of_measurement: "%" } },
+    ...extra,
+  };
+  const v = deriveGuestView({
+    states,
+    entities,
+    devices: {},
+    config: { device_id: VM },
+    lang,
+    packageView: null,
+    kind: "vm",
+  });
+  return v.stats.find((stat) => stat.key === "ram");
+};
+
+test("host-only RAM: guest off, unknown or invalid shows only Host", () => {
+  for (const guest of [undefined, "unknown", "unavailable", "", "abc", "-1", "NaN", "Infinity"]) {
+    const tile = ram({ guest });
+    assert.equal(tile.lines, undefined, `guest ${guest}`);
+    assert.equal(tile.value, "99%");
+    assert.equal(tile.pct, 99);
+    assert.equal(tile.detail, "5,9 GiB z 6 GiB");
+    assert.equal(tile.entity, "sensor.v3");
+    assert.equal(tile.history, "sensor.v3");
+  }
+  // No guest sensor in the registry at all (older data, disabled sensor).
+  assert.equal(ram({ guest: "94.33", entities: VM_ENTITIES }).lines, undefined);
+  // A stopped VM shows no guest value even if the sensor still has one.
+  assert.equal(ram({ guest: "94.33", status: "stopped" }).lines, undefined);
+});
+
+test("dual RAM: Guest and Host with percent and amount; history stays Host", () => {
+  const tile = ram({ guest: "94.33" });
+  assert.deepEqual(tile.lines, [
+    { key: "guest", label: "Gość", value: "94%", detail: "5,66 GiB", pct: 94.33 },
+    { key: "host", label: "Host", value: "99%", detail: "5,94 GiB", pct: 99 },
+  ]);
+  assert.equal(tile.entity, "sensor.v3");
+  assert.equal(tile.history, "sensor.v3");
+  assert.equal(tile.value, "99%", "the tile itself stays the host value");
+  const en = ram({ guest: "94.33", lang: "en" });
+  assert.deepEqual(en.lines.map((line) => [line.label, line.detail]), [
+    ["Guest", "5.66 GiB"],
+    ["Host", "5.94 GiB"],
+  ]);
+});
+
+test("RAM values are never clamped; zero is a value", () => {
+  const over = ram({ guest: "0", host: "104.2" });
+  assert.deepEqual(over.lines.map((line) => [line.value, line.pct, line.detail]), [
+    ["0%", 0, "0 GiB"],
+    ["104%", 104.2, "6,25 GiB"],
+  ]);
+  assert.equal(over.pct, 104.2);
+  // Guest valid while Host is unknown: Host shows no number, never the guest's.
+  const hostless = ram({ guest: "94.33", host: "unknown" });
+  assert.deepEqual(hostless.lines[1], { key: "host", label: "Host", value: "—", detail: "", pct: null });
+  assert.equal(hostless.lines[0].value, "94%");
+});
+
+test("enabled bytes sensors and their units are shown as they are", () => {
+  const entities = {
+    ...VM_RAM_ENTITIES,
+    "sensor.hb": vmEntry("sensor.hb", "vm_memory"),
+    "sensor.gb": vmEntry("sensor.gb", "vm_guest_memory"),
+  };
+  const tile = ram({
+    guest: "94.33",
+    entities,
+    extra: {
+      "sensor.hb": { state: "6082.5", attributes: { unit_of_measurement: "MiB" } },
+      "sensor.gb": { state: "5795.84", attributes: { unit_of_measurement: "MiB" } },
+    },
+  });
+  assert.deepEqual(tile.lines.map((line) => line.detail), ["5795,84 MiB", "6082,5 MiB"]);
+  // Without a usable maximum nothing is derived.
+  const noMax = ram({ guest: "94.33", extra: { "sensor.max": { state: "unknown", attributes: {} } } });
+  assert.deepEqual(noMax.lines.map((line) => line.detail), ["", ""]);
+  assert.equal(noMax.detail, "");
+});
+
+test("an LXC RAM tile is unchanged: no lines and no derived amount", () => {
+  const tile = view().stats.find((stat) => stat.key === "ram");
+  assert.equal(tile.lines, undefined);
+  assert.equal(tile.detail, "8 GiB");
+  assert.equal(tile.entity, "sensor.c");
+});

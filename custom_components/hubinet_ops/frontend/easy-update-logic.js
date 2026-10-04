@@ -235,8 +235,18 @@ const view = (tone, icon, primary, secondary, action = { kind: "none" }) => ({
 const DETAILS = { kind: "details" };
 
 // Derive the compact card presentation from existing backend facts only.
-// input: { states, entities, devices, config, now, lang }
-export const deriveView = ({ states, entities, devices, config, now, lang }) => {
+// input: { states, entities, devices, config, now, lang, offerSkipSnapshot }
+// Only the full LXC card passes offerSkipSnapshot; every other caller gets no
+// skipSnapshot in the view.
+export const deriveView = ({
+  states,
+  entities,
+  devices,
+  config,
+  now,
+  lang,
+  offerSkipSnapshot = false,
+}) => {
   const s = strings(lang);
   const deviceId = config && config.device_id;
   if (!deviceId) {
@@ -356,16 +366,32 @@ export const deriveView = ({ states, entities, devices, config, now, lang }) => 
     if (Number.isFinite(unused) && unused > 0) {
       parts.push(fill(s.unused, { count: unused }));
     }
+    // One explicit Update of exactly this scan without a snapshot. It needs
+    // the package capability but no snapshot permission, and never carries
+    // the saved YOLO choice.
+    const skipSnapshot =
+      offerSkipSnapshot && ids.updater && scanAt !== null
+        ? {
+            pending: count,
+            data: {
+              device_id: deviceId,
+              autoremove: false,
+              skip_snapshot: true,
+              expected_scan_attempt: attr("pending", "last_attempt"),
+            },
+          }
+        : null;
+    const offer = (v) => result(skipSnapshot ? { ...v, skipSnapshot } : v);
     if (!ids.updater || attr("updater", "snapshot_permission") !== true) {
       // Button existence alone cannot authorize snapshot-required Update.
-      return result(
+      return offer(
         view("amber", "mdi:package-up", formatUpdates(count, lang), s.update_unavailable, DETAILS)
       );
     }
     if (config.autoremove) {
       parts.push(s.autoremove);
     }
-    return result(
+    return offer(
       view("amber", "mdi:package-up", formatUpdates(count, lang), parts.join(" · "), {
         kind: "easy_update",
         data: {

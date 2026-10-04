@@ -39,6 +39,8 @@ export const VM_ROLES = {
   memPct: ["sensor", "vm_memory_percentage"],
   memMax: ["sensor", "vm_max_memory"],
   mem: ["sensor", "vm_memory"],
+  guestMemPct: ["sensor", "vm_guest_memory_percentage"],
+  guestMem: ["sensor", "vm_guest_memory"],
   uptime: ["sensor", "vm_uptime"],
   disk: ["sensor", "vm_disk"],
   diskMax: ["sensor", "vm_max_disk"],
@@ -58,6 +60,9 @@ export const VM_ROLES = {
 const ROLES = { lxc: LXC_ROLES, vm: VM_ROLES };
 const kindOf = (kind) => (kind === "vm" ? "vm" : "lxc");
 
+// One Update without a snapshot, offered by the full LXC card only.
+export const SKIP_UPDATE = "skip_update";
+
 // Actions that need a second tap within CONFIRM_MS before they run.
 export const CONFIRM = new Set([
   "shutdown",
@@ -67,6 +72,7 @@ export const CONFIRM = new Set([
   "hibernate",
   "restore",
   "delete",
+  SKIP_UPDATE,
 ]);
 export const CONFIRM_MS = 4000;
 
@@ -88,6 +94,8 @@ const STRINGS = {
     uptime: "uptime {value}",
     cpu: "CPU",
     ram: "RAM",
+    guest: "Guest",
+    host: "Host",
     disk: "Disk",
     net: "Network",
     of: "{used} of {total}",
@@ -97,6 +105,8 @@ const STRINGS = {
     no_snapshots: "No snapshots",
     choose_snapshot: "Choose a snapshot",
     update: "Update",
+    skip_update: "No snapshot",
+    skip_update_hint: "Update once without a safety snapshot",
     scan: "Scan",
     details: "Details",
     create: "Create",
@@ -142,6 +152,8 @@ const STRINGS = {
     uptime: "działa {value}",
     cpu: "CPU",
     ram: "RAM",
+    guest: "Gość",
+    host: "Host",
     disk: "Dysk",
     net: "Sieć",
     of: "{used} z {total}",
@@ -151,6 +163,8 @@ const STRINGS = {
     no_snapshots: "Brak migawek",
     choose_snapshot: "Wybierz migawkę",
     update: "Aktualizuj",
+    skip_update: "Bez migawki",
+    skip_update_hint: "Jednorazowa aktualizacja bez migawki bezpieczeństwa",
     scan: "Skanuj",
     details: "Szczegóły",
     create: "Utwórz",
@@ -258,14 +272,22 @@ const decimals = (value, lang) =>
     maximumFractionDigits: value < 10 ? 1 : 0,
   }).format(value);
 
+const unitOf = (state) => state && state.attributes && state.attributes.unit_of_measurement;
+
 const withUnit = (state, lang) => {
   const value = number(state);
   if (value === null) {
     return null;
   }
-  const unit = state.attributes && state.attributes.unit_of_measurement;
+  const unit = unitOf(state);
   return `${decimals(value, lang)}${unit ? ` ${unit}` : ""}`;
 };
+
+// Guest and Host amounts are often close together: two decimals tell them apart.
+const precise = (value, unit, lang) =>
+  `${new Intl.NumberFormat(String(lang).startsWith("pl") ? "pl" : "en", {
+    maximumFractionDigits: 2,
+  }).format(value)}${unit ? ` ${unit}` : ""}`;
 
 export const formatDuration = (state, lang) => {
   const value = number(state);
@@ -345,7 +367,29 @@ export const deriveGuestView = ({
   });
   const memPct = number(st("memPct"));
   const memMax = withUnit(st("memMax"), lang);
-  const mem = withUnit(st("mem"), lang);
+  // Used amount of a VM whose bytes sensor is disabled: derived for display
+  // only from the unrounded percentage and the maximum, never stored.
+  const used = (role, pct, format) => {
+    const direct = number(st(role));
+    if (direct !== null) {
+      return format(direct, unitOf(st(role)));
+    }
+    const max = number(st("memMax"));
+    return vm && pct !== null && max !== null && max > 0
+      ? format((pct / 100) * max, unitOf(st("memMax")))
+      : null;
+  };
+  const mem = used("mem", memPct, (value, unit) => `${decimals(value, lang)}${unit ? ` ${unit}` : ""}`);
+  // Guest memory is shown only for a running VM with a valid guest value;
+  // otherwise the tile stays host-only.
+  const guestPct = vm && running ? number(st("guestMemPct")) : null;
+  const ramLine = (key, role, pct) => ({
+    key,
+    label: s[key],
+    value: pct !== null ? `${decimals(pct, lang)}%` : "—",
+    detail: used(role, pct, (value, unit) => precise(value, unit, lang)) || "",
+    pct,
+  });
   stats.push({
     key: "ram",
     label: s.ram,
@@ -353,6 +397,10 @@ export const deriveGuestView = ({
     detail:
       running && memMax ? (mem ? fill(s.of, { used: mem, total: memMax }) : memMax) : "",
     pct: running ? memPct : null,
+    ...(guestPct !== null && guestPct >= 0
+      ? { lines: [ramLine("guest", "guestMem", guestPct), ramLine("host", "mem", memPct)] }
+      : {}),
+    // The tile's history and sparkline always belong to the host sensor.
     history: ids.memPct,
     entity: ids.memPct,
     tone: "purple",
@@ -410,6 +458,9 @@ export const deriveGuestView = ({
     ...button(role),
     available: button(role).available && running,
   });
+  // Present only when the full LXC card asked the shared Easy Update view for
+  // it; a running native snapshot Create blocks it like Restore and Delete.
+  const offered = !vm && packageView ? packageView.skipSnapshot : null;
   return {
     kind: vm ? "vm" : "lxc",
     name,
@@ -420,6 +471,7 @@ export const deriveGuestView = ({
     uptime: running ? fill(s.uptime, { value: formatDuration(st("uptime"), lang) }) : "",
     stats,
     package: packageView || null,
+    skipUpdate: offered ? { ...offered, available: !noData && !snapshotCreateRunning } : null,
     snapshots: ids.snapshot
       ? {
           entity_id: ids.snapshot,
@@ -463,9 +515,17 @@ export const historyPoints = (rows, points = 48) => {
 };
 
 // The exact operation a confirmation tap stands for: a power action targets this
-// guest's button, Restore and Delete the snapshot selected right now. A
-// second tap confirms only when this is unchanged; null means not armable.
+// guest's button, Restore and Delete the snapshot selected right now, and the
+// Update without a snapshot exactly the displayed scan attempt and pending
+// count of this device. A second tap confirms only when this is unchanged;
+// null means not armable.
 export const confirmTarget = (action, view, deviceId) => {
+  if (action === SKIP_UPDATE) {
+    const skip = view && view.skipUpdate;
+    return skip && skip.available && deviceId
+      ? JSON.stringify([deviceId, "skip_snapshot", skip.data.expected_scan_attempt, skip.pending])
+      : null;
+  }
   const info = view && view.actions && view.actions[action];
   if (!CONFIRM.has(action) || !info || !info.entity_id || !deviceId) {
     return null;

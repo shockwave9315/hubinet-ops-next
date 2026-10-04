@@ -488,7 +488,11 @@ def test_guest_card_roles_match_integration_translation_keys() -> None:
     lxc = _role_table(logic, "LXC_ROLES")
     vm = _role_table(logic, "VM_ROLES")
     assert len(lxc) == 16
-    assert len(vm) == 19
+    assert len(vm) == 21
+    assert {
+        ("sensor", "vm_guest_memory"),
+        ("sensor", "vm_guest_memory_percentage"),
+    } <= vm
     assert lxc <= {
         *(("sensor", d.translation_key) for d in CONTAINER_SENSORS),
         *(("button", d.translation_key) for d in CONTAINER_BUTTONS),

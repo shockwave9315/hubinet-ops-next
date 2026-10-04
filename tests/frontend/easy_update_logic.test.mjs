@@ -1,5 +1,6 @@
 // Run with: node --test tests/frontend
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { test } from "node:test";
 
 import {
@@ -137,7 +138,8 @@ test("an unapproved native button still permits Easy Update with snapshot permis
     states["button.renamed_g"].state = "unavailable";
   });
   assert.equal(result.action.kind, "easy_update");
-  assert.equal(result.action.data.skip_snapshot, undefined, "no frontend skip path in A");
+  assert.equal(result.action.data.skip_snapshot, undefined, "the normal action never skips");
+  assert.equal(result.skipSnapshot, undefined, "the standalone view offers no skip");
 });
 
 test("amber: updates available start Easy Update with the displayed scan", () => {
@@ -327,4 +329,115 @@ test("orange: missing Proxmox data is not reported as a stopped LXC", () => {
     s["sensor.renamed_e"].state = "suspended";
   });
   assert.equal(suspended.primary, "LXC nie działa");
+});
+
+// --- Checkpoint C: one Update without a snapshot, on request only -----------
+
+const offer = (mutate = () => {}, config = {}) => {
+  const states = baseStates();
+  mutate(states);
+  return deriveView({
+    states,
+    entities: ENTITIES,
+    devices: DEVICES,
+    config: { device_id: DEVICE, autoremove: false, ...config },
+    now: NOW,
+    lang: "pl",
+    offerSkipSnapshot: true,
+  });
+};
+
+test("standalone Easy Update never gets the skip action in any state", () => {
+  const mutations = [
+    () => {},
+    (st) => (st["button.renamed_g"].attributes.snapshot_permission = false),
+    (st) => (st["sensor.renamed_a"].state = "0"),
+    (st) => (st["sensor.renamed_a"].attributes.scan_status = "failed"),
+    (st) => (st["sensor.renamed_b"].state = "running"),
+  ];
+  for (const mutate of mutations) {
+    for (const config of [{}, { autoremove: true }]) {
+      const result = render(mutate, config);
+      assert.equal("skipSnapshot" in result, false);
+      assert.doesNotMatch(JSON.stringify(result), /skip/);
+    }
+  }
+  // The standalone card module neither asks for nor renders it.
+  const card = readFileSync(
+    new URL("../../custom_components/hubinet_ops/frontend/hubinet-ops-cards.js", import.meta.url),
+    "utf8"
+  );
+  assert.doesNotMatch(card, /skip/i);
+});
+
+test("a requested skip targets exactly the displayed scan without YOLO", () => {
+  for (const autoremove of [false, true]) {
+    const result = offer(undefined, { autoremove });
+    assert.deepEqual(result.skipSnapshot, {
+      pending: 7,
+      data: {
+        device_id: DEVICE,
+        autoremove: false,
+        skip_snapshot: true,
+        expected_scan_attempt: SCAN_AT,
+      },
+    });
+    // The normal action is unchanged and keeps the saved YOLO choice.
+    assert.deepEqual(result.action, {
+      kind: "easy_update",
+      data: { device_id: DEVICE, autoremove, expected_scan_attempt: SCAN_AT },
+    });
+  }
+});
+
+for (const permission of [false, undefined, null, "true", 1]) {
+  test(`skip needs no snapshot permission; normal Update still does (${permission})`, () => {
+    const result = offer((states) => {
+      states["button.renamed_g"].attributes.snapshot_permission = permission;
+    });
+    assert.deepEqual(result.action, { kind: "details" });
+    assert.equal(result.secondary, "Aktualizacja niedostępna dla tego LXC");
+    assert.equal(result.skipSnapshot.data.skip_snapshot, true);
+    assert.equal(result.skipSnapshot.data.expected_scan_attempt, SCAN_AT);
+  });
+}
+
+test("skip is offered only for a current successful scan with pending packages", () => {
+  const absent = {
+    "no pending packages": (st) => (st["sensor.renamed_a"].state = "0"),
+    "unknown count": (st) => (st["sensor.renamed_a"].state = "unknown"),
+    "failed scan": (st) => (st["sensor.renamed_a"].attributes.scan_status = "failed"),
+    "no scan yet": (st) => (st["sensor.renamed_a"].attributes.scan_status = "never"),
+    "scan running": (st) => (st["sensor.renamed_a"].attributes.scan_status = "running"),
+    "no scan attempt": (st) => delete st["sensor.renamed_a"].attributes.last_attempt,
+    "unparsable scan attempt": (st) => (st["sensor.renamed_a"].attributes.last_attempt = "x"),
+    "update running": (st) => (st["sensor.renamed_b"].state = "running"),
+    "autoremove running": (st) => (st["sensor.renamed_c"].attributes.autoremove_status = "running"),
+    "health running": (st) => (st["sensor.renamed_d"].attributes.check_status = "running"),
+    "failed update newer than the scan": (st) => {
+      st["sensor.renamed_b"] = {
+        state: "failed",
+        attributes: { last_attempt: new Date(2026, 9, 3, 5, 0).toISOString() },
+      };
+    },
+    "failed health": (st) => (st["sensor.renamed_d"].state = "failed"),
+    "stopped LXC": (st) => (st["sensor.renamed_e"].state = "stopped"),
+    "no Proxmox data": (st) => (st["sensor.renamed_e"].state = "unavailable"),
+    "pending unavailable": (st) => (st["sensor.renamed_a"].state = "unavailable"),
+  };
+  for (const [name, mutate] of Object.entries(absent)) {
+    assert.equal("skipSnapshot" in offer(mutate), false, name);
+  }
+  // Package capability is the Update button; without it there is no skip.
+  const { "button.renamed_g": _removed, ...entities } = ENTITIES;
+  const result = deriveView({
+    states: baseStates(),
+    entities,
+    devices: DEVICES,
+    config: { device_id: DEVICE },
+    now: NOW,
+    lang: "pl",
+    offerSkipSnapshot: true,
+  });
+  assert.equal("skipSnapshot" in result, false);
 });
