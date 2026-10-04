@@ -463,8 +463,9 @@ Scan All remains.
   2026-10-04**, before implementation. The owner explicitly requested replacing
   `add_extra_js_url` with native Lovelace Resources of type `module`, loaded
   when the dashboard starts. See [ARCHITECTURE.md](ARCHITECTURE.md).
-  Implementation: **IMPLEMENTED / READY FOR DRAFT REVIEW**; release target
+  Implementation: **IMPLEMENTED / DRAFT PR #25**; release target
   `2026.9.1.20`. Pre-implementation documentation checkpoint: `fa2dd32`.
+  Draft: [PR #25](https://github.com/shockwave9315/hubinet-ops-next/pull/25).
 - Owner report after installing 2026.9.1.19: the Android app uses an external
   HA URL through Cloudflare Tunnel with client-certificate authentication
   (mTLS). HA itself works, but the saved VM card still reports
@@ -588,7 +589,7 @@ Scan All remains.
 ## 2026.9.1.20 native Lovelace resource delivery
 
 - Architecture: **ACCEPTED BY OWNER BEFORE IMPLEMENTATION on 2026-10-04**.
-  Implementation: **READY FOR DRAFT REVIEW**, on `fix/cards-external-mtls`.
+  Implementation: **IN DRAFT PR #25**, on `fix/cards-external-mtls`.
   Checkpoint: `fa2dd32`.
 - Setup serves the existing static directory and uses HA's native resource
   collection to create/update one relative versioned `module` entry. Old
@@ -620,7 +621,8 @@ Scan All remains.
 
 ## Next
 
-Review the owner-accepted native Lovelace resource delivery and have the owner
+Review [PR #25](https://github.com/shockwave9315/hubinet-ops-next/pull/25) with
+the owner-accepted native Lovelace resource delivery and have the owner
 validate 2026.9.1.20 in the external Android app without the diagnostic's
 force-load button. The missing HTML import and native resource recovery are
 verified in the local HA/mTLS lab; live Android/Cloudflare confirmation remains
