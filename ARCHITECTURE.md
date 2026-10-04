@@ -31,8 +31,8 @@ Without the frontend, HTTP, or Lovelace, delivery is skipped and the integration
 still operates. Registration errors are logged without disabling native PVE
 or package functionality. The resource is global; the static directory is
 served once per HA start and resource registration is idempotent at integration
-and entry setup. It is not removed on a Proxmox entry unload. In YAML resource mode,
-the operator uses the normal native resource declaration; the integration
+and entry setup. It is not removed on a Proxmox entry unload. In YAML resource
+mode, the operator uses the normal native resource declaration; the integration
 does not rewrite YAML or add an in-memory resource overlay. A frontend reload
 is required after installing or updating. The current readiness guard and
 five card implementations are preserved.
@@ -47,7 +47,8 @@ integration-owned relative module path through the native storage collection.
 It rechecks host presence after asynchronous collection loading and before
 deletions. Unload/reload never invokes cleanup; entry setup restores the one
 resource if a host is added again in the same HA runtime, without registering
-the HTTP route twice. YAML resource declarations remain operator-owned.
+the HTTP route twice. YAML resource declarations remain operator-owned. The P3
+pre-implementation documentation checkpoint is commit `b1f0a42`.
 
 This guarantee requires integration code to be available when the last entry
 is removed. HACS 2.0.5's uninstall removes the files and refreshes the custom

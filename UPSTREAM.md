@@ -97,8 +97,12 @@ sensors, permissions, and native PVE behavior are unchanged.
 
 Release 2026.9.1.20 (owner decision on 2026-10-04) replaces the fork-owned
 frontend helper's `frontend.add_extra_js_url` call with Home Assistant's native
-Lovelace resource collection. The existing setup hook is unchanged. The
-manifest also orders after `lovelace` when configured. No upstream frontend,
+Lovelace resource collection. The existing integration setup hook is retained;
+entry setup also invokes its idempotent registration so the resource returns
+when a host is re-added after last-host removal. A supported
+`async_remove_entry` hook delegates last-host resource cleanup to the same
+fork-owned frontend helper; `async_unload_entry` does not remove resources.
+The manifest also orders after `lovelace` when configured. No upstream frontend,
 Lovelace, discovery, or coordinator code is modified.
 
 Release 2026.9.1.15 adds an owner-approved divergence to the upstream-derived

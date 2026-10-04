@@ -27,7 +27,7 @@ from .const import (
     PACKAGE_SCAN_PRIVATE_KEY,
 )
 from .coordinator import ProxmoxConfigEntry, ProxmoxCoordinator, node_device_info
-from .frontend import async_register_frontend
+from .frontend import async_register_frontend, async_remove_frontend_resource
 from .packages.presentation import (
     clear_helper_issue,
     dismiss_cleanup_candidates,
@@ -133,6 +133,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ProxmoxConfigEntry) -> b
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     async_setup_auto_scan(hass, entry)
+    await async_register_frontend(hass)
 
     return True
 
@@ -221,3 +222,8 @@ async def async_unload_entry(hass: HomeAssistant, entry: ProxmoxConfigEntry) -> 
             dismiss_cleanup_candidates(hass, node, vmid)
         clear_helper_issue(hass, entry.entry_id)
     return unload_ok
+
+
+async def async_remove_entry(hass: HomeAssistant, entry: ProxmoxConfigEntry) -> None:
+    """Clean global card delivery after HA permanently removes the last host."""
+    await async_remove_frontend_resource(hass)

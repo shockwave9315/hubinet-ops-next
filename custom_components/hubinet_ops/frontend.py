@@ -7,13 +7,15 @@ from homeassistant.components.http import StaticPathConfig
 from homeassistant.components.lovelace.const import LOVELACE_DATA
 from homeassistant.components.lovelace.resources import ResourceStorageCollection
 from homeassistant.core import HomeAssistant
+from homeassistant.util.hass_dict import HassKey
 
-from .const import INTEGRATION_VERSION
+from .const import DOMAIN, INTEGRATION_VERSION
 
 _LOGGER = logging.getLogger(__name__)
 STATIC_URL = "/hubinet_ops_static"
 CARD_MODULE = "hubinet-ops-cards.js"
 FRONTEND_DIRECTORY = Path(__file__).parent / "frontend"
+_STATIC_REGISTERED: HassKey[bool] = HassKey("hubinet_ops_frontend_static_registered")
 
 
 def card_module_url() -> str:
@@ -21,11 +23,17 @@ def card_module_url() -> str:
     return f"{STATIC_URL}/{CARD_MODULE}?v={INTEGRATION_VERSION}"
 
 
+def _is_card_resource(url: str) -> bool:
+    """Own only this exact relative path, independent of its release query."""
+    return url.partition("?")[0].partition("#")[0] == f"{STATIC_URL}/{CARD_MODULE}"
+
+
 async def async_register_frontend(hass: HomeAssistant) -> None:
     """Serve the card directory and register its native dashboard resource.
 
-    Runs once per Home Assistant start from ``async_setup``. Failure is logged
-    and never affects native Proxmox or package functionality.
+    Integration and entry setup share this idempotent registration. The HTTP
+    route is served once per HA runtime; a resource removed with the last host
+    is restored when a host is added again. Failure never disables PVE.
     """
     lovelace = hass.data.get(LOVELACE_DATA)
     if (
@@ -38,9 +46,11 @@ async def async_register_frontend(hass: HomeAssistant) -> None:
         )
         return
     try:
-        await hass.http.async_register_static_paths(
-            [StaticPathConfig(STATIC_URL, str(FRONTEND_DIRECTORY), True)]
-        )
+        if not hass.data.get(_STATIC_REGISTERED):
+            await hass.http.async_register_static_paths(
+                [StaticPathConfig(STATIC_URL, str(FRONTEND_DIRECTORY), True)]
+            )
+            hass.data[_STATIC_REGISTERED] = True
         resources = lovelace.resources
         url = card_module_url()
         if not isinstance(resources, ResourceStorageCollection):
@@ -56,11 +66,8 @@ async def async_register_frontend(hass: HomeAssistant) -> None:
         # Let HA load/migrate its native collection before inspecting it. Never
         # edit .storage or dashboard configuration directly.
         await resources.async_get_info()
-        card_path = f"{STATIC_URL}/{CARD_MODULE}"
         existing = [
-            item
-            for item in resources.async_items()
-            if item["url"].partition("?")[0].partition("#")[0] == card_path
+            item for item in resources.async_items() if _is_card_resource(item["url"])
         ]
         data = {"url": url, "res_type": "module"}
         if not existing:
@@ -74,3 +81,27 @@ async def async_register_frontend(hass: HomeAssistant) -> None:
             await resources.async_delete_item(duplicate["id"])
     except Exception:
         _LOGGER.exception("Could not deliver the Hubinet-Ops dashboard card")
+
+
+async def async_remove_frontend_resource(hass: HomeAssistant) -> None:
+    """Remove the owned resource only after permanent removal of the last host."""
+    if hass.config_entries.async_entries(DOMAIN, include_ignore=False):
+        return
+    lovelace = hass.data.get(LOVELACE_DATA)
+    if lovelace is None or not isinstance(
+        resources := lovelace.resources, ResourceStorageCollection
+    ):
+        return
+    try:
+        await resources.async_get_info()
+        for item in list(resources.async_items()):
+            # A host can be added while the collection loads or a native
+            # deletion notifies its listeners. Disabled/not-loaded hosts count.
+            if hass.config_entries.async_entries(DOMAIN, include_ignore=False):
+                return
+            if _is_card_resource(item["url"]) and any(
+                current["id"] == item["id"] for current in resources.async_items()
+            ):
+                await resources.async_delete_item(item["id"])
+    except Exception:
+        _LOGGER.exception("Could not remove the Hubinet-Ops dashboard resource")

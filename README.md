@@ -121,6 +121,17 @@ lovelace:
 Update that version query when you upgrade the integration. One resource
 loads all five Hubinet cards.
 
+To uninstall, first remove all Hubinet-Ops host entries in **Settings -> Devices
+& services**, then remove Hubinet-Ops in HACS. Removing the last host deletes
+the integration's native resource; reloads and removal while another host
+remains preserve it. Adding a host again restores the resource automatically.
+
+HACS can delete the integration's files without invoking HA's entry-removal
+hook. If the files were deleted first, remove the leftover entry through
+**Settings -> Dashboards -> Resources**, matching only the relative path
+`/hubinet_ops_static/hubinet-ops-cards.js` (with any version query). YAML
+resource declarations must be removed from your own resource list.
+
 | Card | Meaning | Tap |
 | --- | --- | --- |
 | Amber "7 aktualizacji" | Current scan found updates (security count, scan time) | Easy Update |

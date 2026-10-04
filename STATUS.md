@@ -493,8 +493,8 @@ Scan All remains.
   is not proof that no module request occurred.
 - Investigation: **OWNER VALIDATION PASS** on `fix/cards-external-mtls` for
   native resource delivery; the owner-reported Android/mTLS failure is resolved.
-  The P3 resource-removal lifecycle review below remains in progress. The slow-start
-  race must not be presented as an explanation of this remaining failure.
+  The P3 resource-removal lifecycle fix below is implemented and checked. The
+  historical slow-start race is not an established cause of the external failure.
 - Isolated HA Container 2026.9.4 lab: a loopback-only HTTPS reverse proxy
   rejects requests without a valid test client certificate. All four card
   modules returned HTTP 200 and JavaScript MIME types with the certificate;
@@ -601,10 +601,14 @@ Scan All remains.
   longer calls `add_extra_js_url`; `lovelace` is a soft ordering dependency.
 - Native YAML resource mode remains operator configured, with a precise
   logged URL and a README declaration. No YAML is rewritten or overlaid.
-- Validation: full `scripts/test.sh` passed **884 Python tests, 66 Node tests,
-  and 213 snapshots**, plus Ruff and formatting/diff checks. Native-collection
+- Validation including the P3 fix: full `scripts/test.sh` passed **893 Python
+  tests, 66 Node tests, and 213 snapshots**, plus Ruff and formatting/diff checks.
+  Native-collection
   regressions cover release upgrades, stable IDs, duplicate owned URLs,
-  unrelated resources, repeated setup, YAML mode, and isolated save failures.
+  unrelated resources, repeated setup, YAML mode, isolated save failures,
+  permanent last-host removal, disabled/not-loaded hosts, ignored discovery,
+  unload and same-runtime re-add, a host added during collection loading,
+  overlapping removals, and isolated cleanup failures.
 - Seven checks passed on actual HA Container 2026.9.4 with the local mTLS
   proxy and mobile Chromium: automatic resource creation during HA startup,
   rejection without a client certificate, the no-resource negative control,
@@ -631,21 +635,27 @@ Scan All remains.
   The .19 failure did not recur. This establishes the real owner-case fix,
   beyond the lab's earlier simulated-native checks.
 - P3 cleanup/uninstall hygiene: **REAL / SUPPORTED CONFIG-ENTRY FIX ACCEPTED
-  BY OWNER / IMPLEMENTATION IN PROGRESS**, within the existing draft .20.
+  BY OWNER / IMPLEMENTED AND CHECKED**, within the existing draft .20.
+  Pre-implementation documentation checkpoint: `b1f0a42`.
   HA's `async_remove_entry` runs after deletion and supports last-host cleanup
-  through the native resource collection. Unload/reload and removal while
-  another host remains must preserve the resource; entry setup must restore
-  it after the last host was removed and a new one is added. YAML stays
-  operator configured. HACS 2.0.5 removes files without deleting the custom
-  integration's config entries; full cleanup cannot be promised when files
-  disappear first. The supported uninstall order and manual leftover removal
-  will be documented. No .21 version or new final/RC tag is created.
+  through the native resource collection, deleting only the exact owned
+  relative path. Unload/reload and removal while another host remains preserve
+  the resource; entry setup restores it when a host is added again in the same
+  HA runtime, without registering the static route twice. YAML stays operator
+  configured. HACS 2.0.5 removes files without deleting the custom integration's
+  config entries; full cleanup cannot be promised when files disappear first.
+  README documents removing all host entries in HA before HACS uninstall, and
+  manual removal of an exact leftover resource through HA's Resources UI.
+  No .21 version or new final/RC tag is created.
+- Review readiness: **READY FOR FINAL REVIEW / PR #25 REMAINS DRAFT**.
+  The owner validation covers RC `2026.9.1.rc.01.20`; the subsequent P3 backend
+  lifecycle fix is covered by the native HA config-entry/resource tests above.
 
 ## Next
 
 Review [PR #25](https://github.com/shockwave9315/hubinet-ops-next/pull/25) with
-the owner-validated native Lovelace resource delivery after the supported P3
-cleanup is implemented and checked. Keep it DRAFT and retain the .20 release
+the owner-validated native Lovelace resource delivery and the implemented,
+checked P3 cleanup. Keep it DRAFT and retain the .20 release
 pins; final review and release publication are maintainer decisions. Tag
 `2026.9.1.16` (main `0409d76`) if still wanted.
 
