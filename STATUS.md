@@ -12,7 +12,8 @@ Status date: 2026-10-04
   subsystem, guided fresh-install enrollment, native snapshot Restore, and
   native snapshot Create observation and explicit native Delete documented in
   [ARCHITECTURE.md](ARCHITECTURE.md).
-- Integration after merge: `2026.9.1.20`, helper v5, protocol v1.
+- Planned development release for the whole A/B/C/D stage: `2026.9.1.21`,
+  helper v5, protocol v1. No .21 tag or release has been created.
 - Latest final tagged release: `2026.9.1.20` (merged PR #25, main `b38b950`).
   `2026.9.1.15` (PR #20, `b865968`): the owner reported the post-merge live
   tests passed.
@@ -70,7 +71,7 @@ Status date: 2026-10-04
 ## Checkpoint A: one-shot Update without a snapshot
 
 - Execution plan A/B/C/D: **ACCEPTED BY OWNER on 2026-10-04**.
-  Only A is authorized for this implementation; its accepted contract is in
+  A was the first authorized implementation; its accepted contract is in
   [ARCHITECTURE.md](ARCHITECTURE.md#checkpoint-a-explicit-one-shot-package-update-without-a-snapshot).
 - Checkpoint A implementation: **IMPLEMENTED / READY FOR OWNER REVIEW** on
   `feat/checkpoint-a-skip-snapshot`, based on main `b38b950` after PR #25.
@@ -91,9 +92,19 @@ Status date: 2026-10-04
   plus repository Ruff. `git diff --check` passed. Targeted self-review of the
   full A change found no unresolved scope, runtime, or architecture issue.
 - Live PVE execution of A has not been performed; owner review/live validation
-  remains outstanding. No PR was created and no release metadata changed.
-- B/C/D: **NOT STARTED**. No frontend skip button, version bump, PR, or
-  Lovelace Resources change is included. Release line remains `2026.9.1.20`.
+  remains outstanding. The A checkpoint itself changed no release metadata.
+
+## Current A/B/C/D stage (2026.9.1.21)
+
+- Owner authorized continuing the existing `feat/checkpoint-a-skip-snapshot`
+  branch, a version-only commit, and one Draft PR against `main` for the whole
+  stage. The planned version remains .21 through A/B/C/D; no tag, release,
+  or merge is authorized.
+- A: **DONE**, HEAD after A `49a12c1`, validation recorded above.
+- B: **NOT STARTED**; Snapshot Create running implementation is authorized next,
+  after its pre-runtime documentation acceptance checkpoint.
+- C/D: **NOT STARTED** and outside the current implementation.
+- PR #25 Lovelace Resources mechanism remains unchanged.
 
 ## Guided enrollment
 
@@ -679,12 +690,14 @@ Scan All remains.
 
 ## Next
 
-Owner review and live validation of completed Checkpoint A. Keep B/C/D
-unimplemented and retain the .20 release pins;
-do not create a PR. Tag `2026.9.1.16` (main `0409d76`) if still wanted.
+Implement and validate Checkpoint B on the existing A/B/C/D Draft PR, keeping
+A passing and C/D unimplemented. The whole stage uses planned release .21.
+Owner review and live validation remain outstanding; do not merge, tag, or
+create a release. Tag `2026.9.1.16` (main `0409d76`) if still wanted.
 
 ## Explicitly not started
 
-- Checkpoints B/C/D, including the frontend "without snapshot" button.
+- Checkpoints C/D, including the frontend "without snapshot" button.
+- Checkpoint B runtime (authorized next).
 - Tag of `2026.9.1.16`.
 - Pause and Resume in the VM card, and reading `qmpstatus`.

@@ -2,7 +2,7 @@
   "domain": "hubinet_ops",
   "name": "Hubinet-Ops",
   "after_dependencies": ["frontend", "http", "lovelace"],
-  "version": "2026.9.1.20",
+  "version": "2026.9.1.21",
   "codeowners": ["@Corbeno", "@erwindouna", "@CoMPaTech"],
   "config_flow": true,
   "documentation": "https://github.com/shockwave9315/hubinet-ops-next",

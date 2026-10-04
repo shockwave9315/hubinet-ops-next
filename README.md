@@ -114,7 +114,7 @@ YAML files:
 ```yaml
 lovelace:
   resources:
-    - url: /hubinet_ops_static/hubinet-ops-cards.js?v=2026.9.1.20
+    - url: /hubinet_ops_static/hubinet-ops-cards.js?v=2026.9.1.21
       type: module
 ```
 
