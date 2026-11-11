@@ -456,6 +456,11 @@
       "vm_uptime": {
         "name": "Czas działania"
       }
+    },
+    "update": {
+      "node_update": {
+        "name": "Aktualizacja oprogramowania"
+      }
     }
   },
   "exceptions": {

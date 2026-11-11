@@ -702,6 +702,8 @@ async def test_new_node_registers_device_before_children(
     pve2_node_mock.lxc.get.return_value = []
     pve2_node_mock.storage.get.return_value = []
     pve2_node_mock.tasks.get.return_value = []
+    pve2_node_mock.version.get.return_value = {}
+    pve2_node_mock.apt.update.get.return_value = []
 
     default_node_mock = mock_proxmox_client._node_mock
     mock_proxmox_client._nodes_mock.side_effect = lambda node: (

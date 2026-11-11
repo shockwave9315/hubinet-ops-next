@@ -1904,8 +1904,10 @@ existing upstream-derived files:
 - Upstream's node availability fix (`requires_online_node`), the node status
   option `unknown`, `entry_type=SERVICE` on guest and storage devices, the
   diagnostics noise reduction for the update list, and the Core 2026.11
-  registry and config-entry API names (`async_get_or_create_from_info`,
-  `async_unload_platforms_or_raise`, entry points returning `None`).
+  device registry method `async_get_or_create_from_info`. The fork keeps its
+  own `async_unload_entry`/`async_migrate_entry` logic and their boolean
+  returns, which Core still accepts from custom integrations, instead of
+  adopting `async_unload_platforms_or_raise` and `None` returns.
 - Upstream's tests, fixtures, and snapshots for those changes, adapted to the
   fork the same way the baseline tests were.
 

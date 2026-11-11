@@ -1844,6 +1844,7 @@
       <SensorEntityCapabilityAttribute.OPTIONS: 'options'>: list([
         'online',
         'offline',
+        'unknown',
       ]),
     }),
     'config_entry_id': <ANY>,
@@ -1884,6 +1885,7 @@
       <SensorEntityCapabilityAttribute.OPTIONS: 'options'>: list([
         'online',
         'offline',
+        'unknown',
       ]),
     }),
     'context': <ANY>,

@@ -32,8 +32,9 @@ Status date: 2026-11-11
   `StateType` are no longer re-exported by `homeassistant.components.sensor`).
   Fixed imports, migrated `voluptuous` to `probatio`, dropped the
   `reauth_successful` / `reconfigure_successful` abort strings that Core now
-  translates itself (Core only does so from 2026.10.0, so the minimum Home
-  Assistant version in `hacs.json` is raised from `2026.9.1` to `2026.10.0`),
+  translates itself (Core only does so from 2026.10.0; the minimum Home
+  Assistant version in `hacs.json` is now `2026.11.0`, see the upstream sync
+  below),
   and regenerated entity snapshots (only `device_id` and `config_subentry_id`
   serialization changed). Under review; not yet merged.
 
@@ -826,12 +827,28 @@ Scan All remains.
 
 - Architecture: **ACCEPTED BY OWNER on 2026-11-11**, recorded in
   [ARCHITECTURE.md](ARCHITECTURE.md#upstream-sync-to-home-assistant-core-202611).
-- Implementation: **IN PROGRESS** on `feat/upstream-sync-2026-11-1`, based on
-  main `b489111` after PR #28.
-- Scope: add upstream's node update entity and related fixes without losing any
-  fork feature; minimum Home Assistant `2026.11.0`. Not adopted: upstream's
-  uptime sensor rewrite and `is_granted` rewrite. `Sys.Modify` is not added to
-  the guided role.
+- Implementation: **IMPLEMENTED, under review** on
+  `feat/upstream-sync-2026-11-1`, based on main `b489111` after PR #28. The
+  pre-implementation documentation checkpoint is `de87d66`.
+- Added: upstream's node software-update entity (`update.py`, `Sys.Modify`,
+  per-node `version` and `apt/update` reads through the fork's retry-once reader
+  that keep the previous value on failure), node sensor availability for offline
+  or unknown nodes and the `unknown` status, `entry_type=SERVICE` on guest and
+  storage devices, the diagnostics noise reduction, and
+  `async_get_or_create_from_info`. Upstream's tests, fixtures, and snapshots for
+  those changes were ported; fork tests cover the new reads' retry and
+  keep-previous behavior.
+- Minimum Home Assistant is `2026.11.0` (`hacs.json`).
+- Not adopted: upstream's uptime sensor rewrite (the cards resolve by
+  `translation_key` and read seconds) and its `is_granted` rewrite. Open
+  finding for the owner: in PVE a permission value `0` means granted but not
+  propagated, while the fork's `is_granted` treats `0` as denied; upstream fixed
+  this in its rewrite. It gates Restore, Delete, Update, and Easy Update and
+  needs verification on a live PVE host before it is adopted.
+- `Sys.Modify` is not added to the guided-enrollment role, so guided hosts show
+  no node update entity.
+- Validation: ruff, 124 card tests, and 1090 pytest tests pass; all modules
+  import in the official 2026.11.1 image.
 
 ## Next
 

@@ -4,8 +4,11 @@ Hubinet-Ops is forked from the official Home Assistant Core Proxmox VE
 integration.
 
 - Repository: `https://github.com/home-assistant/core`
-- Tag: `2026.9.1`
+- Tag: `2026.9.1` (initial baseline; the fork has since absorbed the upstream
+  changes through `2026.11.1`, see below)
 - Commit: `fc034572d0216a04ed40a07154394908a594dfed`
+- Absorbed through: tag `2026.11.1`, commit
+  `d8a0dc698c8946b44e455d904000db563cfbf1ba`
 - Source path: `homeassistant/components/proxmoxve`
 - Test source path: `tests/components/proxmoxve`
 - License: Apache License 2.0
@@ -23,7 +26,16 @@ test, fixture, and snapshot. Baseline adaptations are limited to:
 The pinned upstream baseline sends `name` when creating VM and LXC snapshots.
 Hubinet-Ops intentionally uses the PVE-required `snapname` keyword instead.
 
-The Home Assistant Core baseline remains `2026.9.1` at the commit above.
+The Home Assistant Core baseline remains `2026.9.1` at the commit above; the
+owner-accepted 2026-11-11 sync absorbed the upstream `proxmoxve` changes up to
+`2026.11.1` (node software-update entity, node availability, `unknown` node
+status, `entry_type=SERVICE`, the `async_get_or_create_from_info` registry call,
+the diagnostics update-list reduction, `probatio`, and the central reauth and
+reconfigure abort translations). Two upstream changes are intentionally not
+taken and remain fork divergences: the uptime sensors stay the fork's numeric
+`DURATION` sensors with their `translation_key`, and `is_granted` keeps its
+existing value-based resolution. The node version and `apt/update` reads use the
+fork's retry-once reader and keep the previous value when a read still fails.
 That upstream version exposes native snapshot creation but not Hubinet-Ops'
 operator-facing Snapshot-to-restore select plus explicit Restore button. PR
 #12 therefore adds a select platform and QEMU/LXC Restore buttons through

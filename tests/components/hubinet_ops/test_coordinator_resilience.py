@@ -151,6 +151,55 @@ async def test_informational_read_failure_keeps_the_host_online(
     assert storage_device is not None
 
 
+@pytest.mark.parametrize("endpoint", ["version", "apt.update"])
+async def test_node_version_and_update_failure_keeps_previous_values(
+    hass: HomeAssistant,
+    mock_proxmox_client: MagicMock,
+    mock_config_entry: MockConfigEntry,
+    freezer: FrozenDateTimeFactory,
+    endpoint: str,
+) -> None:
+    """A failing node version/update read keeps old values and the host online."""
+    await _setup(hass, mock_config_entry, freezer)
+    coordinator = mock_config_entry.runtime_data
+    before = coordinator.data["pve1"]
+    assert before.version
+    assert before.update
+    resource = mock_proxmox_client._node_mock
+    for part in endpoint.split("."):
+        resource = getattr(resource, part)
+    resource.get.side_effect = ResourceException(500, "Internal Server Error", "busy")
+    await _refresh(hass, freezer)
+    after = coordinator.data["pve1"]
+    assert coordinator.last_update_success is True
+    assert hass.states.get(CT_STATUS).state != STATE_UNAVAILABLE
+    assert after.version == before.version
+    assert after.update == before.update
+
+
+@pytest.mark.parametrize("endpoint", ["version", "apt.update"])
+async def test_node_version_and_update_read_is_retried_once(
+    hass: HomeAssistant,
+    mock_proxmox_client: MagicMock,
+    mock_config_entry: MockConfigEntry,
+    freezer: FrozenDateTimeFactory,
+    endpoint: str,
+) -> None:
+    """A transient 5xx on the new node reads repeats that read exactly once."""
+    await _setup(hass, mock_config_entry, freezer)
+    resource = mock_proxmox_client._node_mock
+    for part in endpoint.split("."):
+        resource = getattr(resource, part)
+    original = resource.get.return_value
+    resource.get.side_effect = _fail_then(
+        original, ResourceException(502, "Bad Gateway", "proxy")
+    )
+    before = resource.get.call_count
+    await _refresh(hass, freezer)
+    assert mock_config_entry.runtime_data.last_update_success is True
+    assert resource.get.call_count == before + 2
+
+
 # --- Checkpoint D: opt-in full QEMU listing, still one listing per node -----
 
 FULL = call(full=1)
@@ -183,7 +232,10 @@ def _vms(count: int, first: int = 100) -> list[dict]:
 
 
 def _three_nodes(client: MagicMock, vms_per_node: int) -> dict[str, MagicMock]:
-    """Serve pve1 and pve2 (online) and pve3 (offline), each with its own API."""
+    """Serve pve1 and pve2 (online), pve3 (offline) and pve4 (unknown status).
+
+    Only the online nodes are asked anything; each has its own API.
+    """
     apis: dict[str, MagicMock] = {}
     for index, name in enumerate(("pve1", "pve2", "pve3")):
         api = MagicMock()
@@ -191,6 +243,8 @@ def _three_nodes(client: MagicMock, vms_per_node: int) -> dict[str, MagicMock]:
         api.lxc.get.return_value = []
         api.storage.get.return_value = []
         api.tasks.get.return_value = []
+        api.version.get.return_value = {}
+        api.apt.update.get.return_value = []
         apis[name] = api
     client.nodes.get.return_value = client._all_nodes
     client.nodes.side_effect = lambda name: apis[name]
@@ -250,6 +304,7 @@ async def test_one_qemu_listing_per_online_node_and_no_per_vm_request(
         "pve1": vms_per_node,
         "pve2": vms_per_node,
         "pve3": 0,
+        "pve4": 0,
     }
 
     before = {name: api.qemu.get.call_count for name, api in apis.items()}
