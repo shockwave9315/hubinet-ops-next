@@ -1899,7 +1899,9 @@ existing upstream-derived files:
   `apt/update` reads. The two reads go through the fork's existing
   retry-once reader. When one of them still fails for a node, that node keeps
   its previous value for that refresh, as storage and backup do; a failure
-  never fails the whole host. `apt/update` is requested only when the
+  never fails the whole host once a first refresh has succeeded; on the very
+  first refresh, with no previous value, a failure fails that refresh like a
+  storage or backup failure does. `apt/update` is requested only when the
   credentials hold `Sys.Modify`.
 - Upstream's node availability fix (`requires_online_node`), the node status
   option `unknown`, `entry_type=SERVICE` on guest and storage devices, the
@@ -1932,5 +1934,7 @@ privilege to the guided role would be a separate maintainer decision.
 
 No new custom architecture is introduced: no coordinator, API wrapper, store,
 worker, or framework beyond what upstream's update platform itself uses. After
-the sync the recorded upstream baseline in `UPSTREAM.md` becomes `2026.11.1`,
-with the two divergences above listed there.
+the sync `UPSTREAM.md` keeps `2026.9.1` as the initial baseline and records that
+the fork has absorbed upstream through `2026.11.1`, with every divergence from
+it (the uptime sensors, `is_granted`, the manifest metadata, and the kept
+boolean returns and unload logic) listed there.

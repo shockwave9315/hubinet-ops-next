@@ -31,10 +31,13 @@ owner-accepted 2026-11-11 sync absorbed the upstream `proxmoxve` changes up to
 `2026.11.1` (node software-update entity, node availability, `unknown` node
 status, `entry_type=SERVICE`, the `async_get_or_create_from_info` registry call,
 the diagnostics update-list reduction, `probatio`, and the central reauth and
-reconfigure abort translations). Two upstream changes are intentionally not
-taken and remain fork divergences: the uptime sensors stay the fork's numeric
-`DURATION` sensors with their `translation_key`, and `is_granted` keeps its
-existing value-based resolution. The node version and `apt/update` reads use the
+reconfigure abort translations). These upstream 2026.11.1 changes are
+intentionally not taken and remain fork divergences: the uptime sensors stay
+the fork's numeric `DURATION` sensors with their `translation_key`;
+`is_granted` keeps its existing value-based resolution; the manifest metadata
+(`categories`, `connectivity`, `quality_scale`) is not added; and the entry
+module keeps its boolean returns and its own unload logic instead of
+`async_unload_platforms_or_raise` and `None` returns. The node version and `apt/update` reads use the
 fork's retry-once reader and keep the previous value when a read still fails.
 That upstream version exposes native snapshot creation but not Hubinet-Ops'
 operator-facing Snapshot-to-restore select plus explicit Restore button. PR
@@ -147,7 +150,8 @@ coordinator. Each refresh read (nodes, per-node QEMU, LXC, storage, and the
 latest vzdump task) is retried once after a short delay when it fails with an
 HTTP 5xx or a read timeout, never for 4xx. When a node's storage or backup read
 still fails, that node keeps its previous storage and backup values for that
-refresh instead of failing the whole host; node, QEMU, and LXC list failures
+refresh instead of failing the whole host (the 2026.11.1 sync applies the same
+retry and keep-previous rule to the node `version` and `apt/update` reads); node, QEMU, and LXC list failures
 still fail the refresh. The setup probe (`nodes` and `access/permissions` in
 `_init_proxmox`) is unchanged upstream code without this retry: a transient 5xx
 or read timeout there already ends in Home Assistant's own setup retry. Refresh
