@@ -4,7 +4,7 @@
 set -eu
 
 main() {
-  RELEASE_VERSION="2026.9.1.23"
+  RELEASE_VERSION="2026.9.1.24"
   HELPER_SHA256="debe2bf386fdd9becb3ca7adcb4eec8e6ea5d5c512d06ef052366afd8be955e8"
   REPOSITORY="shockwave9315/hubinet-ops-next"
   HELPER_URL="https://raw.githubusercontent.com/${REPOSITORY}/${RELEASE_VERSION}/deploy/hubinet-package-scan-helper.py"
@@ -13,7 +13,7 @@ main() {
   PVE_USER="hubinetnext@pve"
   PVE_ROLE="HubinetOpsNext"
   PVE_TOKEN_ID="ha"
-  PVE_PRIVILEGES="Datastore.Audit Sys.Audit Sys.PowerMgmt VM.Audit VM.PowerMgmt VM.Snapshot"
+  PVE_PRIVILEGES="Datastore.Audit Sys.Audit Sys.Modify Sys.PowerMgmt VM.Audit VM.PowerMgmt VM.Snapshot"
   FORCED_COMMAND="/usr/local/sbin/hubinet-package-scan-helper"
   HELPER_TARGET="/usr/local/sbin/hubinet-package-scan-helper"
   PVE_DIRECTORY="/etc/pve"
@@ -225,7 +225,7 @@ print("1" if any(row.get("roleid") == "HubinetOpsNext" for row in rows) else "0"
 ') || fail "could not parse PVE role state"
   ROLE_EXACT=$(printf '%s' "$ROLE_JSON" | python3 -c '
 import json, re, sys
-wanted = set("Datastore.Audit Sys.Audit Sys.PowerMgmt VM.Audit VM.PowerMgmt VM.Snapshot".split())
+wanted = set("Datastore.Audit Sys.Audit Sys.Modify Sys.PowerMgmt VM.Audit VM.PowerMgmt VM.Snapshot".split())
 rows = json.load(sys.stdin)
 row = next((row for row in rows if row.get("roleid") == "HubinetOpsNext"), None)
 actual = set(filter(None, re.split(r"[\s,]+", (row or {}).get("privs", ""))))

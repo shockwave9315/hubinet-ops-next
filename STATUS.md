@@ -864,9 +864,12 @@ Scan All remains.
 
 - Architecture: **ACCEPTED BY OWNER on 2026-11-11**, recorded in
   [ARCHITECTURE.md](ARCHITECTURE.md#guided-role-includes-sysmodify-release-2026-9-1-24).
-- Implementation: **IN PROGRESS** on `feat/role-sys-modify`, based on main
-  `3a7c19a`. Scope: the bootstrap role privilege set and its tests, plus the
-  release metadata `2026.9.1.24`.
+- Implementation: **IMPLEMENTED, under review** on `feat/role-sys-modify`, based
+  on main `3a7c19a` (documentation checkpoint `0c17170`). Scope: the bootstrap
+  role privilege set and its tests, plus the release metadata `2026.9.1.24`
+  (manifest, `INTEGRATION_VERSION`, bootstrap `RELEASE_VERSION`, README card
+  URL). The owner creates the `2026.9.1.24` tag after the merge; the bootstrap
+  command downloads from that tag.
 - Existing guided hosts re-run the release-pinned bootstrap command and reload
   the entry to get the node update entity.
 
