@@ -25,7 +25,7 @@ from proxmoxer import AuthenticationError
 from proxmoxer.core import ResourceException
 from requests.exceptions import ConnectTimeout, SSLError
 import urllib3
-from tests.common import (
+from pytest_homeassistant.common import (
     MockConfigEntry,
     async_fire_time_changed,
     async_load_json_array_fixture,

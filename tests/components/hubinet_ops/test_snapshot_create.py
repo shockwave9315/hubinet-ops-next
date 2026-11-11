@@ -5,7 +5,7 @@ import logging
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from tests.common import MockConfigEntry, async_capture_events  # noqa: TID251
+from pytest_homeassistant.common import MockConfigEntry, async_capture_events
 
 from custom_components.hubinet_ops.const import DOMAIN
 from custom_components.hubinet_ops.snapshot_restore import (

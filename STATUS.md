@@ -26,6 +26,14 @@ Status date: 2026-10-04
 - Starting merged baseline for 2026.9.1.19: main `05b0e20`.
 - Starting merged baseline for 2026.9.1.20: main `d4eb2eb`.
 - Git history is authoritative for the eventual feature merge SHA.
+- Home Assistant 2026.11.1 compatibility (dev/test pin moved to commit
+  `d8a0dc698c8946b44e455d904000db563cfbf1ba`; baseline above unchanged): the
+  integration failed to import `sensor` on 2026.11.1 (`EntityCategory` and
+  `StateType` are no longer re-exported by `homeassistant.components.sensor`).
+  Fixed imports, migrated `voluptuous` to `probatio`, dropped the
+  `reauth_successful` / `reconfigure_successful` abort strings that Core now
+  translates itself, and regenerated entity snapshots (only `device_id` and
+  `config_subentry_id` serialization changed). Under review; not yet merged.
 
 ## Merged
 

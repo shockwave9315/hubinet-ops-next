@@ -10,7 +10,7 @@ from freezegun.api import FrozenDateTimeFactory
 from proxmoxer.core import ResourceException
 import pytest
 import requests
-from tests.common import MockConfigEntry, async_fire_time_changed  # noqa: TID251
+from pytest_homeassistant.common import MockConfigEntry, async_fire_time_changed
 
 from custom_components.hubinet_ops.const import CONF_VM_GUEST_MEMORY, DOMAIN
 from custom_components.hubinet_ops.coordinator import DEFAULT_UPDATE_INTERVAL

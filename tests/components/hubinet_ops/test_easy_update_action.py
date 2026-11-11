@@ -9,7 +9,7 @@ from datetime import UTC, datetime
 from unittest.mock import MagicMock, patch
 
 import pytest
-from tests.common import MockConfigEntry, MockUser  # noqa: TID251
+from pytest_homeassistant.common import MockConfigEntry, MockUser
 
 from custom_components.hubinet_ops.const import DOMAIN
 from custom_components.hubinet_ops.packages.models import (

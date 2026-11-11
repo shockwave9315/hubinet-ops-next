@@ -4,7 +4,7 @@ from datetime import datetime, time
 import logging
 from typing import Any
 
-import voluptuous as vol
+import probatio
 
 from homeassistant.config_entries import (
     ConfigEntry,
@@ -65,18 +65,18 @@ class HubinetOpsOptionsFlow(OptionsFlowWithReload):
         options = self.config_entry.options
         return self.async_show_form(
             step_id="init",
-            data_schema=vol.Schema(
+            data_schema=probatio.Schema(
                 {
-                    vol.Required(
+                    probatio.Required(
                         CONF_AUTO_SCAN, default=options.get(CONF_AUTO_SCAN, False)
                     ): selector.BooleanSelector(),
-                    vol.Required(
+                    probatio.Required(
                         CONF_AUTO_SCAN_TIME,
                         default=options.get(
                             CONF_AUTO_SCAN_TIME, DEFAULT_AUTO_SCAN_TIME
                         ),
                     ): selector.TimeSelector(),
-                    vol.Required(
+                    probatio.Required(
                         CONF_VM_GUEST_MEMORY,
                         default=options.get(CONF_VM_GUEST_MEMORY, False),
                     ): selector.BooleanSelector(),

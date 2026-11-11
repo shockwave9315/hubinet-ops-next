@@ -6,7 +6,7 @@ from unittest.mock import MagicMock, call, patch
 
 from freezegun.api import FrozenDateTimeFactory
 import pytest
-from tests.common import MockConfigEntry, async_fire_time_changed  # noqa: TID251
+from pytest_homeassistant.common import MockConfigEntry, async_fire_time_changed
 
 from custom_components.hubinet_ops.auto_scan import CONF_AUTO_SCAN, CONF_AUTO_SCAN_TIME
 from custom_components.hubinet_ops.const import CONF_VM_GUEST_MEMORY

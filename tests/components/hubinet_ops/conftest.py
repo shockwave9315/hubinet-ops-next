@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import asyncssh
 import pytest
-from tests.common import (
+from pytest_homeassistant.common import (
     MockConfigEntry,
     load_json_array_fixture,
     load_json_object_fixture,

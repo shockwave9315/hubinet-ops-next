@@ -12,7 +12,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers import entity_registry as er
 from syrupy.assertion import SnapshotAssertion
 from freezegun.api import FrozenDateTimeFactory
-from tests.common import (
+from pytest_homeassistant.common import (
     MockConfigEntry,
     async_fire_time_changed,
     async_load_json_array_fixture,

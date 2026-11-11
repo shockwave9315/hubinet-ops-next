@@ -4,7 +4,7 @@ from copy import deepcopy
 
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import entity_registry as er
-from tests.common import MockConfigEntry
+from pytest_homeassistant.common import MockConfigEntry
 
 # Example permissions dict with audit permissions granted for nodes and vms
 AUDIT_PERMISSIONS = {

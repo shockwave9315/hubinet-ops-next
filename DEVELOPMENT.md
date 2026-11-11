@@ -1,7 +1,9 @@
 # Development
 
 The development and test environment is pinned to Home Assistant Core
-`2026.9.1` at commit `fc034572d0216a04ed40a07154394908a594dfed`.
+`2026.11.1` at commit `d8a0dc698c8946b44e455d904000db563cfbf1ba`. The fork's
+upstream-derived baseline (see [UPSTREAM.md](UPSTREAM.md)) is unchanged at
+`2026.9.1`; only the harness and the runtime compatibility target moved.
 
 ## Requirements
 
@@ -25,7 +27,9 @@ The script:
 - creates `.dev/home-assistant-core` and checks out the pinned commit detached;
 - links this repository's tests into the Home Assistant test tree;
 - installs Home Assistant runtime and test requirements plus the editable Core
-  project;
+  project and, as Core's CI does since 2026.11, the in-tree `hassfest` and
+  `pytest-homeassistant` packages (tests import `pytest_homeassistant.*`, not
+  `tests.*`);
 - installs the integration requirements selected by Home Assistant for
   `proxmoxve`, Supervisor, and MQTT fixtures;
 - installs the integration's pinned `asyncssh` package-scan transport
