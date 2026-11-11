@@ -751,6 +751,10 @@
     "helper_outdated": {
       "title": "Hubinet-Ops host helper requires an update",
       "description": "Installed helper: {installed}\nRequired helper: {required}\n\nUpdate the helper on the Proxmox VE host:\n\n```text\n{bootstrap_command}\n```\n\nThis is a normal repair run. Do not use `--reset`. Existing API token and SSH enrollment credentials are not rotated.\n\nAfter the command succeeds, press Scan or reload Hubinet-Ops."
+    },
+    "role_missing_sys_modify": {
+      "title": "Hubinet-Ops role needs the Sys.Modify privilege",
+      "description": "The Hubinet-Ops role on the Proxmox VE host does not include `Sys.Modify`. Without it Hubinet-Ops cannot read pending software updates, so the node software update entity is not created.\n\nRun this on the Proxmox VE host as root:\n\n```text\n{bootstrap_command}\n```\n\nThis is a normal repair run. Do not use `--reset`. Existing API token and SSH enrollment credentials are not rotated. It raises the existing role to the current privilege set.\n\nAfter the command succeeds, reload Hubinet-Ops or restart Home Assistant. Permissions are read only at setup."
     }
   },
   "selector": {

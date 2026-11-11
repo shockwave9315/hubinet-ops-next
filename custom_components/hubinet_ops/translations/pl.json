@@ -751,6 +751,10 @@
     "helper_outdated": {
       "title": "Narzędzie pomocnicze hosta Hubinet-Ops wymaga aktualizacji",
       "description": "Zainstalowane narzędzie pomocnicze: {installed}\nWymagane narzędzie pomocnicze: {required}\n\nZaktualizuj narzędzie pomocnicze na hoście Proxmox VE:\n\n```text\n{bootstrap_command}\n```\n\nTo jest zwykła operacja naprawcza. Nie używaj opcji `--reset`. Istniejący token API i dane rejestracyjne SSH nie zostaną zmienione.\n\nPo pomyślnym wykonaniu polecenia naciśnij Skanuj lub przeładuj Hubinet-Ops."
+    },
+    "role_missing_sys_modify": {
+      "title": "Rola Hubinet-Ops wymaga uprawnienia Sys.Modify",
+      "description": "Rola Hubinet-Ops na hoście Proxmox VE nie zawiera uprawnienia `Sys.Modify`. Bez niego Hubinet-Ops nie odczyta oczekujących aktualizacji, więc encja aktualizacji oprogramowania węzła nie jest tworzona.\n\nUruchom to na hoście Proxmox VE jako root:\n\n```text\n{bootstrap_command}\n```\n\nTo jest zwykła operacja naprawcza. Nie używaj opcji `--reset`. Istniejący token API i dane rejestracyjne SSH nie zostaną zmienione. Polecenie podnosi istniejącą rolę do aktualnego zestawu uprawnień.\n\nPo pomyślnym wykonaniu polecenia przeładuj Hubinet-Ops albo zrestartuj Home Assistant. Uprawnienia są odczytywane tylko przy starcie."
     }
   },
   "selector": {

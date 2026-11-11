@@ -386,3 +386,31 @@ def update_helper_issue(
 def clear_helper_issue(hass: HomeAssistant, entry_id: str) -> None:
     """Clear the stale-helper Repairs issue for one unloaded config entry."""
     ir.async_delete_issue(hass, DOMAIN, _helper_issue_id(entry_id))
+
+
+def _role_issue_id(entry_id: str) -> str:
+    """Return the stable missing-privilege Repairs issue ID for one entry."""
+    return f"role_missing_sys_modify_{entry_id}"
+
+
+def update_role_issue(hass: HomeAssistant, entry_id: str, granted: bool) -> None:
+    """Create or clear the Repairs issue for a guided role without Sys.Modify."""
+    issue_id = _role_issue_id(entry_id)
+    if granted:
+        ir.async_delete_issue(hass, DOMAIN, issue_id)
+        return
+    ir.async_create_issue(
+        hass,
+        DOMAIN,
+        issue_id,
+        is_fixable=False,
+        issue_domain=DOMAIN,
+        severity=ir.IssueSeverity.WARNING,
+        translation_key="role_missing_sys_modify",
+        translation_placeholders={"bootstrap_command": BOOTSTRAP_COMMAND},
+    )
+
+
+def clear_role_issue(hass: HomeAssistant, entry_id: str) -> None:
+    """Clear the missing-privilege Repairs issue for one unloaded entry."""
+    ir.async_delete_issue(hass, DOMAIN, _role_issue_id(entry_id))

@@ -50,7 +50,7 @@ from homeassistant.const import ATTR_ENTITY_ID, STATE_UNAVAILABLE, STATE_UNKNOWN
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import issue_registry as ir
 
-from . import setup_integration
+from . import AUDIT_PERMISSIONS, MERGED_PERMISSIONS, setup_integration
 from .test_packages import RESULT
 
 SCAN = "button.ct_nginx_scan_pending_packages"
@@ -489,6 +489,60 @@ async def test_successful_unload_clears_stale_helper_issue(
 
     assert await hass.config_entries.async_unload(mock_config_entry.entry_id)
     assert mock_config_entry.state is ConfigEntryState.NOT_LOADED
+    assert issue_registry.async_get_issue(DOMAIN, issue_id) is None
+
+
+async def test_guided_role_without_sys_modify_creates_repairs_issue(
+    hass: HomeAssistant,
+    mock_proxmox_client: MagicMock,
+    mock_config_entry: MockConfigEntry,
+    package_transport_material: None,
+    issue_registry: ir.IssueRegistry,
+) -> None:
+    """A guided host whose role predates Sys.Modify is told how to fix it."""
+    mock_proxmox_client.access.permissions.get.return_value = AUDIT_PERMISSIONS
+    await setup_integration(hass, mock_config_entry)
+    issue_id = f"role_missing_sys_modify_{mock_config_entry.entry_id}"
+    issue = issue_registry.async_get_issue(DOMAIN, issue_id)
+    assert issue is not None
+    assert issue.translation_key == "role_missing_sys_modify"
+    assert issue.is_fixable is False
+    assert issue.translation_placeholders == {"bootstrap_command": BOOTSTRAP_COMMAND}
+    assert "--reset" not in BOOTSTRAP_COMMAND
+    assert mock_config_entry.state is ConfigEntryState.LOADED
+    assert hass.states.get("sensor.pve1_status") is not None
+    # No node update entity is created without the privilege.
+    assert hass.states.get("update.pve1_software_update") is None
+
+    assert await hass.config_entries.async_unload(mock_config_entry.entry_id)
+    assert issue_registry.async_get_issue(DOMAIN, issue_id) is None
+
+
+async def test_guided_role_with_sys_modify_has_no_repairs_issue(
+    hass: HomeAssistant,
+    mock_proxmox_client: MagicMock,
+    mock_config_entry: MockConfigEntry,
+    package_transport_material: None,
+    issue_registry: ir.IssueRegistry,
+) -> None:
+    """With the privilege present there is no issue and the update entity exists."""
+    mock_proxmox_client.access.permissions.get.return_value = MERGED_PERMISSIONS
+    await setup_integration(hass, mock_config_entry)
+    issue_id = f"role_missing_sys_modify_{mock_config_entry.entry_id}"
+    assert issue_registry.async_get_issue(DOMAIN, issue_id) is None
+    assert hass.states.get("update.pve1_software_update") is not None
+
+
+async def test_manual_credentials_without_sys_modify_are_not_flagged(
+    hass: HomeAssistant,
+    mock_proxmox_client: MagicMock,
+    mock_config_entry: MockConfigEntry,
+    issue_registry: ir.IssueRegistry,
+) -> None:
+    """Advanced manual credentials never get the Hubinet bootstrap repair."""
+    mock_proxmox_client.access.permissions.get.return_value = AUDIT_PERMISSIONS
+    await setup_integration(hass, mock_config_entry)
+    issue_id = f"role_missing_sys_modify_{mock_config_entry.entry_id}"
     assert issue_registry.async_get_issue(DOMAIN, issue_id) is None
 
 
