@@ -20,6 +20,13 @@ Status date: 2026-11-11
 - Planned development release for the whole A/B/C/D stage: `2026.9.1.21`,
   helper v5, protocol v1. Prerelease `2026.9.1.21rc1` exists and points to the
   review HEAD `0ec4ea9`. No final `2026.9.1.21` tag or release has been created.
+- Release `2026.9.1.23` (owner decision on 2026-11-11): contains the Home
+  Assistant 2026.11.1 compatibility fix (PR #28), the A/B/C/D stage, and the
+  upstream sync to 2026.11.1; minimum Home Assistant `2026.11.0`. The manifest,
+  `INTEGRATION_VERSION`, the bootstrap `RELEASE_VERSION`, and the README card URL
+  are all `2026.9.1.23`. The owner creates the `2026.9.1.23` tag after the merge.
+  The owner's manual manifest edit to `2026.9.1.22` on main had left those
+  values out of step; helper and protocol are unchanged.
 - Latest final tagged release: `2026.9.1.20` (merged PR #25, main `b38b950`).
   `2026.9.1.15` (PR #20, `b865968`): the owner reported the post-merge live
   tests passed.
