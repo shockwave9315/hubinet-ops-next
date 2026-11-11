@@ -876,6 +876,15 @@ Scan All remains.
 - Existing guided hosts re-run the release-pinned bootstrap command and reload
   the entry to get the node update entity.
 
+## Repairs issue for a guided role without `Sys.Modify` (2026.9.1.25)
+
+- Architecture: **ACCEPTED BY OWNER on 2026-11-11**, recorded in
+  [ARCHITECTURE.md](ARCHITECTURE.md#repairs-issue-for-a-guided-role-without-sysmodify-release-20269125).
+- Implementation: **IN PROGRESS** on `feat/repair-missing-sys-modify`, based on
+  main `83c8888`. Scope: the Repairs issue, its EN/PL strings and tests, and the
+  release metadata `2026.9.1.25`. Reason: `2026.9.1.24` raised the role but gave
+  existing guided hosts no in-product way to learn they must re-run bootstrap.
+
 ## Next
 
 Final owner review of the whole A/B/C/D stage with the applied fix set on the

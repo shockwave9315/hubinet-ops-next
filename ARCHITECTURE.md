@@ -1964,6 +1964,20 @@ and adds no action that modifies a node. That GET reads the package cache and ma
 rewrite it. A narrower alternative, not adopted, would be a second role holding
 only `Sys.Modify` with its ACL on `/nodes` instead of `/`.
 
+### Repairs issue for a guided role without `Sys.Modify` (release 2026.9.1.25)
+
+On 2026-11-11 the maintainer decided, before implementation, that an existing
+guided host whose role still lacks `Sys.Modify` must be told so in Home
+Assistant, with the action to take, instead of silently having no node update
+entity. This reuses the existing Repairs mechanism of the stale-helper issue: one
+non-fixable warning per config entry (`role_missing_sys_modify_<entry_id>`) whose
+text carries the same release-pinned bootstrap command, says it is a normal repair
+run without `--reset`, and says to reload Hubinet-Ops afterwards. It is evaluated
+from the permissions the coordinator already reads at setup, so it adds no API
+call; it is created only for guided entries (those that store a package node),
+never for advanced manual credentials, and is cleared when the privilege is
+present or the entry is unloaded. No new store, scheduler, or detection layer.
+
 Visible effect: for guided hosts every online node now gets one `apt/update`
 read per refresh and an `update.<node>_software_update` entity (configuration
 category, release notes only, no install), so pending PVE package updates appear
