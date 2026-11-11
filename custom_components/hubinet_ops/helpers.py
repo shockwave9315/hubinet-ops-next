@@ -1,9 +1,12 @@
 """Helpers for Proxmox VE."""
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 
-from .const import ProxmoxPermission
+from homeassistant.const import CONF_TOKEN, CONF_USERNAME
+
+from .const import CONF_TOKEN_ID, GUIDED_TOKEN_ID, GUIDED_USERNAME, ProxmoxPermission
 
 
 @dataclass(frozen=True)
@@ -70,4 +73,13 @@ def update_version(
         total_updates=count,
         proxmox_updates=pve_count,
         other_updates=other_count,
+    )
+
+
+def is_guided_entry(data: Mapping[str, Any]) -> bool:
+    """Return whether an entry uses the fixed guided API identity."""
+    return (
+        data.get(CONF_USERNAME) == GUIDED_USERNAME
+        and data.get(CONF_TOKEN_ID) == GUIDED_TOKEN_ID
+        and data.get(CONF_TOKEN) is True
     )

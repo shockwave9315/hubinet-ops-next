@@ -25,13 +25,17 @@ from .const import (
     DEFAULT_REALM,
     PACKAGE_SCAN_KNOWN_HOSTS,
     PACKAGE_SCAN_PRIVATE_KEY,
+    ProxmoxPermission,
 )
 from .coordinator import ProxmoxConfigEntry, ProxmoxCoordinator, node_device_info
 from .frontend import async_register_frontend, async_remove_frontend_resource
+from .helpers import is_granted, is_guided_entry
 from .packages.presentation import (
     clear_helper_issue,
+    clear_role_issue,
     dismiss_cleanup_candidates,
     dismiss_review_plan,
+    update_role_issue,
 )
 from .services import async_register_services
 
@@ -122,6 +126,23 @@ async def async_setup_entry(hass: HomeAssistant, entry: ProxmoxConfigEntry) -> b
     await coordinator.async_config_entry_first_refresh()
 
     entry.runtime_data = coordinator
+
+    # A guided host whose PVE role predates Sys.Modify (2026.9.1.24) has no node
+    # update entity; tell the operator in Repairs how to fix it. Only the fixed
+    # guided identity is flagged: the bootstrap repairs only its role, and other
+    # credentials (advanced manual, or a migrated entry that merely kept a
+    # package node) are the operator's own choice.
+    if is_guided_entry(entry.data) and coordinator.package_node is not None:
+        update_role_issue(
+            hass,
+            entry.entry_id,
+            is_granted(
+                coordinator.permissions,
+                p_type="nodes",
+                p_id=coordinator.package_node,
+                permission=ProxmoxPermission.SYSMOD,
+            ),
+        )
 
     # Register node devices before forwarding platforms so that child devices
     # (VMs, containers, storages) can deterministically resolve their via_device.
@@ -222,6 +243,7 @@ async def async_unload_entry(hass: HomeAssistant, entry: ProxmoxConfigEntry) -> 
             dismiss_review_plan(hass, node, vmid)
             dismiss_cleanup_candidates(hass, node, vmid)
         clear_helper_issue(hass, entry.entry_id)
+        clear_role_issue(hass, entry.entry_id)
     return unload_ok
 
 

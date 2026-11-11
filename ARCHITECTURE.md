@@ -1931,6 +1931,13 @@ Explicitly not adopted, and left as a fork divergence:
 Superseded on 2026-11-11 by the maintainer's decision recorded in the next
 section: the guided-enrollment role does include `Sys.Modify`.
 
+No new custom architecture is introduced: no coordinator, API wrapper, store,
+worker, or framework beyond what upstream's update platform itself uses. After
+the sync `UPSTREAM.md` keeps `2026.9.1` as the initial baseline and records that
+the fork has absorbed upstream through `2026.11.1`, with every divergence from
+it (the uptime sensors, `is_granted`, the manifest metadata, and the kept
+boolean returns and unload logic) listed there.
+
 ## Guided role includes `Sys.Modify` (release 2026.9.1.24)
 
 On 2026-11-11, before implementation, the maintainer decided that the product
@@ -1971,9 +1978,21 @@ in Home Assistant's Updates page. A persistent `apt/update` failure on the first
 refresh now fails setup for guided hosts as well, as it already did for manual
 credentials holding `Sys.Modify`.
 
-No new custom architecture is introduced: no coordinator, API wrapper, store,
-worker, or framework beyond what upstream's update platform itself uses. After
-the sync `UPSTREAM.md` keeps `2026.9.1` as the initial baseline and records that
-the fork has absorbed upstream through `2026.11.1`, with every divergence from
-it (the uptime sensors, `is_granted`, the manifest metadata, and the kept
-boolean returns and unload logic) listed there.
+### Repairs issue for a guided role without `Sys.Modify` (release 2026.9.1.25)
+
+On 2026-11-11 the maintainer decided, before implementation, that an existing
+guided host whose role still lacks `Sys.Modify` must be told so in Home
+Assistant, with the action to take, instead of silently having no node update
+entity. This reuses the existing Repairs mechanism of the stale-helper issue: one
+non-fixable warning per config entry (`role_missing_sys_modify_<entry_id>`) whose
+text carries the same release-pinned bootstrap command, says it is a normal repair
+run without `--reset`, and says to reload Hubinet-Ops afterwards. It is evaluated
+from the permissions the coordinator already reads at setup, so it adds no API
+call. It is created only for guided entries, defined as entries using the fixed
+guided identity (user `hubinetnext@pve`, token ID `ha`, API-token
+authentication), never for advanced manual credentials, even when those keep a
+stored package node after a migration or an advanced reconfigure, because the
+bootstrap can only repair the Hubinet role. It is cleared when the privilege is
+present or the entry is unloaded, and it is registered with its config entry so
+Home Assistant also removes it when the entry is removed while not loaded. No new
+store, scheduler, or detection layer.
