@@ -5,6 +5,8 @@ domain-isolated fork of Home Assistant Core's `proxmoxve` integration from tag
 `2026.9.1`, extended with LXC package Scan, Review, Update, Autoremove, Health,
 and native snapshot controls.
 
+Requires Home Assistant `2026.11.0` or newer.
+
 ## Install and enroll
 
 1. Add `https://github.com/shockwave9315/hubinet-ops-next` to HACS as a custom
@@ -26,6 +28,19 @@ reload.
 The **Existing credentials (advanced)** path preserves the upstream-compatible
 manual Proxmox authentication flow. It does not provision package-control SSH
 trust.
+
+## Node software updates
+
+Each online Proxmox VE node gets an **Aktualizacja oprogramowania** (Software
+update) entity, as in the upstream integration. It shows the installed
+`pve-manager` version, the latest available one with the count of pending Proxmox
+and other packages, and links to the node in the Proxmox web interface. It does
+not install anything. Reading the pending list needs the PVE `Sys.Modify`
+privilege, which the guided role has since release `2026.9.1.24`; that privilege
+also lets the HA token change node settings (see
+[ARCHITECTURE.md](ARCHITECTURE.md#guided-role-includes-sysmodify-release-20269124)).
+A guided host enrolled earlier shows a **Repairs** entry with the exact command:
+run it on the Proxmox VE host without options, then reload Hubinet-Ops.
 
 ## Repair and re-enroll
 
