@@ -855,10 +855,20 @@ Scan All remains.
   propagated, while the fork's `is_granted` treats `0` as denied; upstream fixed
   this in its rewrite. It gates Restore, Delete, Update, and Easy Update and
   needs verification on a live PVE host before it is adopted.
-- `Sys.Modify` is not added to the guided-enrollment role, so guided hosts show
-  no node update entity.
+- `Sys.Modify` was first left out of the guided-enrollment role; the owner
+  reversed that on 2026-11-11 (see "Guided role includes `Sys.Modify`" below).
 - Validation: ruff, 124 card tests, and 1090 pytest tests pass; all modules
   import in the official 2026.11.1 image.
+
+## Guided role includes `Sys.Modify` (2026.9.1.24)
+
+- Architecture: **ACCEPTED BY OWNER on 2026-11-11**, recorded in
+  [ARCHITECTURE.md](ARCHITECTURE.md#guided-role-includes-sysmodify-release-2026-9-1-24).
+- Implementation: **IN PROGRESS** on `feat/role-sys-modify`, based on main
+  `3a7c19a`. Scope: the bootstrap role privilege set and its tests, plus the
+  release metadata `2026.9.1.24`.
+- Existing guided hosts re-run the release-pinned bootstrap command and reload
+  the entry to get the node update entity.
 
 ## Next
 

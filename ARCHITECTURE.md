@@ -1072,8 +1072,9 @@ version. The root-run PVE bootstrap provisions only the fixed product
 resources: user `hubinetnext@pve`, role `HubinetOpsNext`, token ID `ha`, the
 root ACL, the forced-command helper, and the restricted key in
 `/root/.ssh/authorized_keys2`. The exact role privileges are
-`Datastore.Audit`, `Sys.Audit`, `Sys.PowerMgmt`, `VM.Audit`, `VM.PowerMgmt`,
-and `VM.Snapshot`. The bootstrap verifies that effective sshd configuration
+`Datastore.Audit`, `Sys.Audit`, `Sys.Modify`, `Sys.PowerMgmt`, `VM.Audit`,
+`VM.PowerMgmt`, and `VM.Snapshot` (`Sys.Modify` added in 2026.9.1.24; see
+"Guided role includes `Sys.Modify`"). The bootstrap verifies that effective sshd configuration
 already enables `.ssh/authorized_keys2`; it never edits sshd configuration or
 the other authorized-key files. It also stops before mutation when effective
 sshd policy disables public-key authentication or root login.
@@ -1927,10 +1928,28 @@ Explicitly not adopted, and left as a fork divergence:
   `quality_scale: gold`), which has no runtime meaning for a custom
   integration.
 
-`Sys.Modify` is not added to the guided-enrollment role: the least-privilege
-identity is unchanged, so guided hosts get no node update entity. Hosts using
-broader manual credentials that already hold `Sys.Modify` get it. Adding the
-privilege to the guided role would be a separate maintainer decision.
+Superseded on 2026-11-11 by the maintainer's decision recorded in the next
+section: the guided-enrollment role does include `Sys.Modify`.
+
+## Guided role includes `Sys.Modify` (release 2026.9.1.24)
+
+On 2026-11-11, before implementation, the maintainer decided that the product
+is upstream plus the fork's additions, and that any privilege an adopted
+upstream feature needs is added to the fixed guided role rather than leaving the
+feature silently absent. Upstream's node software-update entity reads
+`apt/update`, which requires `Sys.Modify`. The exact `HubinetOpsNext` role
+privileges therefore become `Datastore.Audit`, `Sys.Audit`, `Sys.Modify`,
+`Sys.PowerMgmt`, `VM.Audit`, `VM.PowerMgmt`, and `VM.Snapshot`.
+
+Scope: only the bootstrap's role privilege set (creation, exactness check, and
+`pveum role modify` of an existing role) and its tests. The role name, user,
+token, root ACL with propagation, helper, and forced command are unchanged. An
+existing guided host receives the privilege by re-running the release-pinned
+bootstrap command, which already restores the role to the exact set; the
+integration reads permissions only at setup, so the entry must be reloaded
+afterwards. `Sys.Modify` grants the fixed Hubinet identity the ability to change
+node system settings in PVE; the fork's own code uses it only for the read-only
+`apt/update` listing and adds no action that modifies a node.
 
 No new custom architecture is introduced: no coordinator, API wrapper, store,
 worker, or framework beyond what upstream's update platform itself uses. After
