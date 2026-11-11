@@ -29,7 +29,7 @@ from .const import (
 )
 from .coordinator import ProxmoxConfigEntry, ProxmoxCoordinator, node_device_info
 from .frontend import async_register_frontend, async_remove_frontend_resource
-from .helpers import is_granted
+from .helpers import is_granted, is_guided_entry
 from .packages.presentation import (
     clear_helper_issue,
     clear_role_issue,
@@ -128,9 +128,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: ProxmoxConfigEntry) -> b
     entry.runtime_data = coordinator
 
     # A guided host whose PVE role predates Sys.Modify (2026.9.1.24) has no node
-    # update entity; tell the operator in Repairs how to fix it. Advanced manual
-    # credentials are the operator's own choice and are never flagged.
-    if coordinator.package_node is not None:
+    # update entity; tell the operator in Repairs how to fix it. Only the fixed
+    # guided identity is flagged: the bootstrap repairs only its role, and other
+    # credentials (advanced manual, or a migrated entry that merely kept a
+    # package node) are the operator's own choice.
+    if is_guided_entry(entry.data) and coordinator.package_node is not None:
         update_role_issue(
             hass,
             entry.entry_id,

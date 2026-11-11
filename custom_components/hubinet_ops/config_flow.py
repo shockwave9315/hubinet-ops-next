@@ -60,6 +60,7 @@ from .const import (
     RESET_BOOTSTRAP_COMMAND,
 )
 from .enrollment import EnrollmentError, parse_enrollment
+from .helpers import is_guided_entry
 from .packages.transport import (
     AsyncSSHPackageTransport,
     PackageHelperProtocolError,
@@ -136,15 +137,6 @@ _GUIDED_DATA_KEYS = (
     CONF_NODES,
     CONF_ENROLLMENT,
 )
-
-
-def _is_guided_entry(data: Mapping[str, Any]) -> bool:
-    """Return whether an entry uses the fixed guided API identity."""
-    return (
-        data.get(CONF_USERNAME) == GUIDED_USERNAME
-        and data.get(CONF_TOKEN_ID) == GUIDED_TOKEN_ID
-        and data.get(CONF_TOKEN) is True
-    )
 
 
 def _get_nodes_data(data: dict[str, Any]) -> list[dict[str, Any]]:
@@ -331,7 +323,7 @@ class ProxmoxveConfigFlow(ConfigFlow, domain=DOMAIN):
     ) -> ConfigFlowResult:
         """Perform reauth when Proxmox VE authentication fails."""
         self._entry = self._get_reauth_entry()
-        if _is_guided_entry(self._entry.data):
+        if is_guided_entry(self._entry.data):
             self._data = dict(self._entry.data)
             return await self.async_step_reauth_enrollment()
         return await self.async_step_reauth_confirm()

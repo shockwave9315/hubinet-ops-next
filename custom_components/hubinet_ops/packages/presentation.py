@@ -405,6 +405,7 @@ def update_role_issue(hass: HomeAssistant, entry_id: str, granted: bool) -> None
         issue_id,
         is_fixable=False,
         issue_domain=DOMAIN,
+        config_entry_id=entry_id,
         severity=ir.IssueSeverity.WARNING,
         translation_key="role_missing_sys_modify",
         translation_placeholders={"bootstrap_command": BOOTSTRAP_COMMAND},

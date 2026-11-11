@@ -28,8 +28,8 @@ Status date: 2026-11-11
   The owner's manual manifest edit to `2026.9.1.22` on main had left those
   values out of step; helper and protocol are unchanged.
 - Latest final tagged release: `2026.9.1.24` (guided role with `Sys.Modify`).
-  Next: `2026.9.1.25` (Repairs issue for a role without it), tag pending. Earlier: `2026.9.1.20` (merged PR #25, main
-  `b38b950`).
+  Next: `2026.9.1.25` (Repairs issue for a role without it), tag pending.
+  Earlier: `2026.9.1.20` (merged PR #25, main `b38b950`).
   `2026.9.1.15` (PR #20, `b865968`): the owner reported the post-merge live
   tests passed.
 - Starting merged baseline for 2026.9.1.16: main `b865968`.
@@ -883,8 +883,9 @@ Scan All remains.
 - Implementation: **IMPLEMENTED, under review** on
   `feat/repair-missing-sys-modify`, based on main `83c8888` (documentation
   checkpoint `660f2a0`). Scope: the Repairs issue
-  (`role_missing_sys_modify_<entry_id>`, created for guided entries only, cleared
-  when the privilege is present or on unload), its EN/PL strings and tests, and
+  (`role_missing_sys_modify_<entry_id>`, created only for entries using the fixed
+  guided identity, registered with the config entry so HA clears it on removal,
+  and cleared when the privilege is present or on unload), its EN/PL strings and tests, and
   the release metadata `2026.9.1.25` (manifest, `INTEGRATION_VERSION`, bootstrap
   `RELEASE_VERSION`, README card URL). The owner creates the `2026.9.1.25` tag
   after the merge; the command shown in the issue downloads from that tag. Reason: `2026.9.1.24` raised the role but gave
