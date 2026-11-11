@@ -822,6 +822,17 @@ Scan All remains.
   The owner validation covers RC `2026.9.1.rc.01.20`; the subsequent P3 backend
   lifecycle fix is covered by the native HA config-entry/resource tests above.
 
+## Upstream sync to Home Assistant Core 2026.11.1
+
+- Architecture: **ACCEPTED BY OWNER on 2026-11-11**, recorded in
+  [ARCHITECTURE.md](ARCHITECTURE.md#upstream-sync-to-home-assistant-core-202611).
+- Implementation: **IN PROGRESS** on `feat/upstream-sync-2026-11-1`, based on
+  main `b489111` after PR #28.
+- Scope: add upstream's node update entity and related fixes without losing any
+  fork feature; minimum Home Assistant `2026.11.0`. Not adopted: upstream's
+  uptime sensor rewrite and `is_granted` rewrite. `Sys.Modify` is not added to
+  the guided role.
+
 ## Next
 
 Final owner review of the whole A/B/C/D stage with the applied fix set on the
