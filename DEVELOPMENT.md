@@ -3,7 +3,10 @@
 The development and test environment is pinned to Home Assistant Core
 `2026.11.1` at commit `d8a0dc698c8946b44e455d904000db563cfbf1ba`. The fork's
 upstream-derived baseline (see [UPSTREAM.md](UPSTREAM.md)) is unchanged at
-`2026.9.1`; only the harness and the runtime compatibility target moved.
+`2026.9.1`; only the test harness pin and the minimum supported Home Assistant
+version (`hacs.json`, `2026.10.0`) moved. From 2026.10.0 Core translates the
+reauth/reconfigure success aborts itself, so this integration ships no local
+strings for them.
 
 ## Requirements
 

@@ -1,6 +1,6 @@
 # Status
 
-Status date: 2026-10-04
+Status date: 2026-11-11
 
 ## Current baseline
 
@@ -32,8 +32,10 @@ Status date: 2026-10-04
   `StateType` are no longer re-exported by `homeassistant.components.sensor`).
   Fixed imports, migrated `voluptuous` to `probatio`, dropped the
   `reauth_successful` / `reconfigure_successful` abort strings that Core now
-  translates itself, and regenerated entity snapshots (only `device_id` and
-  `config_subentry_id` serialization changed). Under review; not yet merged.
+  translates itself (Core only does so from 2026.10.0, so the minimum Home
+  Assistant version in `hacs.json` is raised from `2026.9.1` to `2026.10.0`),
+  and regenerated entity snapshots (only `device_id` and `config_subentry_id`
+  serialization changed). Under review; not yet merged.
 
 ## Merged
 
