@@ -11,7 +11,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
-from tests.common import MockConfigEntry  # noqa: TID251
+from pytest_homeassistant.common import MockConfigEntry
 
 from custom_components.hubinet_ops import easy_update
 from custom_components.hubinet_ops.easy_update import (

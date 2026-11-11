@@ -7,7 +7,7 @@ from copy import deepcopy
 from unittest.mock import AsyncMock, MagicMock, call, patch
 
 import pytest
-from tests.common import MockConfigEntry  # noqa: TID251
+from pytest_homeassistant.common import MockConfigEntry
 
 from custom_components.hubinet_ops.const import (
     CONF_PACKAGE_NODE,

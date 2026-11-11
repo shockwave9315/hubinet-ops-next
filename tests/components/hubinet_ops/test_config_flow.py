@@ -22,7 +22,7 @@ from homeassistant.data_entry_flow import FlowResultType
 from proxmoxer import AuthenticationError
 from proxmoxer.core import ResourceException
 from requests.exceptions import ConnectTimeout, SSLError
-from tests.common import MockConfigEntry
+from pytest_homeassistant.common import MockConfigEntry
 
 from custom_components.hubinet_ops import CONF_AUTH_METHOD, CONF_REALM
 from custom_components.hubinet_ops.const import (

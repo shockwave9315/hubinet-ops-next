@@ -2,7 +2,7 @@
 set -euo pipefail
 
 readonly CORE_REPOSITORY="https://github.com/home-assistant/core.git"
-readonly CORE_COMMIT="fc034572d0216a04ed40a07154394908a594dfed"
+readonly CORE_COMMIT="d8a0dc698c8946b44e455d904000db563cfbf1ba"
 readonly MINIMUM_PYTHON="3.14.2"
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -88,6 +88,9 @@ fi
     -r requirements_test.txt
   "${uv_command[@]}" pip install --python "${venv_dir}/bin/python" \
     -e . --config-settings editable_mode=compat
+  "${uv_command[@]}" pip install --python "${venv_dir}/bin/python" \
+    -e packages/hassfest -e packages/pytest-homeassistant \
+    --config-settings editable_mode=compat
   PATH="${venv_dir}/bin:${PATH}" "${venv_dir}/bin/python" \
     -m script.install_integration_requirements hassio mqtt proxmoxve
   "${uv_command[@]}" pip install --python "${venv_dir}/bin/python" \

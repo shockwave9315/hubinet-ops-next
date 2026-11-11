@@ -2,7 +2,7 @@
 
 import logging
 
-import voluptuous as vol
+import probatio
 
 from homeassistant.auth.models import User
 from homeassistant.auth.permissions.const import POLICY_CONTROL
@@ -27,12 +27,12 @@ ATTR_DEVICE_ID = "device_id"
 ATTR_AUTOREMOVE = "autoremove"
 ATTR_SKIP_SNAPSHOT = "skip_snapshot"
 ATTR_EXPECTED_SCAN_ATTEMPT = "expected_scan_attempt"
-EASY_UPDATE_SCHEMA = vol.Schema(
+EASY_UPDATE_SCHEMA = probatio.Schema(
     {
-        vol.Required(ATTR_DEVICE_ID): cv.string,
-        vol.Optional(ATTR_AUTOREMOVE, default=False): cv.boolean,
-        vol.Optional(ATTR_SKIP_SNAPSHOT, default=False): cv.boolean,
-        vol.Optional(ATTR_EXPECTED_SCAN_ATTEMPT): cv.string,
+        probatio.Required(ATTR_DEVICE_ID): cv.string,
+        probatio.Optional(ATTR_AUTOREMOVE, default=False): cv.boolean,
+        probatio.Optional(ATTR_SKIP_SNAPSHOT, default=False): cv.boolean,
+        probatio.Optional(ATTR_EXPECTED_SCAN_ATTEMPT): cv.string,
     }
 )
 
@@ -72,7 +72,7 @@ def async_register_services(hass: HomeAssistant) -> None:
                 async_scan_entry(entry)
 
     hass.services.async_register(
-        DOMAIN, SERVICE_SCAN_ALL_PACKAGES, scan_all_packages, schema=vol.Schema({})
+        DOMAIN, SERVICE_SCAN_ALL_PACKAGES, scan_all_packages, schema=probatio.Schema({})
     )
 
     async def easy_update(call: ServiceCall) -> None:

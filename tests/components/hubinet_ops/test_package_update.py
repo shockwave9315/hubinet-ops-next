@@ -6,7 +6,7 @@ from dataclasses import replace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from tests.common import MockConfigEntry  # noqa: TID251
+from pytest_homeassistant.common import MockConfigEntry
 
 from custom_components.hubinet_ops.button import PackageUpdateButtonEntity
 from custom_components.hubinet_ops.packages.models import (

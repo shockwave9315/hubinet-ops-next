@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from syrupy.assertion import SnapshotAssertion
-from tests.common import (  # noqa: TID251
+from pytest_homeassistant.common import (
     MockConfigEntry,
     async_fire_time_changed,
     snapshot_platform,

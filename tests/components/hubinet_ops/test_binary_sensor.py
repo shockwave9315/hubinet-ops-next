@@ -13,7 +13,7 @@ from proxmoxer import AuthenticationError
 from proxmoxer.core import ResourceException
 from requests.exceptions import ConnectTimeout, SSLError
 from syrupy.assertion import SnapshotAssertion
-from tests.common import MockConfigEntry, async_fire_time_changed, snapshot_platform
+from pytest_homeassistant.common import MockConfigEntry, async_fire_time_changed, snapshot_platform
 
 from custom_components.hubinet_ops.coordinator import DEFAULT_UPDATE_INTERVAL
 

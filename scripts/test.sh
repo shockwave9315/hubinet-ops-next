@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-readonly CORE_COMMIT="fc034572d0216a04ed40a07154394908a594dfed"
+readonly CORE_COMMIT="d8a0dc698c8946b44e455d904000db563cfbf1ba"
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 core_dir="${repo_root}/.dev/home-assistant-core"

@@ -9,7 +9,7 @@ from proxmoxer.core import ResourceException
 import pytest
 from requests.exceptions import ConnectTimeout, SSLError
 from syrupy.assertion import SnapshotAssertion
-from tests.common import MockConfigEntry, snapshot_platform
+from pytest_homeassistant.common import MockConfigEntry, snapshot_platform
 
 from custom_components.hubinet_ops.snapshots import (
     RestoreOutcome,

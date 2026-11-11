@@ -5,9 +5,9 @@ from unittest.mock import MagicMock
 from homeassistant.core import HomeAssistant
 from syrupy.assertion import SnapshotAssertion
 from syrupy.filters import props
-from tests.common import MockConfigEntry
-from tests.components.diagnostics import get_diagnostics_for_config_entry
-from tests.typing import ClientSessionGenerator
+from pytest_homeassistant.common import MockConfigEntry
+from pytest_homeassistant.components.diagnostics import get_diagnostics_for_config_entry
+from pytest_homeassistant.typing import ClientSessionGenerator
 
 from custom_components.hubinet_ops.const import (
     CONF_SSH_HOST_KEY,

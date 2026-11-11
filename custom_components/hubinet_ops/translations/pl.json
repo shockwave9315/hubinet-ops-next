@@ -1,9 +1,7 @@
 {
   "config": {
     "abort": {
-      "already_configured": "Urządzenie jest już skonfigurowane",
-      "reauth_successful": "Ponowne uwierzytelnienie zakończyło się pomyślnie",
-      "reconfigure_successful": "Ponowna konfiguracja zakończyła się pomyślnie"
+      "already_configured": "Urządzenie jest już skonfigurowane"
     },
     "error": {
       "api_error_no_details": "Wystąpił błąd podczas komunikacji z instancją Proxmox VE.",
