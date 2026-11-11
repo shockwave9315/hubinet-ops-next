@@ -80,6 +80,10 @@ Status date: 2026-11-11
   `2026.9.1.23`.
 - `Sys.Modify` in the guided role (PR #30, `2026.9.1.24`) and the Repairs issue
   for a guided role without it (PR #31, `2026.9.1.25`).
+- Integration icon: `custom_components/hubinet_ops/brand/` (`icon.png` 256 px,
+  `icon@2x.png` 512 px, `icon.svg` source), served by Home Assistant's brands
+  mechanism; Core falls back to `icon.png` for the logo and dark variants. Assets
+  only, no runtime change.
 
 ## Package scan
 
