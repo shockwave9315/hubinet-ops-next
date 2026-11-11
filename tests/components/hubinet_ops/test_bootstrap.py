@@ -22,7 +22,7 @@ BOOTSTRAP = REPOSITORY_ROOT / "deploy/bootstrap-proxmox.sh"
 HELPER = REPOSITORY_ROOT / "deploy/hubinet-package-scan-helper.py"
 MANIFEST = REPOSITORY_ROOT / "custom_components/hubinet_ops/manifest.json"
 PRIVILEGES = (
-    "Datastore.Audit Sys.Audit Sys.PowerMgmt VM.Audit VM.PowerMgmt VM.Snapshot"
+    "Datastore.Audit Sys.Audit Sys.Modify Sys.PowerMgmt VM.Audit VM.PowerMgmt VM.Snapshot"
 )
 AUTHORIZED_LINE = re.compile(
     rb'^restrict,command="/usr/local/sbin/hubinet-package-scan-helper" '
@@ -625,7 +625,7 @@ def test_plain_rerun_repairs_helper_without_rotating(tmp_path: Path) -> None:
 
 
 def test_plain_rerun_repairs_role_without_rotating(tmp_path: Path) -> None:
-    """B4: the role is restored to exactly the accepted six privileges."""
+    """B4: the role is restored to exactly the accepted seven privileges."""
     harness = _new_harness(tmp_path)
     harness.enroll()
     state = harness.state()

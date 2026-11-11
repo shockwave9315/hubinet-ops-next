@@ -17,17 +17,19 @@ Status date: 2026-11-11
   native snapshot Create observation and explicit native Delete, and the
   opt-in VM guest memory telemetry documented in
   [ARCHITECTURE.md](ARCHITECTURE.md).
-- Planned development release for the whole A/B/C/D stage: `2026.9.1.21`,
-  helper v5, protocol v1. Prerelease `2026.9.1.21rc1` exists and points to the
-  review HEAD `0ec4ea9`. No final `2026.9.1.21` tag or release has been created.
+- Release `2026.9.1.21` (the whole A/B/C/D stage, helper v5, protocol v1) is
+  tagged and released; the prerelease `2026.9.1.21rc1` pointed to the review
+  HEAD `0ec4ea9`. Tag `2026.9.1.22` is the owner's manual test version.
 - Release `2026.9.1.23` (owner decision on 2026-11-11): contains the Home
   Assistant 2026.11.1 compatibility fix (PR #28), the A/B/C/D stage, and the
   upstream sync to 2026.11.1; minimum Home Assistant `2026.11.0`. The manifest,
   `INTEGRATION_VERSION`, the bootstrap `RELEASE_VERSION`, and the README card URL
-  are all `2026.9.1.23`. The owner creates the `2026.9.1.23` tag after the merge.
+  are all `2026.9.1.23`; the tag and GitHub release `2026.9.1.23` exist.
   The owner's manual manifest edit to `2026.9.1.22` on main had left those
   values out of step; helper and protocol are unchanged.
-- Latest final tagged release: `2026.9.1.20` (merged PR #25, main `b38b950`).
+- Latest final tagged release: `2026.9.1.23`. Next: `2026.9.1.24` (guided role
+  with `Sys.Modify`), tag pending. Earlier: `2026.9.1.20` (merged PR #25, main
+  `b38b950`).
   `2026.9.1.15` (PR #20, `b865968`): the owner reported the post-merge live
   tests passed.
 - Starting merged baseline for 2026.9.1.16: main `b865968`.
@@ -836,7 +838,7 @@ Scan All remains.
 ## Upstream sync to Home Assistant Core 2026.11.1
 
 - Architecture: **ACCEPTED BY OWNER on 2026-11-11**, recorded in
-  [ARCHITECTURE.md](ARCHITECTURE.md#upstream-sync-to-home-assistant-core-202611).
+  [ARCHITECTURE.md](ARCHITECTURE.md#upstream-sync-to-home-assistant-core-2026111).
 - Implementation: **IMPLEMENTED, under review** on
   `feat/upstream-sync-2026-11-1`, based on main `b489111` after PR #28. The
   pre-implementation documentation checkpoint is `de87d66`.
@@ -855,10 +857,24 @@ Scan All remains.
   propagated, while the fork's `is_granted` treats `0` as denied; upstream fixed
   this in its rewrite. It gates Restore, Delete, Update, and Easy Update and
   needs verification on a live PVE host before it is adopted.
-- `Sys.Modify` is not added to the guided-enrollment role, so guided hosts show
-  no node update entity.
+- `Sys.Modify` was first left out of the guided-enrollment role; the owner
+  reversed that on 2026-11-11 (see "Guided role includes `Sys.Modify`" below).
 - Validation: ruff, 124 card tests, and 1090 pytest tests pass; all modules
   import in the official 2026.11.1 image.
+
+## Guided role includes `Sys.Modify` (2026.9.1.24)
+
+- Architecture: **ACCEPTED BY OWNER on 2026-11-11**, recorded in
+  [ARCHITECTURE.md](ARCHITECTURE.md#guided-role-includes-sysmodify-release-20269124).
+- Implementation: **IMPLEMENTED, under review** on `feat/role-sys-modify`, based
+  on main `3a7c19a` (documentation checkpoint `0c17170`). Scope: the bootstrap
+  role privilege set and its tests, plus the release metadata `2026.9.1.24`
+  (manifest, `INTEGRATION_VERSION`, bootstrap `RELEASE_VERSION`, README card
+  URL). The owner creates the `2026.9.1.24` tag after the merge. The bootstrap
+  command downloads the helper and itself from that tag, so it fails until the
+  tag exists; the helper bytes and `HELPER_SHA256` are unchanged.
+- Existing guided hosts re-run the release-pinned bootstrap command and reload
+  the entry to get the node update entity.
 
 ## Next
 

@@ -1072,8 +1072,9 @@ version. The root-run PVE bootstrap provisions only the fixed product
 resources: user `hubinetnext@pve`, role `HubinetOpsNext`, token ID `ha`, the
 root ACL, the forced-command helper, and the restricted key in
 `/root/.ssh/authorized_keys2`. The exact role privileges are
-`Datastore.Audit`, `Sys.Audit`, `Sys.PowerMgmt`, `VM.Audit`, `VM.PowerMgmt`,
-and `VM.Snapshot`. The bootstrap verifies that effective sshd configuration
+`Datastore.Audit`, `Sys.Audit`, `Sys.Modify`, `Sys.PowerMgmt`, `VM.Audit`,
+`VM.PowerMgmt`, and `VM.Snapshot` (`Sys.Modify` added in 2026.9.1.24; see
+"Guided role includes `Sys.Modify`"). The bootstrap verifies that effective sshd configuration
 already enables `.ssh/authorized_keys2`; it never edits sshd configuration or
 the other authorized-key files. It also stops before mutation when effective
 sshd policy disables public-key authentication or root login.
@@ -1927,10 +1928,48 @@ Explicitly not adopted, and left as a fork divergence:
   `quality_scale: gold`), which has no runtime meaning for a custom
   integration.
 
-`Sys.Modify` is not added to the guided-enrollment role: the least-privilege
-identity is unchanged, so guided hosts get no node update entity. Hosts using
-broader manual credentials that already hold `Sys.Modify` get it. Adding the
-privilege to the guided role would be a separate maintainer decision.
+Superseded on 2026-11-11 by the maintainer's decision recorded in the next
+section: the guided-enrollment role does include `Sys.Modify`.
+
+## Guided role includes `Sys.Modify` (release 2026.9.1.24)
+
+On 2026-11-11, before implementation, the maintainer decided that the product
+is upstream plus the fork's additions, and that any privilege an adopted
+upstream feature needs is added to the fixed guided role rather than leaving the
+feature silently absent. Upstream's node software-update entity reads
+`apt/update`, which requires `Sys.Modify`. The exact `HubinetOpsNext` role
+privileges therefore become `Datastore.Audit`, `Sys.Audit`, `Sys.Modify`,
+`Sys.PowerMgmt`, `VM.Audit`, `VM.PowerMgmt`, and `VM.Snapshot`.
+
+Scope: only the bootstrap's role privilege set (creation, exactness check, and
+`pveum role modify` of an existing role) and its tests. The role name, user,
+token, root ACL with propagation, helper, and forced command are unchanged. An
+existing guided host receives the privilege by re-running the release-pinned
+bootstrap command, which already restores the role to the exact set; the
+integration reads permissions only at setup, so the entry must be reloaded
+afterwards.
+
+Security consequence, accepted by the maintainer: PVE's `Sys.Modify` is broad.
+With the ACL on `/` and propagation, it lets the fixed Hubinet identity (and so
+anyone holding the HA token) change node network configuration (create, edit,
+delete interfaces; apply or revert), start, stop, restart or reload node
+services such as sshd, pveproxy, corosync and pve-cluster, change apt
+repositories and run `apt-get update`, initialize disks with a GPT, and change
+other node-level settings such as DNS, hosts and time. A compromised HA token can
+therefore cause a node or cluster outage, not only guest power and snapshot
+actions. The role already allowed node shutdown and reboot (`Sys.PowerMgmt`).
+The fork's own code uses `Sys.Modify` at one call site, the `apt/update` listing
+(PVE's `GET /nodes/{node}/apt/update` requires it; `Sys.Audit` is not enough),
+and adds no action that modifies a node. That GET reads the package cache and may
+rewrite it. A narrower alternative, not adopted, would be a second role holding
+only `Sys.Modify` with its ACL on `/nodes` instead of `/`.
+
+Visible effect: for guided hosts every online node now gets one `apt/update`
+read per refresh and an `update.<node>_software_update` entity (configuration
+category, release notes only, no install), so pending PVE package updates appear
+in Home Assistant's Updates page. A persistent `apt/update` failure on the first
+refresh now fails setup for guided hosts as well, as it already did for manual
+credentials holding `Sys.Modify`.
 
 No new custom architecture is introduced: no coordinator, API wrapper, store,
 worker, or framework beyond what upstream's update platform itself uses. After
