@@ -1947,9 +1947,29 @@ token, root ACL with propagation, helper, and forced command are unchanged. An
 existing guided host receives the privilege by re-running the release-pinned
 bootstrap command, which already restores the role to the exact set; the
 integration reads permissions only at setup, so the entry must be reloaded
-afterwards. `Sys.Modify` grants the fixed Hubinet identity the ability to change
-node system settings in PVE; the fork's own code uses it only for the read-only
-`apt/update` listing and adds no action that modifies a node.
+afterwards.
+
+Security consequence, accepted by the maintainer: PVE's `Sys.Modify` is broad.
+With the ACL on `/` and propagation, it lets the fixed Hubinet identity (and so
+anyone holding the HA token) change node network configuration (create, edit,
+delete interfaces; apply or revert), start, stop, restart or reload node
+services such as sshd, pveproxy, corosync and pve-cluster, change apt
+repositories and run `apt-get update`, initialize disks with a GPT, and change
+other node-level settings such as DNS, hosts and time. A compromised HA token can
+therefore cause a node or cluster outage, not only guest power and snapshot
+actions. The role already allowed node shutdown and reboot (`Sys.PowerMgmt`).
+The fork's own code uses `Sys.Modify` at one call site, the `apt/update` listing
+(PVE's `GET /nodes/{node}/apt/update` requires it; `Sys.Audit` is not enough),
+and adds no action that modifies a node. That GET reads the package cache and may
+rewrite it. A narrower alternative, not adopted, would be a second role holding
+only `Sys.Modify` with its ACL on `/nodes` instead of `/`.
+
+Visible effect: for guided hosts every online node now gets one `apt/update`
+read per refresh and an `update.<node>_software_update` entity (configuration
+category, release notes only, no install), so pending PVE package updates appear
+in Home Assistant's Updates page. A persistent `apt/update` failure on the first
+refresh now fails setup for guided hosts as well, as it already did for manual
+credentials holding `Sys.Modify`.
 
 No new custom architecture is introduced: no coordinator, API wrapper, store,
 worker, or framework beyond what upstream's update platform itself uses. After
