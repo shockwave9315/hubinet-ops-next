@@ -72,6 +72,14 @@ Status date: 2026-11-11
 - Guided fresh-install enrollment: one release-pinned PVE bootstrap command,
   one temporary enrollment paste, pre-entry API/SSH/helper/node validation,
   in-entry SSH trust, and local-node package entity scope.
+- A/B/C/D stage (PR #26, release `2026.9.1.21`): one-shot Update without a
+  snapshot, native Snapshot Create running state, the full LXC skip action with
+  responsive guest cards, and opt-in VM guest memory telemetry.
+- Home Assistant 2026.11.1 compatibility (PR #28) and the upstream `proxmoxve`
+  sync through 2026.11.1 with the node software-update entity (PR #29), release
+  `2026.9.1.23`.
+- `Sys.Modify` in the guided role (PR #30, `2026.9.1.24`) and the Repairs issue
+  for a guided role without it (PR #31, `2026.9.1.25`).
 
 ## Package scan
 
@@ -125,8 +133,9 @@ Status date: 2026-11-11
 
 - Owner authorized continuing the existing `feat/checkpoint-a-skip-snapshot`
   branch, a version-only commit, and one Draft PR against `main` for the whole
-  stage. The planned version remains .21 through A/B/C/D; no tag, release,
-  or merge is authorized.
+  stage. The planned version remained .21 through A/B/C/D; at the time no tag,
+  release, or merge was authorized (historical: it was later merged and
+  released, see the Draft PR bullet below).
 - A: **DONE**, HEAD after A `49a12c1`, validation recorded above.
 - B architecture: **ACCEPTED BY OWNER BEFORE RUNTIME IMPLEMENTATION**; see
   [the accepted contract](ARCHITECTURE.md#checkpoint-b-native-snapshot-create-running).
@@ -135,7 +144,8 @@ Status date: 2026-11-11
   `8f679cf`.
 - Draft PR: [#26](https://github.com/shockwave9315/hubinet-ops-next/pull/26),
   against `main`, on the existing branch. It covers the whole A/B/C/D stage and
-  remains **DRAFT**. Version-only commit: `cc5b1e2`.
+  was **MERGED** (main `a5c787c`); the stage is released as `2026.9.1.21`.
+  Version-only commit: `cc5b1e2`.
 - B's native Create entity owns the exact existing observation task and
   publishes `snapshot_create_running` at launch and task completion.
   Restore/Delete read the same live entity through HA's existing registry and
@@ -895,10 +905,13 @@ Scan All remains.
 
 ## Next
 
-Final owner review of the whole A/B/C/D stage with the applied fix set on the
-existing Draft PR #26. A, B, C, and D are done; there is no further
-checkpoint. Do not merge, tag the final .21, or create its release until the
-owner decides. Tag `2026.9.1.16` (main `0409d76`) if still wanted.
+Nothing is in progress. The A/B/C/D stage (PR #26) and everything after it are
+merged and released through `2026.9.1.25`. Open owner decisions: adopt upstream's
+`is_granted` semantics (PVE value `0` means granted but not propagated; the fork
+treats it as denied; it does not affect guided hosts because their root ACL
+propagates, and it needs a live PVE check); the narrower `Sys.Modify` role with
+an ACL on `/nodes` only; and tagging `2026.9.1.16` (main `0409d76`) if still
+wanted.
 
 ## Explicitly not started
 

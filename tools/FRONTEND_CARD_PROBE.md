@@ -1,7 +1,8 @@
 # Android card delivery probe
 
-For the outstanding 2026.9.1.19 card-loading failure on the app's external
-mTLS URL. This is a standalone test artifact, not an integration runtime fix.
+Historical diagnostic tool for the 2026.9.1.19 card-loading failure on the app's
+external mTLS URL; that Android investigation is resolved (see STATUS.md). This
+is a standalone test artifact, not an integration runtime fix.
 
 Copy `frontend-card-probe.html` to the Home Assistant configuration directory
 as `www/hubinet-card-probe-v2.html`. HA then serves it at
