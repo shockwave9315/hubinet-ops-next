@@ -1,9 +1,10 @@
 # Hubinet-Ops
 
 Hubinet-Ops is a Home Assistant custom integration for Proxmox VE. It is a
-domain-isolated fork of Home Assistant Core's `proxmoxve` integration from tag
-`2026.9.1`, extended with LXC package Scan, Review, Update, Autoremove, Health,
-and native snapshot controls.
+domain-isolated fork of Home Assistant Core's `proxmoxve` integration (started
+from tag `2026.9.1` and kept in step with upstream through `2026.11.1`; see
+[UPSTREAM.md](UPSTREAM.md)), extended with LXC package Scan, Review, Update,
+Autoremove, Health, native snapshot controls, and dashboard cards.
 
 Requires Home Assistant `2026.11.0` or newer.
 
@@ -31,16 +32,24 @@ trust.
 
 ## Node software updates
 
-Each online Proxmox VE node gets an **Aktualizacja oprogramowania** (Software
-update) entity, as in the upstream integration. It shows the installed
-`pve-manager` version, the latest available one with the count of pending Proxmox
-and other packages, and links to the node in the Proxmox web interface. It does
-not install anything. Reading the pending list needs the PVE `Sys.Modify`
-privilege, which the guided role has since release `2026.9.1.24`; that privilege
-also lets the HA token change node settings (see
+Each online Proxmox VE node whose credentials hold the PVE `Sys.Modify`
+privilege gets an **Aktualizacja oprogramowania** (Software update) entity, as in
+the upstream integration. It shows the installed `pve-manager` version, the
+latest available one (for example `9.2.26-p84-d112`: 84 Proxmox and 112 other
+pending packages) with the counts in its release summary, and links to the node
+in the Proxmox web interface. It does not install anything, and its summary text
+is English only. The entity is created when Home Assistant starts or the entry is
+reloaded; a node that is offline at that moment gets it after the next reload.
+
+The guided role has had `Sys.Modify` since release `2026.9.1.24`. That privilege
+is broad: it also lets the HA token change node network settings, restart node
+services, edit apt repositories, and initialize disks (see
 [ARCHITECTURE.md](ARCHITECTURE.md#guided-role-includes-sysmodify-release-20269124)).
 A guided host enrolled earlier shows a **Repairs** entry with the exact command:
-run it on the Proxmox VE host without options, then reload Hubinet-Ops.
+run it on the Proxmox VE host without options (no `--reset`), then reload
+Hubinet-Ops or restart Home Assistant. Hosts added with **Existing credentials
+(advanced)** get the entity only if that user or token already has `Sys.Modify`;
+no Repairs entry is shown for them.
 
 ## Repair and re-enroll
 
