@@ -42,7 +42,9 @@ from .const import (
     DOMAIN,
     NODE_ONLINE,
     VM_CONTAINER_RUNNING,
+    ProxmoxPermission,
 )
+from .helpers import is_granted
 from .packages.manager import PackageManager
 from .packages.presentation import (
     dismiss_cleanup_candidates,
@@ -128,6 +130,8 @@ class NodeResources:
     containers: list[dict[str, Any]]
     storages: list[dict[str, Any]]
     backups: list[dict[str, Any]]
+    version: dict[str, Any]
+    update: list[dict[str, Any]] | bool
 
 
 @dataclass(slots=True, kw_only=True)
@@ -139,6 +143,8 @@ class ProxmoxNodeData:
     containers: dict[int, dict[str, Any]] = field(default_factory=dict)
     storages: dict[str, dict[str, Any]] = field(default_factory=dict)
     backups: list[dict[str, Any]] = field(default_factory=list)
+    version: dict[str, Any] = field(default_factory=dict)
+    update: list[dict[str, Any]] | bool = False
 
 
 def proxmox_base_url(coordinator: ProxmoxCoordinator) -> URL:
@@ -151,6 +157,11 @@ def proxmox_base_url(coordinator: ProxmoxCoordinator) -> URL:
     )
 
 
+def proxmox_node_url(coordinator: ProxmoxCoordinator, node: str) -> URL:
+    """Return the URL of a Proxmox VE node."""
+    return proxmox_base_url(coordinator).with_fragment(f"v1:0:=node/{node}")
+
+
 def node_device_info(
     coordinator: ProxmoxCoordinator, node_data: ProxmoxNodeData
 ) -> dr.DeviceInfo:
@@ -161,9 +172,7 @@ def node_device_info(
         },
         name=node_data.node.get("node", str(node_data.node["id"])),
         model="Node",
-        configuration_url=proxmox_base_url(coordinator).with_fragment(
-            f"v1:0:=node/{node_data.node['node']}"
-        ),
+        configuration_url=proxmox_node_url(coordinator, node_data.node["node"]),
     )
 
 
@@ -349,6 +358,8 @@ class ProxmoxCoordinator(DataUpdateCoordinator[dict[str, ProxmoxNodeData]]):
                 },
                 storages={s["storage"]: s for s in resources.storages},
                 backups=resources.backups,
+                version=resources.version,
+                update=resources.update,
             )
 
         self._async_add_remove_nodes(data)
@@ -395,7 +406,7 @@ class ProxmoxCoordinator(DataUpdateCoordinator[dict[str, ProxmoxNodeData]]):
             raise ProxmoxServerError from err
 
     def _fetch_all_nodes(self) -> list[tuple[dict[str, Any], NodeResources]]:
-        """Fetch all nodes with their VMs, containers, storages, and backups."""
+        """Fetch all nodes with their VMs, containers, storages, etc."""
         nodes = _read("nodes", self.proxmox.nodes.get) or []
         return [(node, self._get_node_data(node)) for node in nodes]
 
@@ -403,13 +414,20 @@ class ProxmoxCoordinator(DataUpdateCoordinator[dict[str, ProxmoxNodeData]]):
         self,
         node: dict[str, Any],
     ) -> NodeResources:
-        """Get vms, containers, storages, and backups for a node."""
+        """Get vms, containers, storages, etc. for a node."""
         if node.get("status") != NODE_ONLINE:
             _LOGGER.debug(
                 "Node %s is offline, skipping VM/container/storage fetch",
                 node[CONF_NODE],
             )
-            return NodeResources(vms=[], containers=[], storages=[], backups=[])
+            return NodeResources(
+                vms=[],
+                containers=[],
+                storages=[],
+                backups=[],
+                version={},
+                update=False,
+            )
 
         name = node[CONF_NODE]
         api = self.proxmox.nodes(name)
@@ -447,9 +465,35 @@ class ProxmoxCoordinator(DataUpdateCoordinator[dict[str, ProxmoxNodeData]]):
             if previous is None:
                 raise
             backups = previous.backups
+        # Informational like storages and backups: a failure keeps the previous
+        # value instead of failing the host (owner-accepted 2026.11.1 sync).
+        try:
+            version = _read(f"nodes/{name}/version", api.version.get) or {}
+        except (ResourceException, requests.exceptions.Timeout):
+            if previous is None:
+                raise
+            version = previous.version
+        update: list[dict[str, Any]] | bool = False
+        if is_granted(
+            self.permissions,
+            p_type="nodes",
+            p_id=name,
+            permission=ProxmoxPermission.SYSMOD,
+        ):
+            try:
+                update = _read(f"nodes/{name}/apt/update", api.apt.update.get) or []
+            except (ResourceException, requests.exceptions.Timeout):
+                if previous is None:
+                    raise
+                update = previous.update
 
         return NodeResources(
-            vms=vms, containers=containers, storages=storages, backups=backups
+            vms=vms,
+            containers=containers,
+            storages=storages,
+            backups=backups,
+            version=version,
+            update=update,
         )
 
     def _async_add_remove_nodes(self, data: dict[str, ProxmoxNodeData]) -> None:
@@ -463,9 +507,9 @@ class ProxmoxCoordinator(DataUpdateCoordinator[dict[str, ProxmoxNodeData]]):
             new_node_data = [data[node_name] for node_name in new_nodes]
             device_registry = dr.async_get(self.hass)
             for node_data in new_node_data:
-                device_registry.async_get_or_create(
+                device_registry.async_get_or_create_from_info(
                     config_entry_id=self.config_entry.entry_id,
-                    **node_device_info(self, node_data),
+                    device_info=node_device_info(self, node_data),
                 )
             for nodes_callback in self.new_nodes_callbacks:
                 nodes_callback(new_node_data)

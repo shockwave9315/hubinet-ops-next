@@ -7,7 +7,7 @@ from typing import Any
 from unittest.mock import MagicMock, patch
 
 import pytest
-from homeassistant.const import STATE_UNKNOWN, Platform
+from homeassistant.const import STATE_UNAVAILABLE, STATE_UNKNOWN, Platform
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import entity_registry as er
 from syrupy.assertion import SnapshotAssertion
@@ -480,3 +480,31 @@ def test_guest_sensors_are_added_beside_unchanged_host_descriptions() -> None:
         "vm_guest_memory",
         "vm_guest_memory_percentage",
     }
+
+
+async def test_sensors_for_offline_node(
+    hass: HomeAssistant,
+    mock_proxmox_client: MagicMock,
+    mock_config_entry: MockConfigEntry,
+    entity_registry: er.EntityRegistry,
+) -> None:
+    """Test that node sensors except status are unavailable."""
+    mock_proxmox_client.nodes.get.return_value = mock_proxmox_client._all_nodes
+
+    with patch(
+        "custom_components.hubinet_ops.PLATFORMS",
+        [Platform.SENSOR],
+    ):
+        await setup_integration(hass, mock_config_entry)
+
+    state = hass.states.get("sensor.pve3_status")
+    assert state.state == "offline"
+
+    state = hass.states.get("sensor.pve3_disk_usage")
+    assert state.state == STATE_UNAVAILABLE
+
+    state = hass.states.get("sensor.pve4_status")
+    assert state.state == "unknown"
+
+    state = hass.states.get("sensor.pve4_disk_usage")
+    assert state.state == STATE_UNAVAILABLE

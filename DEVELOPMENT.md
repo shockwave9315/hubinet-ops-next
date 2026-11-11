@@ -1,12 +1,14 @@
 # Development
 
 The development and test environment is pinned to Home Assistant Core
-`2026.11.1` at commit `d8a0dc698c8946b44e455d904000db563cfbf1ba`. The fork's
-upstream-derived baseline (see [UPSTREAM.md](UPSTREAM.md)) is unchanged at
-`2026.9.1`; only the test harness pin and the minimum supported Home Assistant
-version (`hacs.json`, `2026.10.0`) moved. From 2026.10.0 Core translates the
-reauth/reconfigure success aborts itself, so this integration ships no local
-strings for them.
+`2026.11.1` at commit `d8a0dc698c8946b44e455d904000db563cfbf1ba`. The fork
+started from upstream `2026.9.1` and, after the owner-accepted 2026-11-11 sync,
+has absorbed the upstream `proxmoxve` changes through `2026.11.1` (see
+[UPSTREAM.md](UPSTREAM.md) for the absorbed changes and the remaining
+divergences). The minimum supported Home Assistant version is `2026.11.0`
+(`hacs.json`). Core translates the
+reauth/reconfigure success aborts itself (since 2026.10.0), so this integration
+ships no local strings for them.
 
 ## Requirements
 

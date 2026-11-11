@@ -6,7 +6,11 @@ Status date: 2026-11-11
 
 - Upstream: Home Assistant Core tag `2026.9.1`, commit
   `fc034572d0216a04ed40a07154394908a594dfed`.
-- Baseline tag: `baseline-ha-2026.9.1`.
+- Baseline tag: `baseline-ha-2026.9.1` (initial baseline).
+- Absorbed upstream: the fork has taken the upstream `proxmoxve` changes through
+  tag `2026.11.1`, commit `d8a0dc698c8946b44e455d904000db563cfbf1ba`, except the
+  divergences listed in [UPSTREAM.md](UPSTREAM.md) (see "Upstream sync to Home
+  Assistant Core 2026.11.1" below).
 - Runtime after merge: a domain-isolated custom-integration fork of Home Assistant
   Core `proxmoxve`, plus the package scan, review, update, and LXC Health
   subsystem, guided fresh-install enrollment, native snapshot Restore,
@@ -16,6 +20,13 @@ Status date: 2026-11-11
 - Planned development release for the whole A/B/C/D stage: `2026.9.1.21`,
   helper v5, protocol v1. Prerelease `2026.9.1.21rc1` exists and points to the
   review HEAD `0ec4ea9`. No final `2026.9.1.21` tag or release has been created.
+- Release `2026.9.1.23` (owner decision on 2026-11-11): contains the Home
+  Assistant 2026.11.1 compatibility fix (PR #28), the A/B/C/D stage, and the
+  upstream sync to 2026.11.1; minimum Home Assistant `2026.11.0`. The manifest,
+  `INTEGRATION_VERSION`, the bootstrap `RELEASE_VERSION`, and the README card URL
+  are all `2026.9.1.23`. The owner creates the `2026.9.1.23` tag after the merge.
+  The owner's manual manifest edit to `2026.9.1.22` on main had left those
+  values out of step; helper and protocol are unchanged.
 - Latest final tagged release: `2026.9.1.20` (merged PR #25, main `b38b950`).
   `2026.9.1.15` (PR #20, `b865968`): the owner reported the post-merge live
   tests passed.
@@ -26,16 +37,16 @@ Status date: 2026-11-11
 - Starting merged baseline for 2026.9.1.19: main `05b0e20`.
 - Starting merged baseline for 2026.9.1.20: main `d4eb2eb`.
 - Git history is authoritative for the eventual feature merge SHA.
-- Home Assistant 2026.11.1 compatibility (dev/test pin moved to commit
-  `d8a0dc698c8946b44e455d904000db563cfbf1ba`; baseline above unchanged): the
+- Home Assistant 2026.11.1 compatibility, merged in PR #28 (main `b489111`;
+  dev/test pin moved to commit `d8a0dc698c8946b44e455d904000db563cfbf1ba`): the
   integration failed to import `sensor` on 2026.11.1 (`EntityCategory` and
   `StateType` are no longer re-exported by `homeassistant.components.sensor`).
   Fixed imports, migrated `voluptuous` to `probatio`, dropped the
   `reauth_successful` / `reconfigure_successful` abort strings that Core now
-  translates itself (Core only does so from 2026.10.0, so the minimum Home
-  Assistant version in `hacs.json` is raised from `2026.9.1` to `2026.10.0`),
-  and regenerated entity snapshots (only `device_id` and `config_subentry_id`
-  serialization changed). Under review; not yet merged.
+  translates itself (Core only does so from 2026.10.0; the minimum Home
+  Assistant version in `hacs.json` is now `2026.11.0`, see the upstream sync
+  below), and regenerated entity snapshots (only `device_id` and
+  `config_subentry_id` serialization changed).
 
 ## Merged
 
@@ -821,6 +832,33 @@ Scan All remains.
 - Review readiness: **MERGED IN PR #25 / TAGGED AS 2026.9.1.20**.
   The owner validation covers RC `2026.9.1.rc.01.20`; the subsequent P3 backend
   lifecycle fix is covered by the native HA config-entry/resource tests above.
+
+## Upstream sync to Home Assistant Core 2026.11.1
+
+- Architecture: **ACCEPTED BY OWNER on 2026-11-11**, recorded in
+  [ARCHITECTURE.md](ARCHITECTURE.md#upstream-sync-to-home-assistant-core-202611).
+- Implementation: **IMPLEMENTED, under review** on
+  `feat/upstream-sync-2026-11-1`, based on main `b489111` after PR #28. The
+  pre-implementation documentation checkpoint is `de87d66`.
+- Added: upstream's node software-update entity (`update.py`, `Sys.Modify`,
+  per-node `version` and `apt/update` reads through the fork's retry-once reader
+  that keep the previous value on failure), node sensor availability for offline
+  or unknown nodes and the `unknown` status, `entry_type=SERVICE` on guest and
+  storage devices, the diagnostics noise reduction, and
+  `async_get_or_create_from_info`. Upstream's tests, fixtures, and snapshots for
+  those changes were ported; fork tests cover the new reads' retry and
+  keep-previous behavior.
+- Minimum Home Assistant is `2026.11.0` (`hacs.json`).
+- Not adopted: upstream's uptime sensor rewrite (the cards resolve by
+  `translation_key` and read seconds) and its `is_granted` rewrite. Open
+  finding for the owner: in PVE a permission value `0` means granted but not
+  propagated, while the fork's `is_granted` treats `0` as denied; upstream fixed
+  this in its rewrite. It gates Restore, Delete, Update, and Easy Update and
+  needs verification on a live PVE host before it is adopted.
+- `Sys.Modify` is not added to the guided-enrollment role, so guided hosts show
+  no node update entity.
+- Validation: ruff, 124 card tests, and 1090 pytest tests pass; all modules
+  import in the official 2026.11.1 image.
 
 ## Next
 

@@ -1879,3 +1879,62 @@ framework, rollback framework, automatic rollback, automatic snapshot cleanup,
 application-health framework, duplicate Proxmox coordinator, or duplicate API
 wrapper. Its original "custom frontend" exclusion is superseded only by the
 owner-accepted Easy Update card and action, which add no Update lifecycle.
+
+## Upstream sync to Home Assistant Core 2026.11.1
+
+On 2026-11-11 the maintainer explicitly decided, before implementation began,
+to add the upstream `proxmoxve` changes made between the `2026.9.1` baseline
+and Home Assistant Core `2026.11.1` to this fork without losing any fork-owned
+feature. The minimum supported Home Assistant version becomes `2026.11.0`
+(`hacs.json`), so Core APIs introduced in 2026.11 may be used directly. This
+section records that decision; the pull request and its code did not create the
+acceptance.
+
+Accepted scope, applied as a three-way merge of the upstream changes into the
+existing upstream-derived files:
+
+- Upstream's node software-update entity: `Platform.UPDATE`, the `update.py`
+  platform, `ProxmoxUpdateInfo`/`update_version`/`is_proxmox_package`,
+  `proxmox_node_url`, the `Sys.Modify` constant, and the per-node `version` and
+  `apt/update` reads. The two reads go through the fork's existing
+  retry-once reader. When one of them still fails for a node, that node keeps
+  its previous value for that refresh, as storage and backup do; a failure
+  never fails the whole host once a first refresh has succeeded; on the very
+  first refresh, with no previous value, a failure fails that refresh like a
+  storage or backup failure does. `apt/update` is requested only when the
+  credentials hold `Sys.Modify`.
+- Upstream's node availability fix (`requires_online_node`), the node status
+  option `unknown`, `entry_type=SERVICE` on guest and storage devices, the
+  diagnostics noise reduction for the update list, and the Core 2026.11
+  device registry method `async_get_or_create_from_info`. The fork keeps its
+  own `async_unload_entry`/`async_migrate_entry` logic and their boolean
+  returns, which Core still accepts from custom integrations, instead of
+  adopting `async_unload_platforms_or_raise` and `None` returns.
+- Upstream's tests, fixtures, and snapshots for those changes, adapted to the
+  fork the same way the baseline tests were.
+
+Explicitly not adopted, and left as a fork divergence:
+
+- Upstream's change of the uptime sensors to the `UPTIME` device class with the
+  `translation_key` removed. The dashboard cards resolve entities by
+  `translation_key` and read seconds, and users' automations depend on the
+  numeric state. The fork keeps its existing uptime sensors.
+- Upstream's rewrite of `is_granted` (no fallback to `/`, membership test
+  instead of a value test). It cannot be verified without a live PVE host and
+  gates Restore, Delete, Update, and Easy Update. The fork keeps its existing
+  helper; the new `Sys.Modify` check uses it unchanged.
+- Upstream's manifest metadata (`categories`, `connectivity`,
+  `quality_scale: gold`), which has no runtime meaning for a custom
+  integration.
+
+`Sys.Modify` is not added to the guided-enrollment role: the least-privilege
+identity is unchanged, so guided hosts get no node update entity. Hosts using
+broader manual credentials that already hold `Sys.Modify` get it. Adding the
+privilege to the guided role would be a separate maintainer decision.
+
+No new custom architecture is introduced: no coordinator, API wrapper, store,
+worker, or framework beyond what upstream's update platform itself uses. After
+the sync `UPSTREAM.md` keeps `2026.9.1` as the initial baseline and records that
+the fork has absorbed upstream through `2026.11.1`, with every divergence from
+it (the uptime sensors, `is_granted`, the manifest metadata, and the kept
+boolean returns and unload logic) listed there.

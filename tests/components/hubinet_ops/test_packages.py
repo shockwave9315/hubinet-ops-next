@@ -535,6 +535,8 @@ async def test_package_entities_are_limited_to_authenticated_local_node(
     ]
     remote_resource.storage.get.return_value = []
     remote_resource.tasks.get.return_value = []
+    remote_resource.version.get.return_value = {}
+    remote_resource.apt.update.get.return_value = []
     mock_proxmox_client.nodes.side_effect = lambda node: (
         local_resource if node == "pve1" else remote_resource
     )
