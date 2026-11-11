@@ -867,7 +867,8 @@ with normal polling self-healing within approximately 300 seconds.
 
 On 2026-09-10, before implementation, the maintainer accepted helper-upgrade
 UX and explicit unused-package cleanup for the next release. Protocol v1
-remains the wire compatibility authority; helper v4 is the shipped helper.
+remains the wire compatibility authority; helper v4 is the shipped helper (at
+the time; the current helper is v5).
 Observed helper version is only operator-facing stale-helper evidence, never a
 global feature gate. Helper probing is one lifecycle-tracked, best-effort
 background observation and cannot delay or disable native Proxmox setup.
