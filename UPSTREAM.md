@@ -56,7 +56,7 @@ UPID to fork-owned background task observation, terminal notification, and a
 confirmed-success signal for the exact guest's snapshot selector. This adds no
 snapshot inventory or main-coordinator refresh.
 
-Planned release 2026.9.1.21 Checkpoint B minimally extends that hook: the
+Release 2026.9.1.21 Checkpoint B minimally extends that hook: the
 launcher returns the same existing observation task, and the native Create
 entity keeps its handle and publishes task-derived running truth. Restore and
 Delete resolve that existing entity through HA's entity registry and button
@@ -68,7 +68,7 @@ final-review fix set adds one removal hook to the same upstream-derived button
 base: it clears the stored running capability before Home Assistant writes the
 restored state of a removed Create entity.
 
-Planned release 2026.9.1.21 Checkpoint D (owner decision on 2026-10-04) adds
+Release 2026.9.1.21 Checkpoint D (owner decision on 2026-10-04) adds
 one opt-in to the upstream-derived coordinator and sensor platform. With the
 `vm_guest_memory` entry option on, the per-node QEMU listing is requested as
 `qemu.get(full=1)` instead of upstream's `qemu.get()`; it remains one listing
