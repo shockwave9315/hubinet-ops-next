@@ -62,26 +62,28 @@ def async_resolve_target(hass: HomeAssistant, device_id: str) -> EasyUpdateTarge
     device = dr.async_get(hass).async_get(device_id)
     if device is None:
         raise _invalid("easy_update_unknown_device")
-    for entry_id in device.config_entries:
-        entry = hass.config_entries.async_get_entry(entry_id)
-        if (
-            entry is None
-            or entry.domain != DOMAIN
-            or entry.state is not ConfigEntryState.LOADED
-        ):
-            continue
+    entry = hass.config_entries.async_get_entry(device.config_entry_id)
+    if (
+        entry is not None
+        and entry.domain == DOMAIN
+        and entry.state is ConfigEntryState.LOADED
+    ):
         coordinator: ProxmoxCoordinator = entry.runtime_data
-        if not coordinator.package_manager.configured or not coordinator.data:
-            continue
-        node_data = coordinator.data.get(coordinator.package_node)
-        if node_data is None:
-            continue
-        for vmid in node_data.containers:
-            # The same identifier the upstream-derived container entities use.
-            if (DOMAIN, f"{entry.entry_id}_container_{vmid}") in device.identifiers:
-                return EasyUpdateTarget(
-                    entry, coordinator, node_data.node["node"], vmid
-                )
+        node_data = (
+            coordinator.data.get(coordinator.package_node)
+            if coordinator.package_manager.configured and coordinator.data
+            else None
+        )
+        if node_data is not None:
+            for vmid in node_data.containers:
+                # The same identifier the upstream-derived container entities use.
+                if (
+                    DOMAIN,
+                    f"{entry.entry_id}_container_{vmid}",
+                ) in device.identifiers:
+                    return EasyUpdateTarget(
+                        entry, coordinator, node_data.node["node"], vmid
+                    )
     raise _invalid("easy_update_not_package_lxc")
 
 
