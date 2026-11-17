@@ -1,9 +1,9 @@
 # Development
 
 The development and test environment is pinned to Home Assistant Core
-`2026.11.1` at commit `d8a0dc698c8946b44e455d904000db563cfbf1ba`. The fork
+`2026.11.2` at commit `ff5d56b825a0fb66b03d01bc297d49e206cdaba3`. The fork
 started from upstream `2026.9.1` and, after the owner-accepted 2026-11-11 sync,
-has absorbed the upstream `proxmoxve` changes through `2026.11.1` (see
+has absorbed the upstream `proxmoxve` changes through `2026.11.2` (see
 [UPSTREAM.md](UPSTREAM.md) for the absorbed changes and the remaining
 divergences). The minimum supported Home Assistant version is `2026.11.0`
 (`hacs.json`). Core translates the

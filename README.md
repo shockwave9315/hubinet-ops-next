@@ -2,7 +2,7 @@
 
 Hubinet-Ops is a Home Assistant custom integration for Proxmox VE. It is a
 domain-isolated fork of Home Assistant Core's `proxmoxve` integration (started
-from tag `2026.9.1` and kept in step with upstream through `2026.11.1`; see
+from tag `2026.9.1` and kept in step with upstream through `2026.11.2`; see
 [UPSTREAM.md](UPSTREAM.md)), extended with LXC package Scan, Review, Update,
 Autoremove, Health, native snapshot controls, and dashboard cards.
 

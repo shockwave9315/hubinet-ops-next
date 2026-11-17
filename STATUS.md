@@ -1,6 +1,6 @@
 # Status
 
-Status date: 2026-11-11
+Status date: 2026-11-17
 
 ## Current baseline
 
@@ -8,9 +8,10 @@ Status date: 2026-11-11
   `fc034572d0216a04ed40a07154394908a594dfed`.
 - Baseline tag: `baseline-ha-2026.9.1` (initial baseline).
 - Absorbed upstream: the fork has taken the upstream `proxmoxve` changes through
-  tag `2026.11.1`, commit `d8a0dc698c8946b44e455d904000db563cfbf1ba`, except the
+  tag `2026.11.2`, commit `ff5d56b825a0fb66b03d01bc297d49e206cdaba3`, except the
   divergences listed in [UPSTREAM.md](UPSTREAM.md) (see "Upstream sync to Home
-  Assistant Core 2026.11.1" below).
+  Assistant Core 2026.11.1" and "Upstream patch sync to Home Assistant Core
+  2026.11.2" below).
 - Runtime after merge: a domain-isolated custom-integration fork of Home Assistant
   Core `proxmoxve`, plus the package scan, review, update, and LXC Health
   subsystem, guided fresh-install enrollment, native snapshot Restore,
@@ -849,6 +850,20 @@ Scan All remains.
 - Review readiness: **MERGED IN PR #25 / TAGGED AS 2026.9.1.20**.
   The owner validation covers RC `2026.9.1.rc.01.20`; the subsequent P3 backend
   lifecycle fix is covered by the native HA config-entry/resource tests above.
+
+## Upstream patch sync to Home Assistant Core 2026.11.2
+
+- Requested by the owner on 2026-11-17: move the dev/test pin to `2026.11.2`
+  (commit `ff5d56b825a0fb66b03d01bc297d49e206cdaba3`) and check upstream #190487.
+- The only upstream `proxmoxve` change in the patch release is #190487: during
+  setup discovery a node whose guest list returns HTTP 595/596 is skipped with a
+  warning instead of failing the flow. The fork's `_get_nodes_data` had the same
+  code, so it applies; the fix and its test (`test_form_skips_node_with_guest_list_error`,
+  ported from upstream) are in `config_flow.py` / `test_config_flow.py`.
+  Upstream changed only the config flow; coordinator refresh behavior is unchanged.
+- Minimum supported Home Assistant stays `2026.11.0` (`hacs.json`).
+- Verification: `scripts/test.sh` (ruff, Node card tests, 1100 pytest) on the new
+  pin. This is a runtime change, so it ships only with the next release/tag.
 
 ## Upstream sync to Home Assistant Core 2026.11.1
 

@@ -5,10 +5,10 @@ integration.
 
 - Repository: `https://github.com/home-assistant/core`
 - Tag: `2026.9.1` (initial baseline; the fork has since absorbed the upstream
-  changes through `2026.11.1`, see below)
+  changes through `2026.11.2`, see below)
 - Commit: `fc034572d0216a04ed40a07154394908a594dfed`
-- Absorbed through: tag `2026.11.1`, commit
-  `d8a0dc698c8946b44e455d904000db563cfbf1ba`
+- Absorbed through: tag `2026.11.2`, commit
+  `ff5d56b825a0fb66b03d01bc297d49e206cdaba3`
 - Source path: `homeassistant/components/proxmoxve`
 - Test source path: `tests/components/proxmoxve`
 - License: Apache License 2.0
@@ -31,7 +31,11 @@ owner-accepted 2026-11-11 sync absorbed the upstream `proxmoxve` changes up to
 `2026.11.1` (node software-update entity, node availability, `unknown` node
 status, `entry_type=SERVICE`, the `async_get_or_create_from_info` registry call,
 the diagnostics update-list reduction, `probatio`, and the central reauth and
-reconfigure abort translations). These upstream 2026.11.1 changes are
+reconfigure abort translations). The `2026.11.2` patch release added one
+`proxmoxve` change, absorbed unchanged in `config_flow.py`: during setup
+discovery a node whose guest list returns HTTP 595/596 (the node is
+unreachable through the cluster) is skipped with a warning instead of failing
+the whole flow (upstream #190487). The following upstream 2026.11.1 changes are
 intentionally not taken and remain fork divergences: the uptime sensors stay
 the fork's numeric `DURATION` sensors with their `translation_key`;
 `is_granted` keeps its existing value-based resolution; the manifest metadata

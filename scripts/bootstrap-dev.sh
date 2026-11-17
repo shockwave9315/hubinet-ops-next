@@ -2,7 +2,7 @@
 set -euo pipefail
 
 readonly CORE_REPOSITORY="https://github.com/home-assistant/core.git"
-readonly CORE_COMMIT="d8a0dc698c8946b44e455d904000db563cfbf1ba"
+readonly CORE_COMMIT="ff5d56b825a0fb66b03d01bc297d49e206cdaba3"
 readonly MINIMUM_PYTHON="3.14.2"
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
