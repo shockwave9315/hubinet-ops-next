@@ -10,7 +10,8 @@ Status date: 2026-11-17
 - Absorbed upstream: the fork has taken the upstream `proxmoxve` changes through
   tag `2026.11.2`, commit `ff5d56b825a0fb66b03d01bc297d49e206cdaba3`, except the
   divergences listed in [UPSTREAM.md](UPSTREAM.md) (see "Upstream sync to Home
-  Assistant Core 2026.11.1" below).
+  Assistant Core 2026.11.1" and "Upstream patch sync to Home Assistant Core
+  2026.11.2" below).
 - Runtime after merge: a domain-isolated custom-integration fork of Home Assistant
   Core `proxmoxve`, plus the package scan, review, update, and LXC Health
   subsystem, guided fresh-install enrollment, native snapshot Restore,

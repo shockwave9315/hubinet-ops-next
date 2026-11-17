@@ -31,11 +31,11 @@ owner-accepted 2026-11-11 sync absorbed the upstream `proxmoxve` changes up to
 `2026.11.1` (node software-update entity, node availability, `unknown` node
 status, `entry_type=SERVICE`, the `async_get_or_create_from_info` registry call,
 the diagnostics update-list reduction, `probatio`, and the central reauth and
-reconfigure abort translations). The `2026.11.2` patch release added one `proxmoxve` change, absorbed
-unchanged in `config_flow.py`: during setup discovery a node whose guest list
-returns HTTP 595/596 (the node is unreachable through the cluster) is skipped
-with a warning instead of failing the whole flow (upstream #190487). The
-following upstream 2026.11.1 changes are
+reconfigure abort translations). The `2026.11.2` patch release added one
+`proxmoxve` change, absorbed unchanged in `config_flow.py`: during setup
+discovery a node whose guest list returns HTTP 595/596 (the node is
+unreachable through the cluster) is skipped with a warning instead of failing
+the whole flow (upstream #190487). The following upstream 2026.11.1 changes are
 intentionally not taken and remain fork divergences: the uptime sensors stay
 the fork's numeric `DURATION` sensors with their `translation_key`;
 `is_granted` keeps its existing value-based resolution; the manifest metadata
